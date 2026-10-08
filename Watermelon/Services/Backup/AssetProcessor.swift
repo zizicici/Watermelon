@@ -204,11 +204,27 @@ final class AssetProcessor: Sendable {
             shouldRemoveTempFile = false
         }
 
-        let assetFingerprint = BackupAssetResourcePlanner.assetFingerprint(
-            resourceRoleSlotHashes: preparedResources.lazy.map {
-                (role: $0.local.resourceRole, slot: $0.local.resourceSlot, contentHash: $0.contentHash)
-            }
-        )
+        let adjustments = try Dictionary(preparedResources.filter { $0.local.resourceRole == ResourceTypeCode.adjustmentData }.map {
+            ($0.contentHash, try Data(contentsOf: $0.tempFileURL))
+        }, uniquingKeysWith: { first, _ in first })
+        let fingerprintResources = try AssetContentFingerprint.resourceHashes(resources: preparedResources.map {
+            .init(role: $0.local.resourceRole, slot: $0.local.resourceSlot, hash: $0.contentHash)
+        }, adjustmentData: adjustments)
+        let fingerprintHashes = Dictionary(uniqueKeysWithValues: fingerprintResources.map {
+            (AssetResourceRoleSlot(role: $0.role, slot: $0.slot), $0.hash)
+        })
+        let assetFingerprint = BackupAssetResourcePlanner.assetFingerprint(resourceRoleSlotHashes: fingerprintResources.map { ($0.role, $0.slot, $0.hash) })
+        if context.monthStore.containsAssetFingerprint(assetFingerprint), !context.monthStore.isAssetIncomplete(assetFingerprint) {
+            try hashIndexRepository.upsertAssetHashSnapshot(assetLocalIdentifier: context.asset.localIdentifier,
+                assetFingerprint: assetFingerprint, resources: preparedResources.map {
+                    .init(role: $0.local.resourceRole, slot: $0.local.resourceSlot, contentHash: $0.contentHash, fileSize: $0.fileSize)
+                }, totalFileSizeBytes: preparedResources.reduce(0) { $0 + $1.fileSize }, modificationDateMs: context.asset.modificationDate?.millisecondsSinceEpoch)
+            let dateUpdated = try updateBackedUpAssetDate(assetFingerprint, context: context)
+            return AssetProcessResult(status: dateUpdated ? .success : .skipped,
+                reason: dateUpdated ? Self.assetDateUpdatedReason : "asset_content_exists", displayName: displayName,
+                assetFingerprint: assetFingerprint, timing: timing,
+                totalFileSizeBytes: preparedResources.reduce(0) { $0 + $1.fileSize }, uploadedFileSizeBytes: 0)
+        }
 
         var uploadResults: [ResourceUploadResult] = []
         uploadResults.reserveCapacity(preparedResources.count)
@@ -268,7 +284,9 @@ final class AssetProcessor: Sendable {
                         assetFingerprint: assetFingerprint,
                         resourceHash: prepared.contentHash,
                         role: prepared.local.resourceRole,
-                        slot: prepared.local.resourceSlot
+                        slot: prepared.local.resourceSlot,
+                        fingerprintHash: prepared.local.resourceRole == ResourceTypeCode.adjustmentData
+                            ? fingerprintHashes[.init(role: prepared.local.resourceRole, slot: prepared.local.resourceSlot)] : nil
                     )
                 )
             }
@@ -468,27 +486,9 @@ final class AssetProcessor: Sendable {
             return nil
         }
 
-        let cachedFingerprint = BackupAssetResourcePlanner.assetFingerprint(
-            resourceRoleSlotHashes: roleSlotHashes
-        )
-        guard cachedFingerprint == cachedLocalHash.assetFingerprint else {
-            return nil
-        }
-
-        let origins = RestoreOriginIndex(try hashIndexRepository.fetchRestoreOrigins(
-            profileKey: RemoteIndexSyncService.remoteProfileKey(context.profile), assetIDs: [context.asset.localIdentifier]))
-        if let restoredFingerprint = origins.remoteFingerprints(for: context.asset.localIdentifier, localFingerprint: cachedFingerprint)
-            .sorted(by: { $0.lexicographicallyPrecedes($1) }).first(where: {
-            context.monthStore.containsAssetFingerprint($0) && !context.monthStore.isAssetIncomplete($0)
-        }) {
-            let dbStart = CFAbsoluteTimeGetCurrent()
-            let dateUpdated = try updateBackedUpAssetDate(restoredFingerprint, context: context)
-            timing.databaseSeconds += Self.elapsedSeconds(since: dbStart)
-            return AssetProcessResult(status: dateUpdated ? .success : .skipped,
-                reason: dateUpdated ? Self.assetDateUpdatedReason : "asset_restored", displayName: displayName,
-                assetFingerprint: cachedFingerprint, timing: timing,
-                totalFileSizeBytes: cachedLocalHash.totalFileSizeBytes, uploadedFileSizeBytes: 0)
-        }
+        let cachedFingerprint = cachedLocalHash.assetFingerprint
+        if !roleSlotHashes.contains(where: { $0.role == ResourceTypeCode.adjustmentData }),
+           cachedFingerprint != BackupAssetResourcePlanner.assetFingerprint(resourceRoleSlotHashes: roleSlotHashes) { return nil }
 
         // Incomplete asset falls through to the full upload path so missing resources heal.
         if context.monthStore.containsAssetFingerprint(cachedFingerprint),
@@ -515,6 +515,7 @@ final class AssetProcessor: Sendable {
             )
         }
 
+        guard !roleSlotHashes.contains(where: { $0.role == ResourceTypeCode.adjustmentData }) else { return nil }
         let links = roleSlotHashes.map { item in
             RemoteAssetResourceLink(
                 year: context.monthStore.year,

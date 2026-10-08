@@ -107,7 +107,7 @@ final class RestorePhotoKitIntegrationTests: XCTestCase {
         }
         let instances = fixture.resources.map(\.instance)
         let expected = fixture.expectedResources.map(\.instance)
-        let expectedFingerprint = fingerprint(expected)
+        let expectedFingerprint = try fingerprint(expected, adjustmentData: adjustmentData(fixture.expectedResources, directory: directory))
         let profile = ServerProfileRecord(id: nil, name: "fixture", storageType: StorageType.webdav.rawValue,
             connectionParams: nil, sortOrder: 0, host: "fixture.local", port: 0, shareName: "fixture", basePath: "/p",
             username: "fixture", domain: nil, credentialRef: "fixture", backgroundBackupEnabled: false,
@@ -120,7 +120,7 @@ final class RestorePhotoKitIntegrationTests: XCTestCase {
         let profileKey = RemoteIndexSyncService.remoteProfileKey(profile)
         let service = RestoreService(makeClient: { _, _ in client }, hashIndexRepository: repository)
         let restored = try await service.restoreItems(
-            items: [.init(instances: instances, identity: fingerprint(instances), creationDate: fixture.creationDateMs.map { Date(millisecondsSinceEpoch: $0) })], profile: profile,
+            items: [.init(instances: instances, identity: try fingerprint(instances, adjustmentData: adjustmentData(fixture.resources, directory: directory)), creationDate: fixture.creationDateMs.map { Date(millisecondsSinceEpoch: $0) })], profile: profile,
             password: "", onItemCompleted: { _, _, _ in }
         )
         let item = try XCTUnwrap(restored.first)
@@ -138,6 +138,7 @@ final class RestorePhotoKitIntegrationTests: XCTestCase {
         let selected = BackupAssetResourcePlanner.orderedResourcesWithRoleSlot(from: PHAssetResource.assetResources(for: asset))
         XCTAssertEqual(selected.map(\.role).sorted(), expected.map(\.role).sorted(), fixture.id)
         var tokens: [(role: Int, slot: Int, contentHash: Data)] = []
+        var importedAdjustments: [Data: Data] = [:]
         var checks: [[String: Any]] = []
         var mediaMatches = true
         for entry in selected {
@@ -170,27 +171,25 @@ final class RestorePhotoKitIntegrationTests: XCTestCase {
                 let output = directory.appendingPathComponent("\(fixture.id)-imported-adjustment.plist")
                 try Data(contentsOf: url).write(to: output, options: .atomic)
             }
+            if entry.role == 7 { importedAdjustments[hash] = try Data(contentsOf: url) }
             checks.append(check)
             tokens.append((entry.role, entry.slot, hash))
         }
-        let importedFingerprint = BackupAssetResourcePlanner.assetFingerprint(resourceRoleSlotHashes: tokens)
-        if !expected.contains(where: { $0.role == ResourceTypeCode.adjustmentData }) {
-            XCTAssertEqual(importedFingerprint, expectedFingerprint, fixture.id)
-        }
+        let importedFingerprint = try AssetContentFingerprint.fingerprint(resources: tokens.map { .init(role: $0.role, slot: $0.slot, hash: $0.contentHash) }, adjustmentData: importedAdjustments)
+        XCTAssertEqual(importedFingerprint, expectedFingerprint, fixture.id)
         let ids: Set<String> = [item.asset.localIdentifier]
         let initial = try XCTUnwrap(repository.fetchAssetHashCaches(assetIDs: ids)[item.asset.localIdentifier])
         XCTAssertEqual(initial.assetFingerprint, importedFingerprint, fixture.id)
-        let sourceFingerprint = fingerprint(instances)
+        let sourceAdjustmentData = try adjustmentData(fixture.resources, directory: directory)
+        let sourceFingerprint = try fingerprint(instances, adjustmentData: sourceAdjustmentData)
         let complete = expectedFingerprint == sourceFingerprint
         XCTAssertEqual(item.asset.isCompleteRestore, complete, fixture.id)
-        XCTAssertEqual(try repository.fetchRestoreOrigins(profileKey: profileKey).count, complete ? 1 : 0, fixture.id)
         let restartedRepository = ContentHashIndexRepository(databaseManager: try DatabaseManager(databaseURL: dbDirectory.appendingPathComponent("index.sqlite")))
         try restartedRepository.clearLocalHashIndex()
         let builder = LocalHashIndexBuildService(photoLibraryService: PhotoLibraryService(), repository: restartedRepository)
         let rebuilt = try await builder.buildIndex(for: ids, workerCount: 1)
         XCTAssertEqual(rebuilt.readyAssetIDs, ids)
         XCTAssertEqual(try restartedRepository.fetchAssetHashCaches(assetIDs: ids)[item.asset.localIdentifier]?.assetFingerprint, importedFingerprint)
-        XCTAssertEqual(try restartedRepository.fetchRestoreOrigins(profileKey: profileKey).count, complete ? 1 : 0)
         let month = LibraryMonthKey.from(date: asset.creationDate, calendar: LibraryMonthKey.currentPreferenceMonthCalendar())
         let remoteResources = instances.map { RemoteManifestResource(year: month.year, month: month.month,
             fileName: $0.fileName, contentHash: $0.resourceHash, fileSize: $0.fileSize, resourceType: $0.role,
@@ -199,19 +198,34 @@ final class RestorePhotoKitIntegrationTests: XCTestCase {
             creationDateMs: asset.creationDate?.millisecondsSinceEpoch, backedUpAtMs: 0, resourceCount: instances.count,
             totalFileSizeBytes: instances.reduce(0) { $0 + $1.fileSize })
         let links = instances.map { RemoteAssetResourceLink(year: month.year, month: month.month,
-            assetFingerprint: sourceFingerprint, resourceHash: $0.resourceHash, role: $0.role, slot: $0.slot) }
+            assetFingerprint: sourceFingerprint, resourceHash: $0.resourceHash, role: $0.role, slot: $0.slot,
+                fingerprintHash: $0.role == 7 ? AssetContentFingerprint.adjustmentHash(sourceAdjustmentData[$0.resourceHash]!, roles: Set(instances.map(\.role))) : nil) }
+        var destinationProfile = profile
+        destinationProfile.host = "second-fixture.local"
+        let destinationKey = RemoteIndexSyncService.remoteProfileKey(destinationProfile)
+        XCTAssertNotEqual(destinationKey, profileKey)
+        for resource in fixture.resources where resource.role == ResourceTypeCode.adjustmentData {
+            let path = String(format: "/p/%04d/%02d/%@", month.year, month.month, resource.fileName)
+            await client.seedFile(path: path, data: try Data(contentsOf: directory.appendingPathComponent(resource.fixturePath)))
+        }
         let delta = RemoteLibraryMonthDelta(month: month, resources: remoteResources, assets: [remoteAsset], assetResourceLinks: links)
         let worker = HomeDataProcessingWorker(photoLibraryService: PhotoLibraryService(), contentHashIndexRepository: restartedRepository,
             remoteMonthSnapshot: { $0 == month ? delta : nil })
         _ = await worker.loadLocalIndex(forceReload: true, scope: .device(.all))
-        _ = await worker.syncRemoteSnapshot(state: .init(revision: 1, isFullSnapshot: true, monthDeltas: [delta], profileKey: profileKey), hasActiveConnection: true)
+        _ = await worker.syncRemoteSnapshot(state: .init(revision: 1, isFullSnapshot: true, monthDeltas: [delta], profileKey: destinationKey), hasActiveConnection: true)
         let remaining = await worker.remoteOnlyItems(for: month, expectedScope: .device(.all))
         XCTAssertEqual(remaining.count, complete ? 0 : 1, fixture.id)
+        let remoteCache = RemoteLibrarySnapshotCache()
+        remoteCache.setProfileKey(destinationKey)
+        _ = remoteCache.replaceMonth(month, resources: remoteResources, assets: [remoteAsset], assetResourceLinks: links)
         let coordinator = BackupCoordinator(photoLibraryService: PhotoLibraryService(), storageClientFactory: StorageClientFactory(),
-            hashIndexRepository: restartedRepository, databaseManager: database)
-        let presence = LibraryPresenceIndex(hashIndexRepository: restartedRepository, coordinator: coordinator, profileKey: { profileKey })
+            hashIndexRepository: restartedRepository, databaseManager: database,
+            remoteIndexService: RemoteIndexSyncService(snapshotCache: remoteCache))
+        let presence = LibraryPresenceIndex(hashIndexRepository: restartedRepository, coordinator: coordinator, profileKey: { destinationKey })
         let handles = presence.repositoryLocalIdentifiersForCurrentBytes([sourceFingerprint])
         XCTAssertEqual(handles[sourceFingerprint], complete ? item.asset.localIdentifier : nil)
+        let presenceReady = await presence.refresh(notifyOnCommit: false)
+        XCTAssertTrue(presenceReady)
         XCTAssertEqual(presence.localIdentifierForCurrentBytes(sourceFingerprint), complete ? item.asset.localIdentifier : nil)
         XCTAssertEqual(presence.currentAssetsMatch([item.asset.localIdentifier: sourceFingerprint]), complete)
         if complete {
@@ -226,7 +240,7 @@ final class RestorePhotoKitIntegrationTests: XCTestCase {
             let lock = try XCTUnwrap(WriteLockService(basePath: "/p", writerID: UUID().uuidString.lowercased(), client: client))
             let context = AssetProcessContext(workerID: 0, asset: asset, selectedResources: selected,
                 cachedLocalHash: try restartedRepository.fetchAssetHashCaches(assetIDs: ids)[item.asset.localIdentifier],
-                iCloudPhotoBackupMode: .disable, pass: .localResources, monthStore: store, profile: profile,
+                iCloudPhotoBackupMode: .disable, pass: .localResources, monthStore: store, profile: destinationProfile,
                 assetPosition: 1, totalAssets: 1, writeMode: .lite(RepoLeaseSession(lock: lock), nil))
             let processor = AssetProcessor(photoLibraryService: PhotoLibraryService(), hashIndexRepository: restartedRepository,
                 remoteIndexService: RemoteIndexSyncService())
@@ -241,7 +255,7 @@ final class RestorePhotoKitIntegrationTests: XCTestCase {
                 "fullFingerprintMatches": importedFingerprint == expectedFingerprint,
                 "resourceChecks": checks, "localIdentifier": item.asset.localIdentifier,
                 "actualIndexMatches": initial.assetFingerprint == importedFingerprint, "complete": complete,
-                "remoteOnlyAfterRebuild": remaining.count, "sourceDate": fixture.creationDateMs as Any? ?? NSNull(),
+                "remoteOnlyAfterRebuild": remaining.count, "crossRemoteWithoutReceipt": true, "sourceDate": fixture.creationDateMs as Any? ?? NSNull(),
                 "restoredDate": asset.creationDate?.millisecondsSinceEpoch as Any? ?? NSNull()]
     }
 
@@ -280,7 +294,8 @@ final class RestorePhotoKitIntegrationTests: XCTestCase {
                 fileName: resource.fileName, fileSize: resource.fileSize,
                 remoteRelativePath: "2026/01/" + resource.fileName, creationDateMs: oldDate.millisecondsSinceEpoch)
         }
-        let remoteFingerprint = fingerprint(instances)
+        let sourceAdjustmentData = try adjustmentData(fixture.resources, directory: directory)
+        let remoteFingerprint = try fingerprint(instances, adjustmentData: sourceAdjustmentData)
         let client = InMemoryRemoteStorageClient()
         await client.seedDirectory("/p/2026/01")
         for (instance, resource) in zip(instances, fixture.resources) {
@@ -302,9 +317,6 @@ final class RestorePhotoKitIntegrationTests: XCTestCase {
             profile: profile, password: "", onItemCompleted: { _, _, _ in })
         let localID = try XCTUnwrap(imported.first?.asset.localIdentifier)
         createdIDs.append(localID)
-        if fixture.id == "ordinary-photo" {
-            try database.write { try $0.execute(sql: "DELETE FROM restore_origins") }
-        }
         let original = try XCTUnwrap(PHAsset.fetchAssets(withLocalIdentifiers: [localID], options: nil).firstObject)
         try await PHPhotoLibrary.shared().performChanges { PHAssetChangeRequest(for: original).creationDate = newDate }
         let builder = LocalHashIndexBuildService(photoLibraryService: PhotoLibraryService(), repository: repository)
@@ -312,7 +324,7 @@ final class RestorePhotoKitIntegrationTests: XCTestCase {
         XCTAssertEqual(index.readyAssetIDs, [localID])
         let asset = try XCTUnwrap(PHAsset.fetchAssets(withLocalIdentifiers: [localID], options: nil).firstObject)
         let cached = try XCTUnwrap(repository.fetchAssetHashCaches(assetIDs: [localID])[localID])
-        if fixture.id == "edited-photo" { XCTAssertNotEqual(cached.assetFingerprint, remoteFingerprint) }
+        XCTAssertEqual(cached.assetFingerprint, remoteFingerprint)
         let manifestURL = dbDirectory.appendingPathComponent("manifest.sqlite")
         let queue = try DatabaseQueue(path: manifestURL.path)
         try MonthManifestStore.migrate(queue)
@@ -327,7 +339,8 @@ final class RestorePhotoKitIntegrationTests: XCTestCase {
         try store.upsertAsset(.init(year: 2026, month: 1, assetFingerprint: remoteFingerprint,
             creationDateMs: oldDate.millisecondsSinceEpoch, backedUpAtMs: 0, resourceCount: instances.count,
             totalFileSizeBytes: instances.reduce(0) { $0 + $1.fileSize }), links: instances.map {
-                .init(year: 2026, month: 1, assetFingerprint: remoteFingerprint, resourceHash: $0.resourceHash, role: $0.role, slot: $0.slot)
+                .init(year: 2026, month: 1, assetFingerprint: remoteFingerprint, resourceHash: $0.resourceHash, role: $0.role, slot: $0.slot,
+                    fingerprintHash: $0.role == 7 ? AssetContentFingerprint.adjustmentHash(sourceAdjustmentData[$0.resourceHash]!, roles: Set(instances.map(\.role))) : nil)
             })
         _ = try await store.flushToRemote()
         let uploadsBefore = await client.uploadedPaths.count
@@ -375,9 +388,15 @@ final class RestorePhotoKitIntegrationTests: XCTestCase {
         print("DATE_ROUND_TRIP \(fixture.id) date=\(newDate.millisecondsSinceEpoch) mediaUploads=0 repeatWrites=0")
     }
 
-    private func fingerprint(_ instances: [RemoteAssetResourceInstance]) -> Data {
-        BackupAssetResourcePlanner.assetFingerprint(resourceRoleSlotHashes: instances.map {
-            (role: $0.role, slot: $0.slot, contentHash: $0.resourceHash)
-        })
+    private func adjustmentData(_ resources: [Resource], directory: URL) throws -> [Data: Data] {
+        var bytes: [Data: Data] = [:]
+        for resource in resources where resource.role == 7 {
+            bytes[resource.instance.resourceHash] = try Data(contentsOf: directory.appendingPathComponent(resource.fixturePath))
+        }
+        return bytes
+    }
+
+    private func fingerprint(_ instances: [RemoteAssetResourceInstance], adjustmentData: [Data: Data]) throws -> Data {
+        try AssetContentFingerprint.fingerprint(resources: instances.map(\.contentIdentityResource), adjustmentData: adjustmentData)
     }
 }

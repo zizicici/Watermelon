@@ -37,7 +37,7 @@ nonisolated enum LegacyV1WriteGate {
         switch decision {
         case .fresh, .v1Migrate:
             return                          // clearly fresh or clearly V1: permitted
-        case .current:
+        case .current, .fingerprintUpgrade:
             throw Rejection.committedLite
         case .unsupported:
             throw Rejection.unsupportedControlTree

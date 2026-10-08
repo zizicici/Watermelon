@@ -118,15 +118,11 @@ CREATE INDEX idx_local_asset_resources_hash
 ON local_asset_resources(contentHash);
 ```
 
-### `restore_origins`
+### 指纹算法缓存版本
 
-`v8_restore_origins` 保存本次安装的还原来源：`profileKey`、`remoteFingerprint`、`assetLocalIdentifier` 为联合主键；另存 `localFingerprint`、资源校验用的 `sourceResources` JSON、`completeCandidate`、`isEquivalent` 和 `importedAtMs`。
+本地数据库保持 v7，不新增表。`sync_state.local_asset_fingerprint_version` 标记当前算法版本（1）。首次使用新算法时，在同一事务中清空带 `adjustmentData` 资源的 `local_assets.assetFingerprint` 并写入版本标记；资产行、资源哈希和普通媒体缓存保留。后续本地索引预检重新导出编辑资源并计算规范化指纹。
 
-Photos 导入成功后先记录待验证来源，再读取实际资源写入本地哈希索引。只有资源集合完整、媒体哈希一致且导入后没有编辑，才能设置 `isEquivalent`；允许 Photos 改写 `adjustmentData`，其实际哈希仍参与本地指纹。缺损恢复保留来源记录，但不能据此匹配完整远端资产。
-
-该表独立于可重建的本地索引，没有随 `local_assets` 删除的外键。读取对应关系时必须限定仓库，并与当前 `local_assets.assetFingerprint` 相等；调用者还要验证资产可访问且索引未过期。首页、浏览器和上传跳过判断共用 `RestoreOriginIndex`，本地文件哈希及远端 manifest 的指纹算法不变。未完成校验的记录可由重试还原或后续索引扫描完成验证。
-
-v8 会清空旧索引中带 `adjustmentData` 资产的指纹，促使下一次索引扫描读取实际内容；保留资产、资源记录和照片本身。旧版本没有来源记录的资产不会凭文件名或日期自动建立对应关系。
+`assetFingerprint` 本身就是跨设备、跨仓库的内容身份，不保存还原来源、原始指纹映射或待完成导入记录。
 
 ## 2. `connectionParams` 的真实内容
 
@@ -328,6 +324,7 @@ CREATE TABLE asset_resources (
   resourceHash BLOB NOT NULL,
   role INTEGER NOT NULL,
   slot INTEGER NOT NULL,
+  fingerprintHash BLOB,
   PRIMARY KEY(assetFingerprint, role, slot)
 );
 
@@ -357,15 +354,27 @@ ON asset_resources(resourceHash);
 
 1. 连接逻辑资产与资源 hash
 2. 保留 `role / slot`，方便重建资源实例与媒体类型判定
+3. `resourceHash` 始终保存文件完整字节 SHA-256；编辑描述的 `fingerprintHash` 保存规范化后的哈希。其他角色该列为 NULL，指纹计算回退到 `resourceHash`
 
 ## 6. `assetFingerprint` 计算规则
 
 当前规则：
 
-1. 对每个资源生成 token：`role|slot|hashHex`
+1. 对每个资源生成 token：`role|slot|hashHex`；编辑描述使用规范化哈希，其他资源使用完整字节哈希
 2. token 排序
 3. 用 `\n` 连接
 4. 对最终字符串做 SHA-256
+
+编辑描述解析后排除外层 `adjustmentTimestamp`，其他字段采用带类型、按键排序的稳定编码。仅对角色集合 `[2,5,6,7]`、格式 `com.apple.photo` / `1.6`，将已验证等价的 `adjustmentRenderTypes` 值 `16384` 和 `18944` 归一；实际编辑参数、格式、版本、未知字段继续参与计算。无法识别的描述回退到完整字节哈希。
+
+### 1.11.0 远端格式升级
+
+`.watermelon/version.json` 使用 `format_version: 3`、`min_app_version: "1.11.0"`。1.10 及更早的 Lite 客户端只接受格式 2，因此拒绝使用格式 3。新客户端将格式 2 或带 `upgrade_pending: true` 的格式 3 路由到现有升级流程。
+
+连接升级取得现有写权限后，先发布并回读格式 3 的升级中标记，再逐月补齐 `fingerprintHash`、重算资产主键和链接。仅下载需要转换的编辑描述并校验原始 SHA-256；媒体文件及资源哈希不变。月份使用原有临时文件发布和回读校验，成功后将 SQLite `user_version` 设为算法版本 1。全部月份成功后发布完整版本标记。远端快照磁盘缓存版本提升到 2，升级连接同时清空该节点的旧缓存。
+
+V1 仓库先沿用原有逐字节复制、校验和旧 manifest 清理，再执行上述指纹升级。失败不发布完整版本，已转换月份可在下次连接时复用；没有新增本地升级任务表。
+
 
 ## 7. 内存态远端快照
 

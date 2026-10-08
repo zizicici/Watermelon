@@ -10,11 +10,13 @@ nonisolated struct WatermelonRemoteVersionManifest: Codable, Equatable {
     let minAppVersion: String?
     let createdAt: String?
     let createdBy: String?
+    var upgradePending: Bool? = nil
 
     enum CodingKeys: String, CodingKey {
         case formatVersion = "format_version"
         case minAppVersion = "min_app_version"
         case createdAt = "created_at"
         case createdBy = "created_by"
+        case upgradePending = "upgrade_pending"
     }
 }

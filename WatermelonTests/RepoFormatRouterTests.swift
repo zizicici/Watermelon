@@ -417,7 +417,7 @@ final class RepoFormatRouterTests: XCTestCase {
         let client = InMemoryRemoteStorageClient()
         await client.seedFile(
             path: versionPath,
-            data: try versionBytes(formatVersion: 2, minAppVersion: nil)
+            data: try versionBytes(formatVersion: 3, minAppVersion: nil)
         )
 
         let decision = try await router(client).classify()
@@ -429,7 +429,7 @@ final class RepoFormatRouterTests: XCTestCase {
         await client.seedFile(
             path: versionPath,
             data: try versionBytes(
-                formatVersion: 2,
+                formatVersion: 3,
                 minAppVersion: "1.5.0",
                 createdAt: nil,
                 createdBy: createdBy
@@ -445,7 +445,7 @@ final class RepoFormatRouterTests: XCTestCase {
         await client.seedFile(
             path: versionPath,
             data: try versionBytes(
-                formatVersion: 2,
+                formatVersion: 3,
                 minAppVersion: "1.5.0",
                 createdAt: createdAt,
                 createdBy: nil
@@ -461,7 +461,7 @@ final class RepoFormatRouterTests: XCTestCase {
         await client.seedFile(
             path: versionPath,
             data: try versionBytes(
-                formatVersion: 2,
+                formatVersion: 3,
                 minAppVersion: "1.5.0",
                 createdAt: createdAt,
                 createdBy: ""
@@ -662,7 +662,7 @@ final class RepoFormatRouterTests: XCTestCase {
 
     func testFutureFormatVersionReturnsUnsupported() async throws {
         let client = InMemoryRemoteStorageClient()
-        await client.seedFile(path: versionPath, data: try versionBytes(formatVersion: 3))
+        await client.seedFile(path: versionPath, data: try versionBytes(formatVersion: 4))
 
         let decision = try await router(client).classify()
         XCTAssertEqual(decision, .unsupported())
@@ -672,22 +672,22 @@ final class RepoFormatRouterTests: XCTestCase {
         let client = InMemoryRemoteStorageClient()
         await client.seedFile(
             path: versionPath,
-            data: try versionBytes(formatVersion: 3, minAppVersion: "9.9.9")
+            data: try versionBytes(formatVersion: 4, minAppVersion: "9.9.9")
         )
 
         let decision = try await router(client).classify()
         XCTAssertEqual(decision, .unsupported(minAppVersion: "9.9.9"))
     }
 
-    func testCurrentFormatWithFutureMinAppVersionReturnsCurrent() async throws {
+    func testCurrentFormatWithFutureMinAppVersionIsUnsupported() async throws {
         let client = InMemoryRemoteStorageClient()
         await client.seedFile(
             path: versionPath,
-            data: try versionBytes(formatVersion: 2, minAppVersion: "9.9.9")
+            data: try versionBytes(formatVersion: 3, minAppVersion: "9.9.9")
         )
 
         let decision = try await router(client).classify()
-        XCTAssertEqual(decision, .current)
+        XCTAssertEqual(decision, .unsupported(minAppVersion: "9.9.9"))
     }
 
     // MARK: - Probe faults never read as fresh
@@ -772,7 +772,7 @@ final class RepoFormatRouterTests: XCTestCase {
 
     func testClassifyForReadFutureVersionSkipsListing() async throws {
         let client = InMemoryRemoteStorageClient()
-        await client.seedFile(path: versionPath, data: try versionBytes(formatVersion: 3, minAppVersion: "9.9.9"))
+        await client.seedFile(path: versionPath, data: try versionBytes(formatVersion: 4, minAppVersion: "9.9.9"))
 
         let decision = try await router(client).classifyForRead()
         XCTAssertEqual(decision, .unsupported(minAppVersion: "9.9.9"))

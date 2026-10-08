@@ -72,6 +72,9 @@ struct RemoteAssetResourceLink: Hashable, Sendable {
     let resourceHash: Data
     let role: Int
     let slot: Int
+    var fingerprintHash: Data? = nil
+
+    var assetFingerprintHash: Data { fingerprintHash ?? resourceHash }
 
     var monthKey: String {
         String(format: "%04d-%02d", year, month)

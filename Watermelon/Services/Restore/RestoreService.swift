@@ -103,6 +103,7 @@ final class RestoreService: @unchecked Sendable {
     struct ImportedAssetSnapshot: Sendable {
         let instances: [RemoteAssetResourceInstance]
         let modificationDateMs: Int64?
+        var adjustmentData: [Data: Data] = [:]
     }
 
     struct RestoredAsset: Sendable {
@@ -178,12 +179,6 @@ final class RestoreService: @unchecked Sendable {
                 let group = RestoreGroup(creationDate: creationDate, instances: item.instances, isIncomplete: item.isIncomplete)
                 var restoredItem: RestoredItem?
                 do {
-                    if let asset = try await resumePendingImport(item, profile: profile) {
-                        let restored = RestoredItem(identity: item.identity, asset: asset)
-                        results.append(restored)
-                        try await onItemCompleted(index + 1, items.count, restored)
-                        continue
-                    }
                     if let asset = try await restoreGroup(
                         group,
                         itemIdentity: item.identity,
@@ -218,31 +213,6 @@ final class RestoreService: @unchecked Sendable {
             await clientBox.client.disconnectSafely()
             throw error
         }
-    }
-
-    private func resumePendingImport(_ item: RestoreItemDescriptor, profile: ServerProfileRecord) async throws -> RestoredAsset? {
-        guard !item.isIncomplete, let repository = hashIndexRepository, let inspect = inspectImportedAsset else { return nil }
-        let key = RemoteIndexSyncService.remoteProfileKey(profile)
-        let planned = RestoreImportPlan.normalize(item.instances)
-        let fingerprint = BackupAssetResourcePlanner.assetFingerprint(resourceRoleSlotHashes: planned.map {
-            (role: $0.role, slot: $0.slot, contentHash: $0.resourceHash)
-        })
-        guard fingerprint == item.identity else { return nil }
-        for localID in try repository.pendingRestoreAssetIDs(profileKey: key, remoteFingerprint: item.identity) {
-            do {
-                let snapshot = try await inspect(localID, planned)
-                try repository.writeHashIndex(assetLocalIdentifier: localID, remoteAssetFingerprint: item.identity,
-                    instances: snapshot.instances, modificationDateMs: snapshot.modificationDateMs)
-                guard try !repository.fetchRestoreOrigins(profileKey: key, assetIDs: [localID]).isEmpty else { continue }
-                return RestoredAsset(localIdentifier: localID, importedInstances: snapshot.instances,
-                    indexWriteHandled: true, isCompleteRestore: true)
-            } catch {
-                let ns = error as NSError
-                if ns.domain == PHPhotosErrorDomain && ns.code == PHPhotosError.identifierNotFound.rawValue { continue }
-                throw error
-            }
-        }
-        return nil
     }
 
     private func restoreGroup(
@@ -327,32 +297,33 @@ final class RestoreService: @unchecked Sendable {
         let acceptedDownloaded = Self.acceptedDownloadedResources(from: downloaded)
         do {
             try Task.checkCancellation()
+            let adjustments = try Dictionary(acceptedDownloaded.filter { $0.0.role == ResourceTypeCode.adjustmentData }.map {
+                ($0.0.resourceHash, try Data(contentsOf: $0.1))
+            }, uniquingKeysWith: { first, _ in first })
+            let sourceContentFingerprint = try AssetContentFingerprint.fingerprint(
+                resources: acceptedDownloaded.map { $0.0.contentIdentityResource }, adjustmentData: adjustments)
             let localID = try await importAsset(acceptedDownloaded, group.creationDate)
             print("[RestoreService]   saveToPhotoLibrary succeeded, localID=\(localID ?? "nil")")
 
             guard let localID else { return nil }
-            let importedAt = Date()
             let planned = acceptedDownloaded.map(\.0)
             let repository = hashIndexRepository
             let inspect = inspectImportedAsset
-            let profileKey = RemoteIndexSyncService.remoteProfileKey(profile)
             // Finish persistence even if the caller stops after Photos has committed the asset.
             return try await Task.detached(priority: .userInitiated) {
-                try repository?.recordRestoreImport(profileKey: profileKey, remoteFingerprint: itemIdentity,
-                    assetLocalIdentifier: localID, instances: planned, isIncomplete: group.isIncomplete, importedAt: importedAt)
                 guard let inspect else {
                     return RestoredAsset(localIdentifier: localID, importedInstances: planned)
                 }
                 do {
                     let snapshot = try await inspect(localID, planned)
+                    let importedContentFingerprint = try AssetContentFingerprint.fingerprint(
+                        resources: snapshot.instances.map(\.contentIdentityResource), adjustmentData: snapshot.adjustmentData)
                     try repository?.writeHashIndex(assetLocalIdentifier: localID,
                         remoteAssetFingerprint: itemIdentity, instances: snapshot.instances,
-                        modificationDateMs: snapshot.modificationDateMs)
-                    let sourceFingerprint = BackupAssetResourcePlanner.assetFingerprint(resourceRoleSlotHashes: planned.map {
-                        (role: $0.role, slot: $0.slot, contentHash: $0.resourceHash)
-                    })
-                    let complete = !group.isIncomplete && sourceFingerprint == itemIdentity
-                        && ContentHashIndexRepository.restoredResourcesMatch(expected: planned.map(\.hashRecord), actual: snapshot.instances.map(\.hashRecord))
+                        modificationDateMs: snapshot.modificationDateMs, adjustmentData: snapshot.adjustmentData)
+                    let complete = !group.isIncomplete && sourceContentFingerprint == itemIdentity
+                        && planned.allSatisfy { $0.resourceHash.count == 32 }
+                        && sourceContentFingerprint == importedContentFingerprint
                     return RestoredAsset(localIdentifier: localID, importedInstances: snapshot.instances,
                         indexWriteHandled: repository != nil, isCompleteRestore: complete)
                 } catch {
@@ -678,9 +649,13 @@ final class RestoreService: @unchecked Sendable {
         let service = PhotoLibraryService()
         let selected = BackupAssetResourcePlanner.orderedResourcesWithRoleSlot(from: PHAssetResource.assetResources(for: asset))
         var instances: [RemoteAssetResourceInstance] = []
+        var adjustments: [Data: Data] = [:]
         for entry in selected {
             let exported = try await service.exportResourceToTempFileAndDigest(entry.resource, allowNetworkAccess: false)
             defer { try? FileManager.default.removeItem(at: exported.fileURL) }
+            if entry.role == ResourceTypeCode.adjustmentData {
+                adjustments[exported.contentHash] = try Data(contentsOf: exported.fileURL)
+            }
             let source = planned.first { $0.role == entry.role && $0.slot == entry.slot }
             let fileName = PhotoLibraryService.safeOriginalFilename(for: entry.resource)
             instances.append(RemoteAssetResourceInstance(role: entry.role, slot: entry.slot,
@@ -693,7 +668,7 @@ final class RestoreService: @unchecked Sendable {
               current.modificationDate == asset.modificationDate else {
             throw NSError(domain: PHPhotosErrorDomain, code: PHPhotosError.operationInterrupted.rawValue)
         }
-        return ImportedAssetSnapshot(instances: instances, modificationDateMs: asset.modificationDate?.millisecondsSinceEpoch)
+        return ImportedAssetSnapshot(instances: instances, modificationDateMs: asset.modificationDate?.millisecondsSinceEpoch, adjustmentData: adjustments)
     }
 
     private static func saveToPhotoLibrary(

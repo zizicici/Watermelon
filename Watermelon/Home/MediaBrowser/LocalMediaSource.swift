@@ -31,7 +31,6 @@ final class LocalMediaSource: MediaBrowserSource, @unchecked Sendable {
 
     func loadUsingCurrentPresence(
         excludingBackedUpFingerprints: Set<Data> = [],
-        restoreOrigins: RestoreOriginIndex = RestoreOriginIndex(),
         monthGroupingTimeZone: MonthGroupingTimeZonePreference = .frozenCurrent()
     ) async -> MediaBrowserLoadResult {
         let sections = await projectUsingCurrentPresence(
@@ -74,7 +73,6 @@ final class LocalMediaSource: MediaBrowserSource, @unchecked Sendable {
                     from: homeSeed,
                     backedUpFingerprints: browserInput.backedUpFingerprints,
                     excludingBackedUpFingerprints: excludingBackedUpFingerprints,
-                    restoreOrigins: browserInput.restoreOrigins,
                     shouldCancel: { Task.isCancelled }
                 ) else { return [] }
                 projectionMs = (CFAbsoluteTimeGetCurrent() - projectionStartedAt) * 1_000
@@ -102,8 +100,7 @@ final class LocalMediaSource: MediaBrowserSource, @unchecked Sendable {
                 let actualFingerprint: Data? = record.flatMap { r in
                     LibraryPresenceIndex.isRowCurrent(recordUpdatedAt: r.updatedAt, assetModificationDate: asset.modificationDate) ? r.fingerprint : nil
                 }
-                let fingerprint = browserInput.restoreOrigins.displayFingerprint(assetID: localID,
-                    localFingerprint: actualFingerprint, remoteFingerprints: browserInput.backedUpFingerprints)
+                let fingerprint = actualFingerprint
                 if let fingerprint,
                    excludingBackedUpFingerprints.contains(fingerprint) {
                     return
@@ -189,15 +186,13 @@ final class LocalMediaSource: MediaBrowserSource, @unchecked Sendable {
         from seed: HomeBrowserLocalSeed,
         backedUpFingerprints: Set<Data>,
         excludingBackedUpFingerprints: Set<Data> = [],
-        restoreOrigins: RestoreOriginIndex = RestoreOriginIndex(),
         shouldCancel: () -> Bool = { false }
     ) -> [MediaBrowserSection]? {
         var byMonth: [LibraryMonthKey: [MediaBrowserItem]] = [:]
         byMonth.reserveCapacity(min(seed.assets.count, 256))
         for asset in seed.assets {
             guard !shouldCancel() else { return nil }
-            let fingerprint = restoreOrigins.displayFingerprint(assetID: asset.localIdentifier,
-                localFingerprint: asset.fingerprint, remoteFingerprints: backedUpFingerprints)
+            let fingerprint = asset.fingerprint
             if let fingerprint,
                excludingBackedUpFingerprints.contains(fingerprint) {
                 continue

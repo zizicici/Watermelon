@@ -285,6 +285,10 @@ Lite 仓库的单写者租约。锁文件位于 `.watermelon/locks/<writerID>.lo
 7. 写月 manifest
 8. 增量更新共享远端快照缓存
 
+### 内容身份识别
+
+`AssetContentFingerprint` 直接计算规范化的 `assetFingerprint`。首页、浏览器、上传和还原以同一个资产键匹配，资源原始 SHA-256 继续用于文件完整性校验。`AssetFingerprintRepoUpgrade` 接入现有 `LiteRepoTransitionEngine`，在写权限内将远端格式 2 升至格式 3（最低客户端 1.11.0），逐月重算资产键与链接。无需本地来源映射或新增数据库表。
+
 ### `MonthManifestStore`（`Shared/Services/Backup/`）
 
 文件：`MonthManifestStore.swift` + `+Loading.swift` + `+Schema.swift`

@@ -4,7 +4,8 @@ import Foundation
 // Lite repo, a legacy V1 tree to migrate, a damaged/foreign tree, or empty space safe to initialize.
 // It fails closed: a probe that can't be resolved throws rather than guessing `.fresh`.
 nonisolated enum RepoFormatDecision: Equatable, Sendable {
-    case current          // committed version.json: format 2
+    case current          // committed version.json: format 3
+    case fingerprintUpgrade
     case fresh            // nothing here (or a half-created marker dir); safe to initialize
     case v1Migrate        // legacy V1 month manifests present, no committed version
     case damaged          // Lite month data with no committed version
@@ -48,6 +49,8 @@ struct RepoFormatRouter: Sendable {
         switch try await readVersion() {
         case .current:
             return .current
+        case .requiresUpgrade:
+            return .fingerprintUpgrade
         case .unsupported(let minAppVersion):
             return .unsupported(minAppVersion: minAppVersion)
         case .missing, .damaged:
@@ -94,6 +97,10 @@ struct RepoFormatRouter: Sendable {
                 )
                 // Committed version is the only format commit point: trust it and never scan V1.
                 return repoState.probe(decision: .current)
+            case .requiresUpgrade:
+                let repoState = try await inspectRepoDirectory(scanMonths: true)
+                guard !repoState.hasUnknownChild else { return repoState.probe(decision: .damaged) }
+                return repoState.probe(decision: .fingerprintUpgrade)
             case .unsupported(let minAppVersion):
                 return RepoFormatProbe(
                     decision: .unsupported(minAppVersion: minAppVersion),
@@ -201,6 +208,7 @@ struct RepoFormatRouter: Sendable {
 
     private enum VersionRead {
         case current
+        case requiresUpgrade
         case missing
         case unsupported(minAppVersion: String?)
         case damaged
@@ -227,6 +235,8 @@ struct RepoFormatRouter: Sendable {
         switch VersionManifestLite.compatibility(for: data) {
         case .readableWritable:
             return .current
+        case .requiresUpgrade:
+            return .requiresUpgrade
         case .unsupported(let minAppVersion):
             return .unsupported(minAppVersion: minAppVersion)
         case .damaged:
@@ -271,7 +281,7 @@ struct RepoFormatRouter: Sendable {
         }
         guard let data = try? Data(contentsOf: localURL),
               let manifest = try? VersionManifestLite.decode(data),
-              VersionManifestLite.isCurrent(manifest) else {
+              [.readableWritable, .requiresUpgrade].contains(VersionManifestLite.compatibility(for: manifest)) else {
             return false
         }
         return true

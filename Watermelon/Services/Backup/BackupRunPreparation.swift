@@ -601,6 +601,9 @@ struct BackupRunPreparationService: Sendable {
             upgradeSession = prepared.session
             activeLiteMonthsListing = prepared.monthsListing
         }
+        if upgradeSession != nil {
+            await remoteIndexService.resetSnapshotCache(expectedProfileKey: RemoteIndexSyncService.remoteProfileKey(profile))
+        }
         onSyncProgress?(RemoteSyncProgress(current: 0, total: 0, kind: .scanningRemoteIndex))
         do {
             let digest = try await remoteIndexService.syncIndex(

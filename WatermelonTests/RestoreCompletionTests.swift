@@ -10,7 +10,7 @@ final class RestoreCompletionTests: XCTestCase {
             createdAt: Date(), updatedAt: Date(), writerID: nil)
     }
 
-    func testImportPersistsActualHashesAndOriginBeforeCompletionDespiteCancellation() async throws {
+    func testImportPersistsActualHashesAndNormalizedFingerprintDespiteCancellation() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -18,19 +18,21 @@ final class RestoreCompletionTests: XCTestCase {
         let client = InMemoryRemoteStorageClient()
         var source: [RemoteAssetResourceInstance] = []
         var actual: [RemoteAssetResourceInstance] = []
+        let sourceAdjustment = ContentIdentityFixtures.adjustment()
+        let actualAdjustment = ContentIdentityFixtures.adjustment(timestamp: 2)
         for role in [2, 5, 6, 7] {
-            let bytes = Data("resource-\(role)".utf8)
+            let bytes = role == 7 ? sourceAdjustment : Data("resource-\(role)".utf8)
             await client.enqueueDownloadData(bytes)
             func instance(_ data: Data) -> RemoteAssetResourceInstance {
                 RemoteAssetResourceInstance(role: role, slot: 0, resourceHash: Data(SHA256.hash(data: data)),
                     fileName: "resource-\(role)", fileSize: Int64(data.count), remoteRelativePath: "2026/01/resource-\(role)", creationDateMs: 1_000)
             }
             source.append(instance(bytes))
-            actual.append(instance(role == 7 ? Data("Photos metadata".utf8) : bytes))
+            actual.append(instance(role == 7 ? actualAdjustment : bytes))
         }
         let imported = actual
-        let remoteFingerprint = BackupAssetResourcePlanner.assetFingerprint(resourceRoleSlotHashes: source.map { (role: $0.role, slot: $0.slot, contentHash: $0.resourceHash) })
-        let actualFingerprint = BackupAssetResourcePlanner.assetFingerprint(resourceRoleSlotHashes: actual.map { (role: $0.role, slot: $0.slot, contentHash: $0.resourceHash) })
+        let remoteFingerprint = try AssetContentFingerprint.fingerprint(resources: source.map(\.contentIdentityResource), adjustmentData: [ContentIdentityFixtures.hash(sourceAdjustment): sourceAdjustment])
+        let actualFingerprint = try AssetContentFingerprint.fingerprint(resources: actual.map(\.contentIdentityResource), adjustmentData: [ContentIdentityFixtures.hash(actualAdjustment): actualAdjustment])
         let expectedDate = Date(timeIntervalSince1970: 123_456)
         let modified = Date().millisecondsSinceEpoch - 1_000
         let service = RestoreService(makeClient: { _, _ in client }, importAsset: { _, date in
@@ -39,24 +41,24 @@ final class RestoreCompletionTests: XCTestCase {
             return "restored"
         }, inspectImportedAsset: { _, _ in
             XCTAssertFalse(Task.isCancelled)
-            return .init(instances: imported, modificationDateMs: modified)
+            return .init(instances: imported, modificationDateMs: modified,
+                adjustmentData: [ContentIdentityFixtures.hash(actualAdjustment): actualAdjustment])
         }, hashIndexRepository: repository)
         let profile = profile()
-        let key = RemoteIndexSyncService.remoteProfileKey(profile)
         let item = RestoreService.RestoreItemDescriptor(instances: source, identity: remoteFingerprint, creationDate: expectedDate)
         let restored = try await Task {
             try await service.restoreItems(items: [item], profile: profile, password: "", onItemCompleted: { _, _, result in
                 XCTAssertTrue(result?.asset.indexWriteHandled == true)
                 XCTAssertTrue(result?.asset.isCompleteRestore == true)
                 XCTAssertEqual(try repository.fetchAssetHashCaches(assetIDs: ["restored"])["restored"]?.assetFingerprint, actualFingerprint)
-                XCTAssertEqual(try repository.fetchRestoreOrigins(profileKey: key).count, 1)
             })
         }.value
         XCTAssertEqual(restored.count, 1)
-        XCTAssertNotEqual(remoteFingerprint, actualFingerprint)
+        XCTAssertEqual(remoteFingerprint, actualFingerprint)
+        XCTAssertNotEqual(source.last?.resourceHash, actual.last?.resourceHash)
     }
 
-    func testRetryVerifiesPendingImportWithoutCreatingAnotherAsset() async throws {
+    func testInspectionFailureDoesNotRecordUnverifiedSourceHashes() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -79,13 +81,10 @@ final class RestoreCompletionTests: XCTestCase {
         let descriptor = RestoreService.RestoreItemDescriptor(instances: [resource], identity: fingerprint)
         let first = try await service.restoreItems(items: [descriptor], profile: profile(), password: "", onItemCompleted: { _, _, _ in })
         XCTAssertFalse(first.first?.asset.isCompleteRestore ?? true)
-        XCTAssertEqual(try repository.pendingRestoreAssetIDs(profileKey: RemoteIndexSyncService.remoteProfileKey(profile()), remoteFingerprint: fingerprint), ["pending"])
-        let second = try await service.restoreItems(items: [descriptor], profile: profile(), password: "", onItemCompleted: { _, _, _ in })
-        XCTAssertTrue(second.first?.asset.isCompleteRestore == true)
-        XCTAssertEqual(second.first?.asset.localIdentifier, "pending")
+        XCTAssertTrue(first.first?.asset.indexWriteHandled == true)
+        XCTAssertTrue(try repository.fetchAssetHashCaches(assetIDs: ["pending"]).isEmpty)
         let imports = await probe.imports
         XCTAssertEqual(imports, 1)
-        XCTAssertTrue(try repository.pendingRestoreAssetIDs(profileKey: RemoteIndexSyncService.remoteProfileKey(profile()), remoteFingerprint: fingerprint).isEmpty)
     }
 
     func testBrowserResolutionAndDescriptorMergeKeepAuthoritativeAssetDate() {

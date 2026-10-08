@@ -15,6 +15,7 @@ final class DatabaseManager: @unchecked Sendable {
         config.busyMode = .timeout(5)
         dbQueue = try DatabaseQueue(path: url.path, configuration: config)
         try migrator.migrate(dbQueue)
+        try refreshAssetFingerprintVersion()
         Self.enableBackgroundAccessForDatabaseFiles(at: url)
     }
 
@@ -125,27 +126,23 @@ final class DatabaseManager: @unchecked Sendable {
             }
         }
 
-        migrator.registerMigration("v8_restore_origins") { db in
-            try db.create(table: "restore_origins") { table in
-                table.column("profileKey", .text).notNull()
-                table.column("remoteFingerprint", .blob).notNull()
-                table.column("assetLocalIdentifier", .text).notNull()
-                table.column("localFingerprint", .blob)
-                table.column("sourceResources", .blob).notNull()
-                table.column("completeCandidate", .boolean).notNull()
-                table.column("isEquivalent", .boolean).notNull().defaults(to: false)
-                table.column("importedAtMs", .integer).notNull()
-                table.primaryKey(["profileKey", "remoteFingerprint", "assetLocalIdentifier"])
-            }
-            try db.create(index: "idx_restore_origins_local", on: "restore_origins", columns: ["assetLocalIdentifier"])
-            // Older restores cached pre-import adjustment hashes that PhotoKit may have rewritten.
+        return migrator
+    }
+
+    private func refreshAssetFingerprintVersion() throws {
+        try dbQueue.write { db in
+            let key = "local_asset_fingerprint_version"
+            let version = String(AssetContentFingerprint.version)
+            guard try String.fetchOne(db, sql: "SELECT stateValue FROM sync_state WHERE stateKey = ?", arguments: [key]) != version else { return }
             try db.execute(sql: """
                 UPDATE local_assets SET assetFingerprint = NULL
                 WHERE assetLocalIdentifier IN (SELECT assetLocalIdentifier FROM local_asset_resources WHERE role = 7)
                 """)
+            try db.execute(sql: """
+                INSERT INTO sync_state (stateKey, stateValue, updatedAt) VALUES (?, ?, ?)
+                ON CONFLICT(stateKey) DO UPDATE SET stateValue = excluded.stateValue, updatedAt = excluded.updatedAt
+                """, arguments: [key, version, Date()])
         }
-
-        return migrator
     }
 
     func read<T>(_ block: (Database) throws -> T) throws -> T {

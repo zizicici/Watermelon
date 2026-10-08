@@ -238,6 +238,7 @@ struct BackupParallelExecutor: Sendable {
         switch result.reason {
         case "asset_exists_cached",
              "asset_restored",
+             "asset_content_exists",
              "resources_reused_cached",
              "icloud_photo_backup_disabled",
              "asset_gone",
@@ -919,7 +920,7 @@ struct BackupParallelExecutor: Sendable {
                 var loadedMonthStore: MonthManifestStore?
                 loadRecovery: while loadedMonthStore == nil {
                     do {
-                        loadedMonthStore = try await MonthManifestStore.loadOrCreate(
+                        let store = try await MonthManifestStore.loadOrCreate(
                             client: client,
                             basePath: profile.basePath,
                             year: monthKey.year,
@@ -934,6 +935,7 @@ struct BackupParallelExecutor: Sendable {
                             assertOwnership: writeMode.ownershipGates,
                             liteMonthsListing: writeMode.liteMonthsListing
                         )
+                        loadedMonthStore = store
                     } catch {
                         if error is CancellationError {
                             workerState.paused = true
@@ -1919,15 +1921,9 @@ struct BackupParallelExecutor: Sendable {
             if let modDate = asset.modificationDate, modDate > cache.updatedAt {
                 return false
             }
-            guard let remoteAsset = monthStore.assetsByFingerprint[cache.assetFingerprint],
-                  remoteAsset.creationDateMs == LibraryCreationDate.optionalMilliseconds(asset.creationDate) else {
-                return false
-            }
-            // Force full processing so AssetProcessor heals incomplete assets.
-            if monthStore.isAssetIncomplete(cache.assetFingerprint) {
-                executorLog.info("[heal] month \(monthStore.year)-\(monthStore.month) has incomplete asset")
-                return false
-            }
+            guard monthStore.containsAssetFingerprint(cache.assetFingerprint),
+                  !monthStore.isAssetIncomplete(cache.assetFingerprint),
+                  monthStore.assetsByFingerprint[cache.assetFingerprint]?.creationDateMs == LibraryCreationDate.optionalMilliseconds(asset.creationDate) else { return false }
         }
         return true
     }

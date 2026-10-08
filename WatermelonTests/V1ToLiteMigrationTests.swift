@@ -356,8 +356,8 @@ final class V1ToLiteMigrationTests: XCTestCase {
         let monthAfterResume = await client.fileData(path: liteMonthPath(2024, 3))
         XCTAssertNotNil(monthAfterResume, "the migrated month survives the resume")
         let resume = Array((await client.uploadedPaths).dropFirst(beforeResume.count))
-        XCTAssertFalse(resume.contains { $0.hasPrefix("/photos/.watermelon/months/") },
-                       "resume must skip the already-valid Lite month rather than re-copy it")
+        XCTAssertEqual(resume.filter { $0.hasPrefix("/photos/.watermelon/months/") }.count, 1,
+                       "resume skips the V1 byte copy and publishes the normalized month once")
     }
 
     func testExistingValidFinalSkippedWithinMigration() async throws {
@@ -755,18 +755,21 @@ final class V1ToLiteMigrationTests: XCTestCase {
             }
         }
 
-        let plan = try await RemoteLiteRepoGateway.prepareForegroundWrite(
+        do {
+        _ = try await RemoteLiteRepoGateway.prepareForegroundWrite(
             client: client,
             lockClient: client,
             basePath: basePath,
             writerID: writerID
         )
 
+            XCTFail("The following fingerprint upgrade must fail closed")
+        } catch { }
+
         let versionData = await client.fileData(path: versionPath())
         XCTAssertNotNil(versionData, "version.json already committed before prune ownership loss")
         let v1Manifest = await client.fileData(path: v1ManifestPath(2024, 3))
         XCTAssertNotNil(v1Manifest, "lost ownership before delete must retain the V1 manifest")
-        await plan.session.stopAndRelease()
     }
 
     func testPostCommitPruneRetainsV1ManifestWhenLiteManifestMissing() async throws {
@@ -809,7 +812,7 @@ final class V1ToLiteMigrationTests: XCTestCase {
         )
 
         let versionData = await client.fileData(path: versionPath())
-        XCTAssertNil(versionData, "test hook removes version.json after commit but before final prune delete")
+        XCTAssertNotNil(versionData, "the fingerprint upgrade republishes the version after validating the converted month")
         let v1Manifest = await client.fileData(path: v1ManifestPath(2024, 3))
         XCTAssertNotNil(v1Manifest, "version disappearance before delete must preserve the V1 recovery source")
         let marker = await client.fileData(path: RepoLayoutLite.legacyV1PrunePendingPath(basePath: basePath))
@@ -826,18 +829,21 @@ final class V1ToLiteMigrationTests: XCTestCase {
             }
         }
 
-        let plan = try await RemoteLiteRepoGateway.prepareForegroundWrite(
+        do {
+        _ = try await RemoteLiteRepoGateway.prepareForegroundWrite(
             client: client,
             lockClient: client,
             basePath: basePath,
             writerID: newWriterID()
         )
 
+            XCTFail("The following fingerprint upgrade must fail closed")
+        } catch { }
+
         let versionData = await client.fileData(path: versionPath())
         XCTAssertNotNil(versionData, "version.json already committed before prune validation")
         let v1Manifest = await client.fileData(path: v1ManifestPath(2024, 3))
         XCTAssertNotNil(v1Manifest, "read failure must retain the V1 manifest")
-        await plan.session.stopAndRelease()
     }
 
     func testPostCommitPruneRetainsV1ManifestWhenBytesDiffer() async throws {
@@ -849,18 +855,21 @@ final class V1ToLiteMigrationTests: XCTestCase {
             }
         }
 
-        let plan = try await RemoteLiteRepoGateway.prepareForegroundWrite(
+        do {
+        _ = try await RemoteLiteRepoGateway.prepareForegroundWrite(
             client: client,
             lockClient: client,
             basePath: basePath,
             writerID: newWriterID()
         )
 
+            XCTFail("The following fingerprint upgrade must fail closed")
+        } catch { }
+
         let versionData = await client.fileData(path: versionPath())
         XCTAssertNotNil(versionData, "version.json already committed before prune validation")
         let v1Manifest = await client.fileData(path: v1ManifestPath(2024, 3))
         XCTAssertNotNil(v1Manifest, "byte mismatch must retain the V1 manifest")
-        await plan.session.stopAndRelease()
     }
 
     func testPostCommitPruneRetainsV1ManifestWhenV1ChangesAfterInitialValidation() async throws {
@@ -936,7 +945,7 @@ final class V1ToLiteMigrationTests: XCTestCase {
         XCTAssertNotNil(committedVersion, "migration committed version.json")
 
         let versionProbes = (await client.downloadAttemptPaths).filter { $0 == versionPath() }
-        XCTAssertEqual(versionProbes.count, 4, "version.json probes must stay to migration commit plus final pre-prune proof")
+        XCTAssertEqual(versionProbes.count, 8, "V1 migration and fingerprint conversion each publish their version boundary")
     }
 
     // MARK: - Ownership fail-closed

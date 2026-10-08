@@ -33,7 +33,6 @@ final class HomeLocalIndexEngine: @unchecked Sendable {
     // In-memory mirror of `local_assets.assetFingerprint` so recomputeAggregates can
     // compute backed-up counts without hitting the DB.
     private var fingerprintByAssetID: [String: Data] = [:]
-    var restoreOrigins = RestoreOriginIndex()
     // Mirrors each tracked asset's modificationDate so refreshFingerprintsFromDB can apply the
     // same staleness gate as reload without re-fetching PhotoKit.
     private var mtimeByAssetID: [String: Date] = [:]
@@ -495,9 +494,6 @@ final class HomeLocalIndexEngine: @unchecked Sendable {
                 if let fp = fingerprintByAssetID[id] {
                     if remoteSet.contains(fp) {
                         seenBackedUpFingerprints.insert(fp)
-                    } else if let restored = restoreOrigins.remoteFingerprints(for: id, localFingerprint: fp)
-                        .intersection(remoteSet).sorted(by: { $0.lexicographicallyPrecedes($1) }).first {
-                        seenBackedUpFingerprints.insert(restored)
                     }
                 }
             }

@@ -128,8 +128,6 @@ final class ContentHashIndexRepository: @unchecked Sendable {
                     ]
                 )
             }
-            try Self.validatePendingRestoreOrigins(db, assetID: assetLocalIdentifier,
-                fingerprint: assetFingerprint, resources: resources, modificationDateMs: modificationDateMs)
         }
     }
 
@@ -494,118 +492,6 @@ final class ContentHashIndexRepository: @unchecked Sendable {
         }
     }
 
-    func recordRestoreImport(
-        profileKey: String,
-        remoteFingerprint: Data,
-        assetLocalIdentifier: String,
-        instances: [RemoteAssetResourceInstance],
-        isIncomplete: Bool,
-        importedAt: Date = Date()
-    ) throws {
-        let resources = instances.map {
-            LocalAssetResourceHashRecord(role: $0.role, slot: $0.slot, contentHash: $0.resourceHash, fileSize: $0.fileSize)
-        }
-        let fingerprint = BackupAssetResourcePlanner.assetFingerprint(resourceRoleSlotHashes: resources.map {
-            (role: $0.role, slot: $0.slot, contentHash: $0.contentHash)
-        })
-        let complete = !isIncomplete && !resources.isEmpty && fingerprint == remoteFingerprint
-            && resources.allSatisfy { $0.contentHash.count == 32 }
-        let encoded = try JSONEncoder().encode(resources)
-        try databaseManager.write { db in
-            try db.execute(sql: """
-                INSERT INTO restore_origins
-                (profileKey, remoteFingerprint, assetLocalIdentifier, sourceResources, completeCandidate, importedAtMs)
-                VALUES (?, ?, ?, ?, ?, ?)
-                ON CONFLICT(profileKey, remoteFingerprint, assetLocalIdentifier) DO NOTHING
-                """, arguments: [profileKey, remoteFingerprint, assetLocalIdentifier, encoded, complete, importedAt.millisecondsSinceEpoch])
-        }
-    }
-
-    private static func validatePendingRestoreOrigins(
-        _ db: Database,
-        assetID: String,
-        fingerprint: Data,
-        resources: [LocalAssetResourceHashRecord],
-        modificationDateMs: Int64?
-    ) throws {
-        let pending = try Row.fetchAll(db, sql: """
-            SELECT profileKey, remoteFingerprint, sourceResources, completeCandidate, importedAtMs
-            FROM restore_origins WHERE assetLocalIdentifier = ? AND localFingerprint IS NULL
-            """, arguments: [assetID])
-        for row in pending {
-            let encoded: Data = row["sourceResources"]
-            let expected = try JSONDecoder().decode([LocalAssetResourceHashRecord].self, from: encoded)
-            let importedAtMs: Int64 = row["importedAtMs"]
-            let complete: Bool = row["completeCandidate"]
-            let unchanged = modificationDateMs.map { $0 <= importedAtMs } ?? false
-            let equivalent = complete && unchanged && restoredResourcesMatch(expected: expected, actual: resources)
-            try db.execute(sql: """
-                UPDATE restore_origins SET localFingerprint = ?, isEquivalent = ?
-                WHERE profileKey = ? AND remoteFingerprint = ? AND assetLocalIdentifier = ?
-                """, arguments: [fingerprint, equivalent, row["profileKey"] as String, row["remoteFingerprint"] as Data, assetID])
-        }
-    }
-
-    static func restoredResourcesMatch(expected: [LocalAssetResourceHashRecord], actual: [LocalAssetResourceHashRecord]) -> Bool {
-        guard expected.count == actual.count, !expected.isEmpty else { return false }
-        let expectedKeys = Set(expected.map { AssetResourceRoleSlot(role: $0.role, slot: $0.slot) })
-        let actualKeys = Set(actual.map { AssetResourceRoleSlot(role: $0.role, slot: $0.slot) })
-        guard expectedKeys.count == expected.count, expectedKeys == actualKeys else { return false }
-        return expected.allSatisfy { source in
-            guard let imported = actual.first(where: { $0.role == source.role && $0.slot == source.slot }) else { return false }
-            // PhotoKit rewrites adjustmentData during an import owned by this app.
-            return source.role == ResourceTypeCode.adjustmentData
-                || source.contentHash == imported.contentHash
-        }
-    }
-
-    func pendingRestoreAssetIDs(profileKey: String, remoteFingerprint: Data) throws -> [String] {
-        try databaseManager.read { db in
-            try String.fetchAll(db, sql: """
-                SELECT assetLocalIdentifier FROM restore_origins
-                WHERE profileKey = ? AND remoteFingerprint = ? AND completeCandidate = 1 AND localFingerprint IS NULL
-                ORDER BY importedAtMs
-                """, arguments: [profileKey, remoteFingerprint])
-        }
-    }
-
-    func fetchRestoreOrigins(profileKey: String?, assetIDs: Set<String>? = nil) throws -> [RestoreOrigin] {
-        try fetchRestoreOrigins(profileKey: profileKey, filterColumn: "assetLocalIdentifier",
-            filterValues: assetIDs?.map(\.databaseValue))
-    }
-
-    func fetchRestoreOrigins(profileKey: String?, remoteFingerprints: Set<Data>) throws -> [RestoreOrigin] {
-        try fetchRestoreOrigins(profileKey: profileKey, filterColumn: "remoteFingerprint",
-            filterValues: remoteFingerprints.map(\.databaseValue))
-    }
-
-    private func fetchRestoreOrigins(
-        profileKey: String?,
-        filterColumn: String,
-        filterValues: [DatabaseValue]?
-    ) throws -> [RestoreOrigin] {
-        guard let profileKey else { return [] }
-        if let filterValues, filterValues.isEmpty { return [] }
-        return try databaseManager.read { db in
-            let query = """
-                SELECT o.assetLocalIdentifier, o.localFingerprint, o.remoteFingerprint
-                FROM restore_origins o JOIN local_assets a ON a.assetLocalIdentifier = o.assetLocalIdentifier
-                WHERE o.profileKey = ? AND o.isEquivalent = 1 AND o.localFingerprint = a.assetFingerprint
-                """
-            var rows: [Row] = []
-            if let filterValues {
-                try Self.forEachIDChunk(filterValues) { chunk, placeholders in
-                    rows += try Row.fetchAll(db, sql: query + " AND o.\(filterColumn) IN (\(placeholders))",
-                        arguments: StatementArguments([profileKey.databaseValue] + chunk))
-                }
-            } else {
-                rows = try Row.fetchAll(db, sql: query, arguments: [profileKey])
-            }
-            return rows.map { RestoreOrigin(assetLocalIdentifier: $0["assetLocalIdentifier"],
-                localFingerprint: $0["localFingerprint"], remoteFingerprint: $0["remoteFingerprint"]) }
-        }
-    }
-
     func clearLocalHashIndex() throws {
         try databaseManager.write { db in
             try db.execute(sql: "DELETE FROM local_asset_resources")
@@ -626,7 +512,8 @@ final class ContentHashIndexRepository: @unchecked Sendable {
         assetLocalIdentifier: String,
         remoteAssetFingerprint: Data,
         instances: [RemoteAssetResourceInstance],
-        modificationDateMs: Int64? = nil
+        modificationDateMs: Int64? = nil,
+        adjustmentData: [Data: Data] = [:]
     ) throws {
         let records = instances.map { instance in
             LocalAssetResourceHashRecord(
@@ -639,14 +526,9 @@ final class ContentHashIndexRepository: @unchecked Sendable {
         let totalSize = instances.reduce(Int64(0)) { partial, instance in
             partial + instance.fileSize
         }
-        let onDeviceFingerprint = BackupAssetResourcePlanner.assetFingerprint(
-            resourceRoleSlotHashes: instances.lazy.map {
-                (role: $0.role, slot: $0.slot, contentHash: $0.resourceHash)
-            }
-        )
         try upsertAssetHashSnapshot(
             assetLocalIdentifier: assetLocalIdentifier,
-            assetFingerprint: onDeviceFingerprint,
+            assetFingerprint: try AssetContentFingerprint.fingerprint(resources: instances.map(\.contentIdentityResource), adjustmentData: adjustmentData),
             resources: records,
             totalFileSizeBytes: totalSize,
             modificationDateMs: modificationDateMs

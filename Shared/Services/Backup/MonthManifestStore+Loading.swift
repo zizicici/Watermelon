@@ -171,6 +171,7 @@ extension MonthManifestStore {
         // reloadCache doubles as the integrity check: corruption surfaces
         // here before flush can overwrite remote with a bad manifest.
         try store.reloadCache()
+        if layout == .lite { try await store.upgradeAssetFingerprints() }
 
         let reconcileNames: Set<String>
         if layout == .lite {
@@ -312,6 +313,9 @@ extension MonthManifestStore {
         )
         try store.seedDatabase(seed)
         try store.reloadCache()
+        if layout == .lite {
+            try await dbQueue.write { try $0.execute(sql: "PRAGMA user_version = \(AssetContentFingerprint.version)") }
+        }
 
         let reconcileNames: Set<String>
         if layout == .lite {
@@ -473,6 +477,7 @@ extension MonthManifestStore {
 
         do {
             try store.reloadCache()
+            if layout == .lite { try await store.upgradeAssetFingerprints() }
         } catch {
             throw NSError(
                 domain: "MonthManifestStore",
@@ -496,7 +501,7 @@ extension MonthManifestStore {
         case .lite:
             shouldPushSchemaUpgrade = pushSchemaUpgrade && assertOwnership != nil
         }
-        if prepared.requiresRemoteSync && shouldPushSchemaUpgrade {
+        if store.dirty && shouldPushSchemaUpgrade {
             try await store.flushToRemote()
         }
 
@@ -611,14 +616,16 @@ extension MonthManifestStore {
                         assetFingerprint,
                         resourceHash,
                         role,
-                        slot
-                    ) VALUES (?, ?, ?, ?)
+                        slot,
+                        fingerprintHash
+                    ) VALUES (?, ?, ?, ?, ?)
                     """,
                     arguments: [
                         link.assetFingerprint,
                         link.resourceHash,
                         link.role,
-                        link.slot
+                        link.slot,
+                        link.fingerprintHash
                     ]
                 )
             }
@@ -678,7 +685,7 @@ extension MonthManifestStore {
             links.reserveCapacity(assets.count)
             let linkCursor = try Row.fetchCursor(
                 db,
-                sql: "SELECT assetFingerprint, resourceHash, role, slot FROM asset_resources ORDER BY assetFingerprint, role, slot"
+                sql: "SELECT assetFingerprint, resourceHash, role, slot, fingerprintHash FROM asset_resources ORDER BY assetFingerprint, role, slot"
             )
             while let row = try linkCursor.next() {
                 let link = RemoteAssetResourceLink(
@@ -687,7 +694,8 @@ extension MonthManifestStore {
                     assetFingerprint: row[0],
                     resourceHash: row[1],
                     role: row[2],
-                    slot: row[3]
+                    slot: row[3],
+                    fingerprintHash: row[4]
                 )
                 links[link.assetFingerprint, default: []].append(link)
             }

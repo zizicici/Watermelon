@@ -27,6 +27,7 @@ enum LiteRepoTransitionEngine {
         case useCurrent(OwnedCleanupMode)
         case commitVersion(OwnedCleanupMode)
         case migrate(runCleanup: Bool)
+        case upgrade
         case skipAfterReleaseAndUnwind
         case fail(LiteRepoError)
     }
@@ -39,7 +40,7 @@ enum LiteRepoTransitionEngine {
         switch decision {
         case .current, .fresh:
             return .ready
-        case .v1Migrate, .malformedVersion:
+        case .v1Migrate, .fingerprintUpgrade, .malformedVersion:
             return .requiresWrite(decision)
         case .damaged:
             throw LiteRepoError.repoDamaged
@@ -55,7 +56,7 @@ enum LiteRepoTransitionEngine {
         switch try await classify(client: client, basePath: basePath) {
         case .current, .fresh:
             return .lite
-        case .v1Migrate:
+        case .v1Migrate, .fingerprintUpgrade:
             throw LiteRepoError.repoMaintenanceUnavailable
         case .damaged, .malformedVersion:
             throw LiteRepoError.repoDamaged
@@ -115,7 +116,7 @@ enum LiteRepoTransitionEngine {
             case .foreground, .background: break     // initialize-eligible (commit under the lock)
             case .maintenance: throw LiteRepoError.repoMaintenanceUnavailable   // verify never initializes
             }
-        case .v1Migrate:
+        case .v1Migrate, .fingerprintUpgrade:
             break                                    // migrate under the lock
         case .malformedVersion:
             break                                    // recover current version scratch under the lock
@@ -248,6 +249,11 @@ enum LiteRepoTransitionEngine {
                 onMigrationProgress: onMigrationProgress
             ))
 
+        case .upgrade:
+            return .proceed(try await upgradeFingerprintsWithSession(client: client, basePath: basePath,
+                writerID: writerID, now: now, session: session, monthsListing: monthsListing,
+                onMigrationProgress: onMigrationProgress))
+
         case .skipAfterReleaseAndUnwind:
             await session.release()
             await attemptMarkerUnwind(client: client, basePath: basePath)
@@ -275,7 +281,7 @@ enum LiteRepoTransitionEngine {
                     return .useCurrent(.foreground)
                 case .fresh:
                     return .commitVersion(.foreground)
-                case .v1Migrate, .malformedVersion, .damaged:
+                case .v1Migrate, .fingerprintUpgrade, .malformedVersion, .damaged:
                     return .fail(.repoDamaged)
                 case .unsupported(let minAppVersion):
                     return .fail(.repoUnsupported(minAppVersion: minAppVersion))
@@ -290,8 +296,8 @@ enum LiteRepoTransitionEngine {
                 return .fail(.repoDamaged)
             case .v1Migrate:
                 return .migrate(runCleanup: true)
-            case .malformedVersion:
-                return .commitVersion(.foreground)
+            case .fingerprintUpgrade, .malformedVersion:
+                return .upgrade
             case .damaged:
                 return .fail(.repoDamaged)
             case .unsupported(let minAppVersion):
@@ -306,8 +312,8 @@ enum LiteRepoTransitionEngine {
                 return .migrate(runCleanup: false)
             case .fresh where initialDecision == .fresh:
                 return .commitVersion(.background)
-            case .malformedVersion:
-                return .commitVersion(.background)
+            case .fingerprintUpgrade, .malformedVersion:
+                return .upgrade
             case .fresh, .damaged, .unsupported(_):
                 return .skipAfterReleaseAndUnwind
             }
@@ -318,8 +324,8 @@ enum LiteRepoTransitionEngine {
                 return .useCurrent(.foreground)
             case (_, .v1Migrate):
                 return .migrate(runCleanup: true)
-            case (.some(.malformedVersion), .malformedVersion):
-                return .commitVersion(.foreground)
+            case (_, .fingerprintUpgrade), (.some(.malformedVersion), .malformedVersion):
+                return .upgrade
             case (_, .unsupported(let minAppVersion)):
                 // A committed-but-future/foreign format is unsupported, not damaged: preserve the upgrade
                 // signal the foreground/initial/read routes already emit, never collapse it to repoDamaged.
@@ -368,6 +374,29 @@ enum LiteRepoTransitionEngine {
         await monthsListing.seed(basePath: basePath, entries: entries)
     }
 
+    private static func upgradeFingerprintsWithSession<Session: RepoWriteSession>(
+        client: any RemoteStorageClientProtocol,
+        basePath: String,
+        writerID: String?,
+        now: Date,
+        session: Session,
+        monthsListing: LiteMonthsListingSnapshot,
+        onMigrationProgress: (@Sendable (V1ToLiteMigrationProgress) async -> Void)?
+    ) async throws -> WritePlan<Session> {
+        do {
+            let ownership = RepoWriteGuard.ownershipGates(session)!
+            await runForegroundCleanup(client: client, basePath: basePath, assertOwnership: ownership,
+                monthsListing: monthsListing, repoDirectoryEntries: nil)
+            try await AssetFingerprintRepoUpgrade(client: client, basePath: basePath,
+                assertOwnership: ownership, monthsListing: monthsListing, onProgress: onMigrationProgress)
+                .run(createdAt: isoTimestamp(now), createdBy: writerID ?? "")
+            return WritePlan(layout: .lite, session: session, monthsListing: monthsListing)
+        } catch {
+            await session.release()
+            throw error
+        }
+    }
+
     private static func migrateV1WithSession<Session: RepoWriteSession>(
         client: any RemoteStorageClientProtocol,
         basePath: String,
@@ -411,7 +440,9 @@ enum LiteRepoTransitionEngine {
                 pruneLegacyV1Manifests: false
             )
         }
-        return WritePlan(layout: .lite, session: session, monthsListing: monthsListing)
+        return try await upgradeFingerprintsWithSession(client: client, basePath: basePath,
+            writerID: writerID, now: now, session: session, monthsListing: monthsListing,
+            onMigrationProgress: onMigrationProgress)
     }
 
     private static func pruneCommittedV1Manifests<Session: RepoWriteSession>(
@@ -520,7 +551,7 @@ enum LiteRepoTransitionEngine {
         do {
             try await client.download(remotePath: RepoLayoutLite.versionPath(basePath: basePath), localURL: localURL)
             let data = try Data(contentsOf: localURL)
-            return VersionManifestLite.compatibility(for: data) == .readableWritable
+            return [.readableWritable, .requiresUpgrade].contains(VersionManifestLite.compatibility(for: data))
         } catch {
             return false
         }

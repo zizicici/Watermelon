@@ -1,26 +1,27 @@
 import Foundation
 
-// Repo V2 (Lite) version manifest. `version.json` is the single format commit point; a repo is only
-// "current" once this file is committed with format 2.
+// A pending format 3 marker blocks older clients while month fingerprints are rewritten.
 nonisolated enum VersionManifestLite {
     // `formatVersion` is the compatibility boundary. `minAppVersion` is the oldest app that supports
     // this repo format, not the current release; ordinary app releases must not bump it. Future
     // incompatible repos must bump `formatVersion` and may raise `minAppVersion` for user-facing prompts.
-    static let formatVersion = 2
-    static let minAppVersion = "1.5.0"
+    static let formatVersion = 3
+    static let minAppVersion = "1.11.0"
 
     enum Compatibility: Equatable, Sendable {
         case readableWritable
+        case requiresUpgrade
         case unsupported(minAppVersion: String?)
         case damaged
     }
 
-    static func makeManifest(createdAt: String, createdBy: String) -> WatermelonRemoteVersionManifest {
+    static func makeManifest(createdAt: String, createdBy: String, upgradePending: Bool = false) -> WatermelonRemoteVersionManifest {
         WatermelonRemoteVersionManifest(
             formatVersion: formatVersion,
             minAppVersion: minAppVersion,
             createdAt: createdAt,
-            createdBy: createdBy
+            createdBy: createdBy,
+            upgradePending: upgradePending ? true : nil
         )
     }
 
@@ -41,10 +42,7 @@ nonisolated enum VersionManifestLite {
 
     static func compatibility(for manifest: WatermelonRemoteVersionManifest) -> Compatibility {
         guard let remoteFormat = manifest.formatVersion else { return .damaged }
-        if remoteFormat > formatVersion {
-            return .unsupported(minAppVersion: unsupportedMinAppVersion(from: manifest))
-        }
-        guard remoteFormat == formatVersion else {
+        guard remoteFormat == 2 || remoteFormat == formatVersion else {
             return .unsupported(minAppVersion: unsupportedMinAppVersion(from: manifest))
         }
         guard let remoteMinAppVersion = manifest.minAppVersion, !remoteMinAppVersion.isEmpty,
@@ -52,6 +50,10 @@ nonisolated enum VersionManifestLite {
               let createdBy = manifest.createdBy, !createdBy.isEmpty else {
             return .damaged
         }
+        guard remoteMinAppVersion.compare(minAppVersion, options: .numeric) != .orderedDescending else {
+            return .unsupported(minAppVersion: remoteMinAppVersion)
+        }
+        if remoteFormat == 2 || manifest.upgradePending == true { return .requiresUpgrade }
         return .readableWritable
     }
 
@@ -104,8 +106,8 @@ struct VersionManifestWriter: Sendable {
     }
 
     @discardableResult
-    func commit(createdAt: String, createdBy: String) async throws -> WatermelonRemoteVersionManifest {
-        let manifest = VersionManifestLite.makeManifest(createdAt: createdAt, createdBy: createdBy)
+    func commit(createdAt: String, createdBy: String, upgradePending: Bool = false) async throws -> WatermelonRemoteVersionManifest {
+        let manifest = VersionManifestLite.makeManifest(createdAt: createdAt, createdBy: createdBy, upgradePending: upgradePending)
         let data = try VersionManifestLite.encode(manifest)
         let versionPath = RepoLayoutLite.versionPath(basePath: basePath)
         // Temp sibling under `.watermelon`: a `.tmp` suffix that classify/readVersion never mistake for the
@@ -231,7 +233,7 @@ struct VersionManifestWriter: Sendable {
                 return
             }
             let bytes = (try? Data(contentsOf: readURL)) ?? Data()
-            guard VersionManifestLite.compatibility(for: bytes) != .readableWritable else { return }
+            guard VersionManifestLite.compatibility(for: bytes) == .damaged else { return }
             await removeProvenBadCanonical(versionPath: versionPath)
         }.value
     }
@@ -294,7 +296,7 @@ struct VersionManifestWriter: Sendable {
         }
 
         guard let data = try? Data(contentsOf: readURL),
-              VersionManifestLite.compatibility(for: data) == .readableWritable else {
+              [.readableWritable, .requiresUpgrade].contains(VersionManifestLite.compatibility(for: data)) else {
             throw WriteError.unsafeExistingVersion
         }
     }

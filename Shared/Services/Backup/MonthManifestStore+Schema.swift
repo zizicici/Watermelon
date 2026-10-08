@@ -73,8 +73,15 @@ extension MonthManifestStore {
         try queue.write { db in
             let migrated = try migrateLegacyNsTimestamps(db)
             try validateExistingManifestSchema(db)
+            let addedFingerprintHash: Bool
+            if try tableColumns(db, tableName: "asset_resources").contains("fingerprintHash") {
+                addedFingerprintHash = false
+            } else {
+                try db.execute(sql: "ALTER TABLE asset_resources ADD COLUMN fingerprintHash BLOB")
+                addedFingerprintHash = true
+            }
             try ensureSchemaIndexes(db)
-            return migrated
+            return migrated || addedFingerprintHash
         }
     }
 
@@ -140,6 +147,7 @@ extension MonthManifestStore {
               resourceHash BLOB NOT NULL,
               role INTEGER NOT NULL,
               slot INTEGER NOT NULL,
+              fingerprintHash BLOB,
               PRIMARY KEY(assetFingerprint, role, slot)
             )
             """

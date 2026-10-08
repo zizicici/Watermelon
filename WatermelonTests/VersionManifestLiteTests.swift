@@ -12,8 +12,8 @@ final class VersionManifestLiteTests: XCTestCase {
 
     func testMakeManifestUsesCanonicalConstants() {
         let manifest = VersionManifestLite.makeManifest(createdAt: createdAt, createdBy: createdBy)
-        XCTAssertEqual(manifest.formatVersion, 2)
-        XCTAssertEqual(manifest.minAppVersion, "1.5.0")
+        XCTAssertEqual(manifest.formatVersion, 3)
+        XCTAssertEqual(manifest.minAppVersion, "1.11.0")
         XCTAssertEqual(manifest.createdAt, createdAt)
         XCTAssertEqual(manifest.createdBy, createdBy)
     }
@@ -23,8 +23,8 @@ final class VersionManifestLiteTests: XCTestCase {
         let data = try VersionManifestLite.encode(manifest)
         let object = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
 
-        XCTAssertEqual(object["format_version"] as? Int, 2)
-        XCTAssertEqual(object["min_app_version"] as? String, "1.5.0")
+        XCTAssertEqual(object["format_version"] as? Int, 3)
+        XCTAssertEqual(object["min_app_version"] as? String, "1.11.0")
         XCTAssertEqual(object["created_at"] as? String, createdAt)
         XCTAssertEqual(object["created_by"] as? String, createdBy)
         XCTAssertEqual(
@@ -39,13 +39,13 @@ final class VersionManifestLiteTests: XCTestCase {
         XCTAssertEqual(decoded, manifest)
     }
 
-    func testIsCurrentOnlyForFormat2() {
+    func testIsCurrentOnlyForCompletedFormat3() {
         XCTAssertTrue(VersionManifestLite.isCurrent(
             VersionManifestLite.makeManifest(createdAt: createdAt, createdBy: createdBy)
         ))
         XCTAssertFalse(VersionManifestLite.isCurrent(WatermelonRemoteVersionManifest(
-            formatVersion: 3,
-            minAppVersion: "1.5.0", createdAt: createdAt, createdBy: createdBy
+            formatVersion: 4,
+            minAppVersion: "1.11.0", createdAt: createdAt, createdBy: createdBy
         )))
         XCTAssertFalse(VersionManifestLite.isCurrent(WatermelonRemoteVersionManifest(
             formatVersion: nil,
@@ -53,57 +53,57 @@ final class VersionManifestLiteTests: XCTestCase {
         )))
     }
 
-    func testIsCurrentAcceptsSameFormatFutureMinAppVersion() {
-        XCTAssertTrue(VersionManifestLite.isCurrent(WatermelonRemoteVersionManifest(
-            formatVersion: 2,
+    func testIsCurrentRejectsSameFormatFutureMinAppVersion() {
+        XCTAssertFalse(VersionManifestLite.isCurrent(WatermelonRemoteVersionManifest(
+            formatVersion: 3,
             minAppVersion: "99.0.0", createdAt: createdAt, createdBy: createdBy
         )))
     }
 
     func testIsCurrentRejectsAbsentMinAppVersion() {
         XCTAssertFalse(VersionManifestLite.isCurrent(WatermelonRemoteVersionManifest(
-            formatVersion: 2,
+            formatVersion: 3,
             minAppVersion: nil, createdAt: createdAt, createdBy: createdBy
         )))
     }
 
     func testIsCurrentAcceptsOwnMinAppVersion() {
         XCTAssertTrue(VersionManifestLite.isCurrent(WatermelonRemoteVersionManifest(
-            formatVersion: 2,
-            minAppVersion: "1.5.0", createdAt: createdAt, createdBy: createdBy
+            formatVersion: 3,
+            minAppVersion: "1.11.0", createdAt: createdAt, createdBy: createdBy
         )))
     }
 
     func testIsCurrentAcceptsOlderMinAppVersion() {
         XCTAssertTrue(VersionManifestLite.isCurrent(WatermelonRemoteVersionManifest(
-            formatVersion: 2,
+            formatVersion: 3,
             minAppVersion: "1.4.0", createdAt: createdAt, createdBy: createdBy
         )))
     }
 
     func testIsCurrentRejectsMissingCreatedAtOrCreatedBy() {
         XCTAssertFalse(VersionManifestLite.isCurrent(WatermelonRemoteVersionManifest(
-            formatVersion: 2,
-            minAppVersion: "1.5.0", createdAt: nil, createdBy: createdBy
+            formatVersion: 3,
+            minAppVersion: "1.11.0", createdAt: nil, createdBy: createdBy
         )))
         XCTAssertFalse(VersionManifestLite.isCurrent(WatermelonRemoteVersionManifest(
-            formatVersion: 2,
-            minAppVersion: "1.5.0", createdAt: createdAt, createdBy: nil
+            formatVersion: 3,
+            minAppVersion: "1.11.0", createdAt: createdAt, createdBy: nil
         )))
     }
 
     func testIsCurrentRejectsEmptyCanonicalFields() {
         XCTAssertFalse(VersionManifestLite.isCurrent(WatermelonRemoteVersionManifest(
-            formatVersion: 2,
+            formatVersion: 3,
             minAppVersion: "", createdAt: createdAt, createdBy: createdBy
         )))
         XCTAssertFalse(VersionManifestLite.isCurrent(WatermelonRemoteVersionManifest(
-            formatVersion: 2,
-            minAppVersion: "1.5.0", createdAt: "", createdBy: createdBy
+            formatVersion: 3,
+            minAppVersion: "1.11.0", createdAt: "", createdBy: createdBy
         )))
         XCTAssertFalse(VersionManifestLite.isCurrent(WatermelonRemoteVersionManifest(
-            formatVersion: 2,
-            minAppVersion: "1.5.0", createdAt: createdAt, createdBy: ""
+            formatVersion: 3,
+            minAppVersion: "1.11.0", createdAt: createdAt, createdBy: ""
         )))
     }
 
@@ -133,7 +133,7 @@ final class VersionManifestLiteTests: XCTestCase {
         let storedBytes = await client.fileData(path: versionPath)
         let persisted = try VersionManifestLite.decode(try XCTUnwrap(storedBytes))
         XCTAssertEqual(persisted, committed)
-        XCTAssertEqual(persisted.formatVersion, 2)
+        XCTAssertEqual(persisted.formatVersion, 3)
     }
 
     // A non-independent MOVE backend commits version.json by direct PUT: no temp, no MOVE (temp→MOVE would alias
@@ -168,7 +168,7 @@ final class VersionManifestLiteTests: XCTestCase {
 
         let stored = await client.fileData(path: versionPath)
         let persisted = try VersionManifestLite.decode(try XCTUnwrap(stored))
-        XCTAssertEqual(persisted.formatVersion, 2, "a valid landed version.json must be left as a usable commit point")
+        XCTAssertEqual(persisted.formatVersion, 3, "a valid landed version.json must be left as a usable commit point")
     }
 
     // Direct PUT that lands partial/corrupt bytes then fails: the damaged version.json must be removed so the repo
@@ -554,9 +554,9 @@ final class VersionManifestLiteTests: XCTestCase {
         let divergentBytes = try JSONSerialization.data(withJSONObject: [
             "created_by": createdBy,
             "created_at": createdAt,
-            "min_app_version": "1.5.0",
+            "min_app_version": "1.11.0",
             "layout": "lite-month-sqlite",
-            "format_version": 2,
+            "format_version": 3,
             "server_note": "reserialized"
         ])
         let canonical = VersionManifestLite.makeManifest(createdAt: createdAt, createdBy: createdBy)

@@ -169,6 +169,61 @@ final class MonthManifestStore {
         Self.closeAndRemoveLocalManifest(at: localManifestURL, queue: dbQueue)
     }
 
+    func upgradeAssetFingerprints() async throws {
+        let version = try await dbQueue.read { try Int.fetchOne($0, sql: "PRAGMA user_version") ?? 0 }
+        guard version <= AssetContentFingerprint.version else { throw CocoaError(.fileReadCorruptFile) }
+        guard version < AssetContentFingerprint.version else { return }
+        var assets: [Data: RemoteManifestAsset] = [:]
+        var links: [Data: [RemoteAssetResourceLink]] = [:]
+        var adjustments: [Data: Data] = [:]
+        let ordered = assetsByFingerprint.values.sorted {
+            if $0.backedUpAtMs != $1.backedUpAtMs { return $0.backedUpAtMs > $1.backedUpAtMs }
+            return $0.assetFingerprint.lexicographicallyPrecedes($1.assetFingerprint)
+        }
+        for asset in ordered {
+            try Task.checkCancellation()
+            let originalLinks = assetLinksByFingerprint[asset.assetFingerprint] ?? []
+            if Self.isAssetIncomplete(links: originalLinks, isResourceAvailable: { itemsByHash[$0] != nil }, assetFingerprint: asset.assetFingerprint) {
+                assets[asset.assetFingerprint] = asset
+                links[asset.assetFingerprint] = originalLinks
+                continue
+            }
+            if originalLinks.contains(where: { $0.role == ResourceTypeCode.adjustmentData && $0.fingerprintHash == nil }) {
+                for link in originalLinks where link.role == ResourceTypeCode.adjustmentData && adjustments[link.resourceHash] == nil {
+                    guard let name = itemsByHash[link.resourceHash], let resource = itemsByFileName[name],
+                          RemotePathBuilder.isSafePathComponent(name) else { throw CocoaError(.fileReadCorruptFile) }
+                    let url = FileManager.default.temporaryDirectory.appendingPathComponent("fingerprint-upgrade-\(UUID().uuidString)")
+                    defer { try? FileManager.default.removeItem(at: url) }
+                    try await client.download(remotePath: RemotePathBuilder.absolutePath(basePath: monthAbsolutePath, remoteRelativePath: name),
+                        localURL: url, expectedSize: resource.fileSize > 0 ? resource.fileSize : nil, onProgress: nil)
+                    adjustments[link.resourceHash] = try Data(contentsOf: url)
+                }
+            }
+            let hashes: [AssetContentFingerprint.Resource]
+            if originalLinks.allSatisfy({ $0.role != ResourceTypeCode.adjustmentData || $0.fingerprintHash != nil }) {
+                hashes = originalLinks.map { .init(role: $0.role, slot: $0.slot, hash: $0.assetFingerprintHash) }
+            } else {
+                hashes = try AssetContentFingerprint.resourceHashes(resources: originalLinks.map {
+                    .init(role: $0.role, slot: $0.slot, hash: $0.resourceHash)
+                }, adjustmentData: adjustments)
+            }
+            let fingerprint = BackupAssetResourcePlanner.assetFingerprint(resourceRoleSlotHashes: hashes.map { ($0.role, $0.slot, $0.hash) })
+            guard assets[fingerprint] == nil else { continue }
+            assets[fingerprint] = RemoteManifestAsset(year: year, month: month, assetFingerprint: fingerprint,
+                creationDateMs: asset.creationDateMs, backedUpAtMs: asset.backedUpAtMs,
+                resourceCount: asset.resourceCount, totalFileSizeBytes: asset.totalFileSizeBytes)
+            links[fingerprint] = zip(originalLinks, hashes).map { link, hash in
+                RemoteAssetResourceLink(year: year, month: month, assetFingerprint: fingerprint,
+                    resourceHash: link.resourceHash, role: link.role, slot: link.slot,
+                    fingerprintHash: link.role == ResourceTypeCode.adjustmentData ? hash.hash : nil)
+            }
+        }
+        try seedDatabase(Seed(resources: Array(itemsByFileName.values), assets: Array(assets.values), assetResourceLinks: links.values.flatMap { $0 }))
+        try await dbQueue.write { try $0.execute(sql: "PRAGMA user_version = \(AssetContentFingerprint.version)") }
+        try reloadCache()
+        dirty = true
+    }
+
     func replaceClient(_ newClient: RemoteStorageClientProtocol) {
         client = newClient
     }
@@ -455,14 +510,16 @@ final class MonthManifestStore {
                         assetFingerprint,
                         resourceHash,
                         role,
-                        slot
-                    ) VALUES (?, ?, ?, ?)
+                        slot,
+                        fingerprintHash
+                    ) VALUES (?, ?, ?, ?, ?)
                     """,
                     arguments: [
                         link.assetFingerprint,
                         link.resourceHash,
                         link.role,
-                        link.slot
+                        link.slot,
+                        link.fingerprintHash
                     ]
                 )
             }
@@ -599,14 +656,16 @@ final class MonthManifestStore {
                         assetFingerprint,
                         resourceHash,
                         role,
-                        slot
-                    ) VALUES (?, ?, ?, ?)
+                        slot,
+                        fingerprintHash
+                    ) VALUES (?, ?, ?, ?, ?)
                     """,
                     arguments: [
                         link.assetFingerprint,
                         link.resourceHash,
                         link.role,
-                        link.slot
+                        link.slot,
+                        link.fingerprintHash
                     ]
                 )
             }
@@ -891,6 +950,9 @@ final class MonthManifestStore {
         // hold WAL pages, and we want a stable byte image to read back and verify against.
         let exportURL = Self.makeLocalManifestURL(year: year, month: month)
         defer { Self.removeScratchFile(at: exportURL) }
+        if layout == .lite {
+            try await dbQueue.write { try $0.execute(sql: "PRAGMA user_version = \(AssetContentFingerprint.version)") }
+        }
         try exportVerifiedManifestCopy(to: exportURL)
         if !ignoreCancellation {
             try Task.checkCancellation()
@@ -1701,7 +1763,7 @@ extension MonthManifestStore {
         }
         let fingerprintMatches = allResourcesAvailable && BackupAssetResourcePlanner.assetFingerprint(
             resourceRoleSlotHashes: links.lazy.map {
-                (role: $0.role, slot: $0.slot, contentHash: $0.resourceHash)
+                (role: $0.role, slot: $0.slot, contentHash: $0.assetFingerprintHash)
             }
         ) == assetFingerprint
         return isAssetIncomplete(

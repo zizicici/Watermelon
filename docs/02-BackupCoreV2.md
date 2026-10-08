@@ -86,7 +86,7 @@ iOS 27 的 `RunBackupIntent` 通过 `BackgroundBackupRunner.runOnDemand` 复用�
 1. 校验或申请相册权限
 2. 创建并连接远端 client
 3. 保证 `basePath` 存在
-4. 泛型 `LiteRepoTransitionEngine` 先由 `RepoFormatRouter` 预判格式 → 通过注入的 coordinator 取得写权限 → 权限内重新判定（以第二次结果为准）→ 按需 commit version / V1→Lite 迁移 / 直接沿用 → 运行 `OrphanCleanupLite`。远端走 `RemoteLiteRepoGateway` + `RemoteRepoWriteCoordinator`；主要面向直连外接磁盘的 External Storage 走 `LocalVolumeRepoGateway` + `LocalVolumeRepoWriteCoordinator`
+4. 泛型 `LiteRepoTransitionEngine` 先由 `RepoFormatRouter` 预判格式 → 通过注入的 coordinator 取得写权限 → 权限内重新判定（以第二次结果为准）→ 按需 commit version / V1→Lite 迁移 / 格式 2→3 指纹升级 / 直接沿用 → 运行 `OrphanCleanupLite`。远端走 `RemoteLiteRepoGateway` + `RemoteRepoWriteCoordinator`；主要面向直连外接磁盘的 External Storage 走 `LocalVolumeRepoGateway` + `LocalVolumeRepoWriteCoordinator`
 5. `RemoteIndexSyncService.syncIndex(...)` 扫描远端 manifest，写入 `RemoteLibrarySnapshotCache`
 6. 当 `digest.totalEntryCount` 不大于 `120_000` 时构建 `MonthSeedLookup`（仅在 manifest 缺失而需要 seed 时使用）
 7. 读取待处理资产
@@ -176,7 +176,7 @@ SMB / WebDAV / S3 / SFTP / OneDrive / Dropbox / Google Drive / BrowserLink 走 `
 
 `AssetProcessor`（核心类在 `AssetProcessor.swift`，命名细节在 `+Naming`，上传策略在 `+Upload`）的关键规则：
 
-1. 先基于 `LocalHashIndexBuildService` / `ContentHashIndexRepository` 的结果尝试本地 cache 快速命中（`processWithLocalCache`）。内容已存在或命中还原来源时，仍比较资产拍摄日期；日期不同只更新 manifest 的资产记录与快照缓存，记为成功并随月份 flush，不重传媒体。整月跳过同样要求拍摄日期一致。
+1. 先基于 `LocalHashIndexBuildService` / `ContentHashIndexRepository` 的结果尝试本地 cache 快速命中（`processWithLocalCache`）。规范化 `assetFingerprint` 命中目标月份完整资产时，仍比较资产拍摄日期；日期不同只更新 manifest 的资产记录与快照缓存，记为成功并随月份 flush，不重传媒体。整月跳过同样要求拍摄日期一致。
 2. 未命中时，按 `BackupAssetResourcePlanner`（`Shared/Services/Backup/`）选择资源并分配 `role/slot`
 3. 将资源导出到临时文件并计算 `SHA-256`
 4. 生成 `assetFingerprint`（`role|slot|hashHex` token 排序、`\n` 连接、再 SHA-256）
@@ -247,8 +247,9 @@ SMB / WebDAV / S3 / SFTP / OneDrive / Dropbox / Google Drive / BrowserLink 走 `
 
 - `RestoreItemDescriptor` 携带 manifest 资产的拍摄日期；资源日期只用于缺少资产日期的兼容回退。
 - 导入组合先通过 `PHAssetCreationRequest.supportsAssetResourceTypes` 验证。缺少原始视频时优先恢复存活的视频；缺少编辑配置导致组合不受支持时恢复可用主资源，避免只保留封面或提交无效组合。
-- Photos 导入成功后，`RestoreService` 在完成回调前读取实际资源并持久化哈希。该收尾不受调用者取消影响；校验暂时失败则保留待验证来源，下次重试先验证已有资产，避免再次导入。
-- 完整且验证通过的还原关系可用于首页计数、浏览器匹配和下载去重；上传只有在对应仓库的目标月份仍保有完整源资产时才跳过。部分恢复、编辑后指纹改变、不可访问或已删除的本地资产不满足完整匹配。
+- Photos 导入成功后，`RestoreService` 在完成回调前读取实际资源并持久化哈希。该收尾不受调用者取消影响；校验失败则不写入未经验证的源哈希，后续本地索引预检可从 Photos 实际资源重新计算。
+- 首页计数、浏览器匹配和下载去重统一使用规范化内容指纹，不依赖还原来源或 `localIdentifier` 稳定。上传仍要求当前目标月份存在完整的对应资产；另一个仓库拥有它不会让空仓库跳过上传。部分恢复、实际编辑参数或媒体改变、不可访问或已删除的本地资产不满足完整匹配。
+- 文件下载保留完整字节 SHA-256 校验。manifest 链接用 `fingerprintHash ?? resourceHash` 验证资产键；只有内容识别排除经验证的易变编辑描述字段。旧远端连接时通过现有升级机制更新月份 manifest，无需重传媒体。
 
 ## 11. 暂停 / 恢复 / 停止
 

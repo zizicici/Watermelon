@@ -934,6 +934,7 @@ final class RemoteIndexSyncService: Sendable {
     // state so the cache and its digest map reset together (as on a profile switch); the next sync re-establishes.
     func resetSnapshotCache(expectedProfileKey: String) async {
         await underSyncGateOrDirect {
+            self.diskCache.invalidate(profileKey: expectedProfileKey)
             if self.snapshotCache.resetIfOwned(by: expectedProfileKey) {
                 await self.state.resetIfOwned(by: expectedProfileKey)
             }
@@ -1208,6 +1209,7 @@ final class RemoteManifestSnapshotDiskCache: @unchecked Sendable {
         let resourceHashHex: String
         let role: Int
         let slot: Int
+        let fingerprintHashHex: String?
 
         init(_ link: RemoteAssetResourceLink) {
             year = link.year
@@ -1216,6 +1218,7 @@ final class RemoteManifestSnapshotDiskCache: @unchecked Sendable {
             resourceHashHex = link.resourceHash.hexString
             role = link.role
             slot = link.slot
+            fingerprintHashHex = link.fingerprintHash?.hexString
         }
 
         var value: RemoteAssetResourceLink? {
@@ -1227,12 +1230,13 @@ final class RemoteManifestSnapshotDiskCache: @unchecked Sendable {
                 assetFingerprint: assetFingerprint,
                 resourceHash: resourceHash,
                 role: role,
-                slot: slot
+                slot: slot,
+                fingerprintHash: fingerprintHashHex.flatMap { Data(hexString: $0) }
             )
         }
     }
 
-    private static let currentVersion = 1
+    private static let currentVersion = 2
     private let directory: URL?
 
     init(directory: URL? = nil) {
@@ -1287,6 +1291,10 @@ final class RemoteManifestSnapshotDiskCache: @unchecked Sendable {
         } catch {
             try? FileManager.default.removeItem(at: cacheURL(profileKey: profileKey))
         }
+    }
+
+    func invalidate(profileKey: String) {
+        try? FileManager.default.removeItem(at: cacheURL(profileKey: profileKey))
     }
 
     private func cacheURL(profileKey: String) -> URL {

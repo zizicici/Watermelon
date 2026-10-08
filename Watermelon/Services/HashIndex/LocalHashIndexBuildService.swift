@@ -443,46 +443,47 @@ final class LocalHashIndexBuildService: @unchecked Sendable {
             )
         }
 
-        if canReuseCache(
-            asset: asset,
-            selectedResources: selectedResources,
-            cachedLocalHash: cachedLocalHash
-        ) {
-            // Cache fingerprint is complete regardless of byte availability; the offline probe is only an
-            // upload network-hint, so a not-local or transiently-faulting probe is network-pending, never incomplete.
-            if !allowNetworkAccess {
-                var networkPending = false
-                do {
-                    for selected in selectedResources {
-                        try Task.checkCancellation()
-                        let isLocal = try await photoLibraryService.isResourceLocallyAvailable(
-                            selected.resource
-                        )
-                        if !isLocal {
-                            networkPending = true
-                            break
-                        }
-                    }
-                } catch is CancellationError {
-                    throw CancellationError()
-                } catch {
-                    networkPending = true
-                }
-                if networkPending {
-                    return LocalHashIndexProcessedAssetResult(
-                        outcome: .readyNetworkPending(asset.localIdentifier),
-                        reusedCache: true
-                    )
-                }
-            }
-            return LocalHashIndexProcessedAssetResult(
-                outcome: .ready(asset.localIdentifier),
-                reusedCache: true
-            )
-        }
-
         do {
+            if canReuseCache(
+                asset: asset,
+                selectedResources: selectedResources,
+                cachedLocalHash: cachedLocalHash
+            ) {
+                // Cache fingerprint is complete regardless of byte availability; the offline probe is only an
+                // upload network-hint, so a not-local or transiently-faulting probe is network-pending, never incomplete.
+                if !allowNetworkAccess {
+                    var networkPending = false
+                    do {
+                        for selected in selectedResources {
+                            try Task.checkCancellation()
+                            let isLocal = try await photoLibraryService.isResourceLocallyAvailable(
+                                selected.resource
+                            )
+                            if !isLocal {
+                                networkPending = true
+                                break
+                            }
+                        }
+                    } catch is CancellationError {
+                        throw CancellationError()
+                    } catch {
+                        networkPending = true
+                    }
+                    if networkPending {
+                        return LocalHashIndexProcessedAssetResult(
+                            outcome: .readyNetworkPending(asset.localIdentifier),
+                            reusedCache: true
+                        )
+                    }
+                }
+                return LocalHashIndexProcessedAssetResult(
+                    outcome: .ready(asset.localIdentifier),
+                    reusedCache: true
+                )
+            }
+
             var roleSlotHashes: [(role: Int, slot: Int, contentHash: Data, fileSize: Int64)] = []
+            var adjustments: [Data: Data] = [:]
             roleSlotHashes.reserveCapacity(selectedResources.count)
             var totalFileSizeBytes: Int64 = 0
 
@@ -493,6 +494,9 @@ final class LocalHashIndexBuildService: @unchecked Sendable {
                     allowNetworkAccess: allowNetworkAccess
                 )
                 defer { try? FileManager.default.removeItem(at: exported.fileURL) }
+                if selected.role == ResourceTypeCode.adjustmentData {
+                    adjustments[exported.contentHash] = try Data(contentsOf: exported.fileURL)
+                }
 
                 let localFileSize = max(
                     PhotoLibraryService.resourceFileSize(selected.resource),
@@ -507,11 +511,9 @@ final class LocalHashIndexBuildService: @unchecked Sendable {
                 ))
             }
 
-            let fingerprint = BackupAssetResourcePlanner.assetFingerprint(
-                resourceRoleSlotHashes: roleSlotHashes.lazy.map { item in
-                    (role: item.role, slot: item.slot, contentHash: item.contentHash)
-                }
-            )
+            let fingerprint = try AssetContentFingerprint.fingerprint(resources: roleSlotHashes.map {
+                .init(role: $0.role, slot: $0.slot, hash: $0.contentHash)
+            }, adjustmentData: adjustments)
 
             try repository.upsertAssetHashSnapshot(
                 assetLocalIdentifier: asset.localIdentifier,

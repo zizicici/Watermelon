@@ -70,7 +70,7 @@ struct V1ToLiteMigration: Sendable {
                 basePath: basePath,
                 assertOwnership: assertOwnership
             )
-                .commit(createdAt: createdAt, createdBy: createdBy)
+                .commit(createdAt: createdAt, createdBy: createdBy, upgradePending: true)
         } catch {
             if Self.isCancellation(error) { throw error }   // cancellation must surface, never versionCommitFailed
             if let liteError = error as? LiteRepoError,

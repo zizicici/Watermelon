@@ -89,7 +89,6 @@ final class LibraryPresenceIndex: @unchecked Sendable {
     struct BrowserLocalProjectionInput: Sendable {
         let seed: HomeBrowserLocalSeed?
         let backedUpFingerprints: Set<Data>
-        var restoreOrigins = RestoreOriginIndex()
     }
 
     enum BackupPresenceVerdict: Equatable, Sendable {
@@ -107,13 +106,10 @@ final class LibraryPresenceIndex: @unchecked Sendable {
         var localIDByFingerprint: [Data: String] = [:]
         var homeLocalSeed: HomeBrowserLocalSeed?
         var localIsBuilt = false
-        var restoreOrigins = RestoreOriginIndex()
         var localProfileKey: String?
         var remoteFingerprints: Set<Data> = []
         var backedUpFingerprints: Set<Data> = []
         var completeFingerprints: Set<Data> = []
-        var restoredCompleteFingerprints: Set<Data> = []
-        var restoredBackedUpFingerprints: Set<Data> = []
         var remoteIsAuthoritative = false
         var remoteIsBuilt = false
         var remoteProfileKey: String?
@@ -131,15 +127,12 @@ final class LibraryPresenceIndex: @unchecked Sendable {
         mutating func commitLocal(
             localIDByFingerprint: [Data: String],
             homeLocalSeed: HomeBrowserLocalSeed?,
-            restoreOrigins: RestoreOriginIndex,
             profileKey: String?
         ) {
-            self.restoreOrigins = restoreOrigins
             self.localProfileKey = profileKey
             self.localIDByFingerprint = localIDByFingerprint
             self.homeLocalSeed = homeLocalSeed
             localIsBuilt = true
-            refreshRestoredPresence()
         }
 
         mutating func commitRemote(
@@ -154,18 +147,8 @@ final class LibraryPresenceIndex: @unchecked Sendable {
             remoteProfileKey = ownerProfileKey
             remoteRevision = projection.revision
             remoteIsBuilt = true
-            refreshRestoredPresence()
         }
 
-        private mutating func refreshRestoredPresence() {
-            guard localProfileKey == remoteProfileKey else {
-                restoredCompleteFingerprints = []
-                restoredBackedUpFingerprints = []
-                return
-            }
-            restoredCompleteFingerprints = restoreOrigins.localFingerprints(matching: completeFingerprints)
-            restoredBackedUpFingerprints = restoreOrigins.localFingerprints(matching: backedUpFingerprints)
-        }
     }
 
     private let hashIndexRepository: ContentHashIndexRepository
@@ -457,7 +440,7 @@ final class LibraryPresenceIndex: @unchecked Sendable {
         async let resolvedHandles: (handles: [Data: String], elapsedMs: Double) = withCancellableDetachedValue(priority: .userInitiated) {
             let handlesStartedAt = CFAbsoluteTimeGetCurrent()
             let mapStartedAt = CFAbsoluteTimeGetCurrent()
-            if let resolvedHomeSeed, (localInput?.restoreOrigins ?? self.lock.withLock { self.state.restoreOrigins }).isEmpty {
+            if let resolvedHomeSeed {
                 MediaBrowserLoadTrace.emit(
                     "handlesHomeSeed",
                     context: trace,
@@ -481,13 +464,10 @@ final class LibraryPresenceIndex: @unchecked Sendable {
                 }
             }
             let mapMs = (CFAbsoluteTimeGetCurrent() - mapStartedAt) * 1_000
-            let origins = RestoreOriginIndex((try? self.hashIndexRepository.fetchRestoreOrigins(
-                profileKey: currentKey, remoteFingerprints: Set(mapHits.keys))) ?? [])
             let handles = self.resolveCurrentHandles(
                 mapHits: mapHits,
                 mapMs: mapMs,
                 profileKey: currentKey,
-                restoreOrigins: origins,
                 trace: trace
             )
             return (handles, (CFAbsoluteTimeGetCurrent() - handlesStartedAt) * 1_000)
@@ -588,7 +568,6 @@ final class LibraryPresenceIndex: @unchecked Sendable {
                 state.commitLocal(
                     localIDByFingerprint: localInput.localIDByFingerprint,
                     homeLocalSeed: homeSeed,
-                    restoreOrigins: localInput.restoreOrigins,
                     profileKey: localInput.profileKey
                 )
             } else if localGeneration != expectedLocalGeneration || !state.localIsBuilt {
@@ -762,12 +741,7 @@ final class LibraryPresenceIndex: @unchecked Sendable {
         let requested = Set(fingerprints)
         guard !requested.isEmpty, !Task.isCancelled else { return [:] }
         let currentKey = profileKey()
-        let origins = RestoreOriginIndex((try? hashIndexRepository.fetchRestoreOrigins(
-            profileKey: currentKey, remoteFingerprints: requested)) ?? [])
-        var candidates = (try? hashIndexRepository.fetchAssetIDsByFingerprints(requested)) ?? [:]
-        for (fingerprint, ids) in origins.localCandidates() where requested.contains(fingerprint) {
-            candidates[fingerprint, default: []].append(contentsOf: ids)
-        }
+        let candidates = (try? hashIndexRepository.fetchAssetIDsByFingerprints(requested)) ?? [:]
         let candidateIDs = Set(candidates.values.joined())
         guard !candidateIDs.isEmpty, !Task.isCancelled else { return [:] }
         let current = currentFingerprints(forAssetIDs: candidateIDs)
@@ -775,7 +749,7 @@ final class LibraryPresenceIndex: @unchecked Sendable {
         var result: [Data: String] = [:]
         result.reserveCapacity(candidates.count)
         for (fingerprint, assetIDs) in candidates {
-            if let identifier = assetIDs.first(where: { origins.matches(remoteFingerprint: fingerprint, assetID: $0, localFingerprint: current[$0]) }) {
+            if let identifier = assetIDs.first(where: { current[$0] == fingerprint }) {
                 result[fingerprint] = identifier
             }
         }
@@ -795,28 +769,21 @@ final class LibraryPresenceIndex: @unchecked Sendable {
         let requested = Set(fingerprints)
         guard !requested.isEmpty, !Task.isCancelled else { return [:] }
         let currentKey = profileKey()
-        var mapHits: [Data: String] = lock.withLock {
+        let mapHits: [Data: String] = lock.withLock {
             var hits: [Data: String] = [:]
             for fingerprint in requested where hits[fingerprint] == nil {
                 if let localID = state.localIDByFingerprint[fingerprint] { hits[fingerprint] = localID }
             }
             return hits
         }
-        let origins = RestoreOriginIndex((try? hashIndexRepository.fetchRestoreOrigins(
-            profileKey: currentKey, remoteFingerprints: requested)) ?? [])
-        for (fingerprint, ids) in origins.localCandidates() where requested.contains(fingerprint) && mapHits[fingerprint] == nil {
-            mapHits[fingerprint] = ids.first
-        }
         let mapMs = (CFAbsoluteTimeGetCurrent() - mapStartedAt) * 1_000
-        return resolveCurrentHandles(mapHits: mapHits, mapMs: mapMs, profileKey: currentKey,
-            restoreOrigins: origins, trace: trace)
+        return resolveCurrentHandles(mapHits: mapHits, mapMs: mapMs, profileKey: currentKey, trace: trace)
     }
 
     private func resolveCurrentHandles(
         mapHits: [Data: String],
         mapMs: Double,
         profileKey currentKey: String?,
-        restoreOrigins origins: RestoreOriginIndex,
         trace: MediaBrowserLoadTrace.Context?
     ) -> [Data: String] {
         let startedAt = CFAbsoluteTimeGetCurrent()
@@ -828,7 +795,7 @@ final class LibraryPresenceIndex: @unchecked Sendable {
             includeAllIndexedAssets: true
         )
         guard !Task.isCancelled else { return [:] }
-        let failed = mapHits.filter { !origins.matches(remoteFingerprint: $0.key, assetID: $0.value, localFingerprint: known[$0.value]) }.map(\.key)
+        let failed = mapHits.filter { known[$0.value] != $0.key }.map(\.key)
         var alternatives: [Data: [String]] = [:]
         var fallbackDatabaseMs = 0.0
         var fallbackHandlesMs = 0.0
@@ -841,10 +808,7 @@ final class LibraryPresenceIndex: @unchecked Sendable {
         let unresolved = failed.filter { alternatives[$0]?.isEmpty != false }
         if !unresolved.isEmpty {
             let fallbackDatabaseStartedAt = CFAbsoluteTimeGetCurrent()
-            var fetchedAlternatives = (try? hashIndexRepository.fetchAssetIDsByFingerprints(Set(unresolved))) ?? [:]
-            for (fingerprint, ids) in origins.localCandidates() where unresolved.contains(fingerprint) {
-                fetchedAlternatives[fingerprint, default: []].append(contentsOf: ids)
-            }
+            let fetchedAlternatives = (try? hashIndexRepository.fetchAssetIDsByFingerprints(Set(unresolved))) ?? [:]
             fallbackDatabaseMs = (CFAbsoluteTimeGetCurrent() - fallbackDatabaseStartedAt) * 1_000
             for (fingerprint, assetIDs) in fetchedAlternatives {
                 alternatives[fingerprint, default: []].append(contentsOf: assetIDs)
@@ -869,8 +833,7 @@ final class LibraryPresenceIndex: @unchecked Sendable {
         let selected = Self.selectCurrentHandles(
             mapHits: mapHits,
             alternativesByFingerprint: alternatives,
-            currentFingerprintsByAssetID: known,
-            restoreOrigins: origins
+            currentFingerprintsByAssetID: known
         )
         let selectionMs = (CFAbsoluteTimeGetCurrent() - selectionStartedAt) * 1_000
         MediaBrowserLoadTrace.emit(
@@ -899,14 +862,13 @@ final class LibraryPresenceIndex: @unchecked Sendable {
     static func selectCurrentHandles(
         mapHits: [Data: String],
         alternativesByFingerprint: [Data: [String]],
-        currentFingerprintsByAssetID: [String: Data],
-        restoreOrigins: RestoreOriginIndex = RestoreOriginIndex()
+        currentFingerprintsByAssetID: [String: Data]
     ) -> [Data: String] {
         var result: [Data: String] = [:]
         for (fingerprint, candidate) in mapHits {
-            if restoreOrigins.matches(remoteFingerprint: fingerprint, assetID: candidate, localFingerprint: currentFingerprintsByAssetID[candidate]) {
+            if currentFingerprintsByAssetID[candidate] == fingerprint {
                 result[fingerprint] = candidate
-            } else if let alternative = alternativesByFingerprint[fingerprint]?.first(where: { restoreOrigins.matches(remoteFingerprint: fingerprint, assetID: $0, localFingerprint: currentFingerprintsByAssetID[$0]) }) {
+            } else if let alternative = alternativesByFingerprint[fingerprint]?.first(where: { currentFingerprintsByAssetID[$0] == fingerprint }) {
                 result[fingerprint] = alternative
             }
         }
@@ -916,10 +878,8 @@ final class LibraryPresenceIndex: @unchecked Sendable {
     func currentAssetsMatch(_ claims: [String: Data]) -> Bool {
         let currentKey = profileKey()
         let current = currentFingerprints(forAssetIDs: Array(claims.keys))
-        let origins = RestoreOriginIndex((try? hashIndexRepository.fetchRestoreOrigins(
-            profileKey: currentKey, assetIDs: Set(claims.keys))) ?? [])
         return profileKey() == currentKey && claims.allSatisfy {
-            origins.matches(remoteFingerprint: $0.value, assetID: $0.key, localFingerprint: current[$0.key])
+            current[$0.key] == $0.value
         }
     }
 
@@ -1088,8 +1048,8 @@ final class LibraryPresenceIndex: @unchecked Sendable {
                     revision: revision
                 ),
                 isAuthoritative: state.remoteIsAuthoritative,
-                isComplete: state.completeFingerprints.contains(fingerprint) || state.restoredCompleteFingerprints.contains(fingerprint),
-                isBackedUp: state.backedUpFingerprints.contains(fingerprint) || state.restoredBackedUpFingerprints.contains(fingerprint)
+                isComplete: state.completeFingerprints.contains(fingerprint),
+                isBackedUp: state.backedUpFingerprints.contains(fingerprint)
             )
         }
     }
@@ -1111,8 +1071,8 @@ final class LibraryPresenceIndex: @unchecked Sendable {
                 result[fingerprint] = Self.classifyBackupPresence(
                     isCurrent: isCurrent,
                     isAuthoritative: state.remoteIsAuthoritative,
-                    isComplete: state.completeFingerprints.contains(fingerprint) || state.restoredCompleteFingerprints.contains(fingerprint),
-                    isBackedUp: state.backedUpFingerprints.contains(fingerprint) || state.restoredBackedUpFingerprints.contains(fingerprint)
+                    isComplete: state.completeFingerprints.contains(fingerprint),
+                    isBackedUp: state.backedUpFingerprints.contains(fingerprint)
                 )
             }
             return result
@@ -1130,8 +1090,7 @@ final class LibraryPresenceIndex: @unchecked Sendable {
                     revision: revision
                 ) && state.remoteIsAuthoritative
                     ? state.backedUpFingerprints
-                    : [],
-                restoreOrigins: state.localProfileKey == currentKey ? state.restoreOrigins : RestoreOriginIndex()
+                    : []
             )
         }
     }

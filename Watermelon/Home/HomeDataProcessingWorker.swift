@@ -96,7 +96,6 @@ final class HomeDataProcessingWorker: @unchecked Sendable {
     // would otherwise let a stale DB fingerprint slip through.
     private func fetchFingerprintsForIDs(_ ids: Set<String>) -> [String: LocalAssetFingerprintRecord] {
         guard !ids.isEmpty else { return [:] }
-        refreshRestoreOrigins()
         do {
             let raw = try contentHashIndexRepository.fetchAssetFingerprintRecords(assetIDs: ids)
             guard !raw.isEmpty else { return [:] }
@@ -116,7 +115,6 @@ final class HomeDataProcessingWorker: @unchecked Sendable {
     }
 
     private func fetchAllFingerprints() -> [String: LocalAssetFingerprintRecord] {
-        refreshRestoreOrigins()
         do {
             return try contentHashIndexRepository.fetchAssetFingerprintRecords()
         } catch {
@@ -137,10 +135,6 @@ final class HomeDataProcessingWorker: @unchecked Sendable {
             result.insert(snapshot.localIdentifier)
         }
         return result
-    }
-
-    private func refreshRestoreOrigins() {
-        localIndex.restoreOrigins = RestoreOriginIndex((try? contentHashIndexRepository.fetchRestoreOrigins(profileKey: remoteProfileKey)) ?? [])
     }
 
     private func remoteFingerprintsForMonth(_ month: LibraryMonthKey) -> Set<Data> {
@@ -325,7 +319,6 @@ final class HomeDataProcessingWorker: @unchecked Sendable {
                 let nextProfileKey = hasActiveConnection ? state.profileKey : nil
                 let connectionFlipped = self.hasActiveConnection != hasActiveConnection || self.remoteProfileKey != nextProfileKey
                 self.remoteProfileKey = nextProfileKey
-                self.refreshRestoreOrigins()
                 if connectionFlipped {
                     self.hasActiveConnection = hasActiveConnection
                 }
@@ -501,12 +494,8 @@ final class HomeDataProcessingWorker: @unchecked Sendable {
                     links: delta.assetResourceLinks
                 )
                 let localIDs = self.localIndex.localAssetIDs(for: month)
-                self.refreshRestoreOrigins()
                 let fingerprints = self.localIndex.fingerprints(for: localIDs)
-                var matched = Set(fingerprints.values)
-                for (id, fingerprint) in fingerprints {
-                    matched.formUnion(self.localIndex.restoreOrigins.remoteFingerprints(for: id, localFingerprint: fingerprint))
-                }
+                let matched = Set(fingerprints.values)
                 cont.resume(returning: RemoteOnlyQueryResult(
                     remoteItems: remoteItems,
                     localFingerprintSet: matched
