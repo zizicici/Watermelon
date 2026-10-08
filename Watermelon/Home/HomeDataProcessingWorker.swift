@@ -53,6 +53,7 @@ final class HomeDataProcessingWorker: @unchecked Sendable {
     // receive asset IDs from a scope different from the one they asked under.
     private var loadedScope: HomeLocalLibraryScope?
     private var hasActiveConnection = false
+    private var remoteProfileKey: String?
     private var needsRemoteBootstrap = false
 
     init(
@@ -95,6 +96,7 @@ final class HomeDataProcessingWorker: @unchecked Sendable {
     // would otherwise let a stale DB fingerprint slip through.
     private func fetchFingerprintsForIDs(_ ids: Set<String>) -> [String: LocalAssetFingerprintRecord] {
         guard !ids.isEmpty else { return [:] }
+        refreshRestoreOrigins()
         do {
             let raw = try contentHashIndexRepository.fetchAssetFingerprintRecords(assetIDs: ids)
             guard !raw.isEmpty else { return [:] }
@@ -114,6 +116,7 @@ final class HomeDataProcessingWorker: @unchecked Sendable {
     }
 
     private func fetchAllFingerprints() -> [String: LocalAssetFingerprintRecord] {
+        refreshRestoreOrigins()
         do {
             return try contentHashIndexRepository.fetchAssetFingerprintRecords()
         } catch {
@@ -134,6 +137,10 @@ final class HomeDataProcessingWorker: @unchecked Sendable {
             result.insert(snapshot.localIdentifier)
         }
         return result
+    }
+
+    private func refreshRestoreOrigins() {
+        localIndex.restoreOrigins = RestoreOriginIndex((try? contentHashIndexRepository.fetchRestoreOrigins(profileKey: remoteProfileKey)) ?? [])
     }
 
     private func remoteFingerprintsForMonth(_ month: LibraryMonthKey) -> Set<Data> {
@@ -315,7 +322,10 @@ final class HomeDataProcessingWorker: @unchecked Sendable {
         await withCheckedContinuation { continuation in
             processingQueue.async {
                 let start = CFAbsoluteTimeGetCurrent()
-                let connectionFlipped = self.hasActiveConnection != hasActiveConnection
+                let nextProfileKey = hasActiveConnection ? state.profileKey : nil
+                let connectionFlipped = self.hasActiveConnection != hasActiveConnection || self.remoteProfileKey != nextProfileKey
+                self.remoteProfileKey = nextProfileKey
+                self.refreshRestoreOrigins()
                 if connectionFlipped {
                     self.hasActiveConnection = hasActiveConnection
                 }
@@ -491,9 +501,15 @@ final class HomeDataProcessingWorker: @unchecked Sendable {
                     links: delta.assetResourceLinks
                 )
                 let localIDs = self.localIndex.localAssetIDs(for: month)
+                self.refreshRestoreOrigins()
+                let fingerprints = self.localIndex.fingerprints(for: localIDs)
+                var matched = Set(fingerprints.values)
+                for (id, fingerprint) in fingerprints {
+                    matched.formUnion(self.localIndex.restoreOrigins.remoteFingerprints(for: id, localFingerprint: fingerprint))
+                }
                 cont.resume(returning: RemoteOnlyQueryResult(
                     remoteItems: remoteItems,
-                    localFingerprintSet: Set(self.localIndex.fingerprints(for: localIDs).values)
+                    localFingerprintSet: matched
                 ))
             }
         }

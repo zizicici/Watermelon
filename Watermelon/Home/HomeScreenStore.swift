@@ -125,6 +125,7 @@ final class HomeScreenStore {
 
     var onChange: (@MainActor (HomeChangeKind) -> Void)?
     var onAlert: (@MainActor (String, String) -> Void)?
+    var onSkipDecisionRequest: (@MainActor (LibraryMonthKey, RestoreItemFailure) async -> Bool)?
     var onDataSourceError: (@MainActor (LocalDataSourceError) -> Void)?
     var onDisconnecting: (() -> Void)?
     var onNeedsPasswordPrompt: ((ServerProfileRecord, _ completion: @escaping (String) -> Void) -> Void)?
@@ -452,6 +453,9 @@ final class HomeScreenStore {
         }
         executionCoordinator.onAlert = { @MainActor [weak self] title, message in
             self?.onAlert?(title, message)
+        }
+        executionCoordinator.onSkipDecisionRequest = { @MainActor [weak self] month, failure in
+            await self?.onSkipDecisionRequest?(month, failure) ?? false
         }
         connectionController.onStateChanged = { [weak self] in
             self?.handleConnectionChange()

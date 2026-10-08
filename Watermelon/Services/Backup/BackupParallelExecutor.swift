@@ -233,9 +233,11 @@ struct BackupParallelExecutor: Sendable {
     }
 
     static func shouldEmitResultCredit(_ result: AssetProcessResult) -> Bool {
+        if result.status == .success, result.reason == AssetProcessor.assetDateUpdatedReason { return true }
         guard result.status == .skipped else { return false }
         switch result.reason {
         case "asset_exists_cached",
+             "asset_restored",
              "resources_reused_cached",
              "icloud_photo_backup_disabled",
              "asset_gone",
@@ -1893,7 +1895,7 @@ struct BackupParallelExecutor: Sendable {
         return .proceed
     }
 
-    private func monthAlreadyFullyBackedUp(
+    func monthAlreadyFullyBackedUp(
         monthAssetIDs: [String],
         monthStore: MonthManifestStore
     ) -> Bool {
@@ -1917,7 +1919,8 @@ struct BackupParallelExecutor: Sendable {
             if let modDate = asset.modificationDate, modDate > cache.updatedAt {
                 return false
             }
-            if !monthStore.containsAssetFingerprint(cache.assetFingerprint) {
+            guard let remoteAsset = monthStore.assetsByFingerprint[cache.assetFingerprint],
+                  remoteAsset.creationDateMs == LibraryCreationDate.optionalMilliseconds(asset.creationDate) else {
                 return false
             }
             // Force full processing so AssetProcessor heals incomplete assets.

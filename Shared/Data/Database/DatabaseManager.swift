@@ -125,6 +125,26 @@ final class DatabaseManager: @unchecked Sendable {
             }
         }
 
+        migrator.registerMigration("v8_restore_origins") { db in
+            try db.create(table: "restore_origins") { table in
+                table.column("profileKey", .text).notNull()
+                table.column("remoteFingerprint", .blob).notNull()
+                table.column("assetLocalIdentifier", .text).notNull()
+                table.column("localFingerprint", .blob)
+                table.column("sourceResources", .blob).notNull()
+                table.column("completeCandidate", .boolean).notNull()
+                table.column("isEquivalent", .boolean).notNull().defaults(to: false)
+                table.column("importedAtMs", .integer).notNull()
+                table.primaryKey(["profileKey", "remoteFingerprint", "assetLocalIdentifier"])
+            }
+            try db.create(index: "idx_restore_origins_local", on: "restore_origins", columns: ["assetLocalIdentifier"])
+            // Older restores cached pre-import adjustment hashes that PhotoKit may have rewritten.
+            try db.execute(sql: """
+                UPDATE local_assets SET assetFingerprint = NULL
+                WHERE assetLocalIdentifier IN (SELECT assetLocalIdentifier FROM local_asset_resources WHERE role = 7)
+                """)
+        }
+
         return migrator
     }
 

@@ -111,4 +111,64 @@ final class RestoreIntegrityTests: XCTestCase {
         XCTAssertEqual(RestoreService.safeOriginalFileName("~photo.jpg"), "~photo.jpg")
     }
 
+    func testItemLocalFailureClassification() {
+        XCTAssertTrue(RestoreService.isItemLocalFailure(
+            RestoreIntegrityError.contentHashMismatch(fileName: "a.jpg", expectedHashHex: "00", actualHashHex: "11")
+        ))
+        XCTAssertTrue(RestoreService.isItemLocalFailure(
+            RestoreIntegrityError.invalidManifestResource(fileName: "a.jpg")
+        ))
+        XCTAssertFalse(RestoreService.isItemLocalFailure(NSError(domain: "PHPhotosErrorDomain", code: 3302)))
+        XCTAssertFalse(RestoreService.isItemLocalFailure(NSError(domain: "RestoreService", code: -1)))
+        XCTAssertFalse(RestoreService.isItemLocalFailure(CancellationError()))
+    }
+
+    func testIntegrityFailureDescriptionsIncludeRelevantValues() {
+        let hashDescription = RestoreIntegrityError.contentHashMismatch(
+            fileName: "broken.jpg",
+            expectedHashHex: "1234567890",
+            actualHashHex: "abcdef1234"
+        ).localizedDescription
+        XCTAssertTrue(hashDescription.contains("broken.jpg"))
+        XCTAssertTrue(hashDescription.contains("12345678"))
+        XCTAssertTrue(hashDescription.contains("abcdef12"))
+
+        let sizeDescription = RestoreIntegrityError.fileSizeMismatch(
+            fileName: "small.mov",
+            expectedSize: 123,
+            actualSize: 567
+        ).localizedDescription
+        XCTAssertTrue(sizeDescription.contains("small.mov"))
+        XCTAssertTrue(sizeDescription.contains("123"))
+        XCTAssertTrue(sizeDescription.contains("567"))
+
+        XCTAssertTrue(RestoreIntegrityError.invalidManifestResource(
+            fileName: "invalid.heic"
+        ).localizedDescription.contains("invalid.heic"))
+    }
+
+    func testResourceAndUnsupportedCombinationErrorsAreSkippableAfterImport() {
+        XCTAssertTrue(RestoreService.isSkippablePhotoLibraryImportError(
+            NSError(domain: "PHPhotosErrorDomain", code: 3302)
+        ))
+        XCTAssertTrue(RestoreService.isSkippablePhotoLibraryImportError(NSError(
+            domain: NSCocoaErrorDomain,
+            code: 4,
+            userInfo: [NSUnderlyingErrorKey: NSError(domain: "PHPhotosErrorDomain", code: 3302)]
+        )))
+        XCTAssertFalse(RestoreService.isSkippablePhotoLibraryImportError(NSError(
+            domain: "PHPhotosErrorDomain",
+            code: 3305,
+            userInfo: [NSUnderlyingErrorKey: NSError(domain: "PHPhotosErrorDomain", code: 3302)]
+        )))
+        for code in [3301, 3305, 3306] {
+            XCTAssertFalse(RestoreService.isSkippablePhotoLibraryImportError(
+                NSError(domain: "PHPhotosErrorDomain", code: code)
+            ))
+        }
+        XCTAssertFalse(RestoreService.isSkippablePhotoLibraryImportError(
+            NSError(domain: NSURLErrorDomain, code: NSURLErrorTimedOut)
+        ))
+    }
+
 }

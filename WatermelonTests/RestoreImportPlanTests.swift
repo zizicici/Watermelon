@@ -1,3 +1,4 @@
+import Photos
 import XCTest
 @testable import Watermelon
 
@@ -22,6 +23,38 @@ final class RestoreImportPlanTests: XCTestCase {
         XCTAssertEqual(RestoreImportPlan.normalize(ins), ins)
     }
 
+    func testEditedVideoWithStillPreservesCompleteResourceSet() {
+        for extraRoles in [[], [16]] {
+            let resourceRoles = [ResourceTypeCode.video, ResourceTypeCode.fullSizePhoto,
+                                 ResourceTypeCode.fullSizeVideo, ResourceTypeCode.adjustmentData] + extraRoles
+            let instances = resourceRoles.map { inst($0, Data(repeating: UInt8($0), count: 32)) }
+            XCTAssertTrue(PHAssetCreationRequest.supportsAssetResourceTypes(resourceRoles.map { NSNumber(value: $0) }))
+            XCTAssertEqual(RestoreImportPlan.normalize(instances), instances)
+            let reversed = Array(instances.reversed())
+            XCTAssertEqual(RestoreImportPlan.normalize(reversed), reversed)
+        }
+    }
+
+    func testEditedVideoWithStillKeepsDownloadedFilesAndFingerprint() {
+        for extraRoles in [[], [16]] {
+            let resourceRoles = [ResourceTypeCode.video, ResourceTypeCode.fullSizePhoto,
+                                 ResourceTypeCode.fullSizeVideo, ResourceTypeCode.adjustmentData] + extraRoles
+            let instances = resourceRoles.map { inst($0, Data(repeating: UInt8($0), count: 32)) }
+            let downloaded = instances.map { ($0, URL(fileURLWithPath: "/tmp/restore-role-\($0.role)")) }
+            let accepted = RestoreService.acceptedDownloadedResources(from: downloaded)
+
+            XCTAssertEqual(accepted.map(\.0), instances)
+            XCTAssertEqual(accepted.map(\.1), downloaded.map(\.1))
+            let expectedFingerprint = BackupAssetResourcePlanner.assetFingerprint(
+                resourceRoleSlotHashes: instances.map { (role: $0.role, slot: $0.slot, contentHash: $0.resourceHash) }
+            )
+            let importedFingerprint = BackupAssetResourcePlanner.assetFingerprint(
+                resourceRoleSlotHashes: accepted.map { (role: $0.0.role, slot: $0.0.slot, contentHash: $0.0.resourceHash) }
+            )
+            XCTAssertEqual(importedFingerprint, expectedFingerprint)
+        }
+    }
+
     func testCompleteLivePhotoPassesThrough() {
         let ins = [inst(ResourceTypeCode.photo, Data([1])), inst(ResourceTypeCode.pairedVideo, Data([2])),
                    inst(ResourceTypeCode.fullSizePhoto, Data([3])), inst(ResourceTypeCode.fullSizePairedVideo, Data([4])),
@@ -29,26 +62,27 @@ final class RestoreImportPlanTests: XCTestCase {
         XCTAssertEqual(RestoreImportPlan.normalize(ins), ins)
     }
 
-    func testCompleteVideoWithAudioKeepsAudio() {
-        // Regression: a complete video with a separate .audio resource must pass through WITH its audio — else it
-        // restores to a different fingerprint (a spurious new asset), which isn't the accepted incomplete case.
+    func testVideoWithAudioKeepsAudioOnlyWhenSupported() {
         let ins = [inst(ResourceTypeCode.video, Data([1])), inst(ResourceTypeCode.audio, Data([2]))]
-        XCTAssertEqual(RestoreImportPlan.normalize(ins), ins)
+        let supported = PHAssetCreationRequest.supportsAssetResourceTypes(ins.map { NSNumber(value: $0.role) })
+        let result = RestoreImportPlan.normalize(ins)
+        XCTAssertEqual(result, supported ? ins : ins.filter { $0.role != ResourceTypeCode.audio })
+        XCTAssertTrue(PHAssetCreationRequest.supportsAssetResourceTypes(result.map { NSNumber(value: $0.role) }))
     }
 
-    func testCompleteRecordKeepsUnmodeledRole() {
-        // Full fidelity for any role the planner doesn't model (a future PHAssetResourceType): the pass-through is
-        // a denylist (drop only cross-kind / orphan-clip roles), so an unknown role is never silently dropped.
-        let futureRole = 99
-        let ins = [inst(ResourceTypeCode.video, Data([1])), inst(futureRole, Data([2]))]
-        XCTAssertEqual(RestoreImportPlan.normalize(ins), ins)
+    func testFutureRolePassesThroughWhenPhotoKitAcceptsIt() {
+        let video = inst(ResourceTypeCode.video, Data([1]))
+        let ins = [video, inst(99, Data([2]))]
+        let supported = PHAssetCreationRequest.supportsAssetResourceTypes(ins.map { NSNumber(value: $0.role) })
+        XCTAssertEqual(RestoreImportPlan.normalize(ins), supported ? ins : [video])
     }
 
-    func testCompleteLivePhotoWithAudioKeepsAudio() {
-        // The Live branch rejects nothing, so a Live Photo carrying a separate audio resource keeps it (else it
-        // would restore to a different fingerprint = a spurious new asset).
+    func testLivePhotoWithAudioKeepsAudioOnlyWhenSupported() {
         let ins = [inst(ResourceTypeCode.photo, Data([1])), inst(ResourceTypeCode.pairedVideo, Data([2])), inst(ResourceTypeCode.audio, Data([3]))]
-        XCTAssertEqual(RestoreImportPlan.normalize(ins), ins)
+        let supported = PHAssetCreationRequest.supportsAssetResourceTypes(ins.map { NSNumber(value: $0.role) })
+        let result = RestoreImportPlan.normalize(ins)
+        XCTAssertEqual(result, supported ? ins : ins.filter { $0.role != ResourceTypeCode.audio })
+        XCTAssertTrue(PHAssetCreationRequest.supportsAssetResourceTypes(result.map { NSNumber(value: $0.role) }))
     }
 
     // MARK: - Invalid adjuncts are dropped (a request PhotoKit would reject)
@@ -57,6 +91,19 @@ final class RestoreImportPlanTests: XCTestCase {
         // A .video primary must not carry a Live clip (that would be an invalid Live Photo request).
         let ins = [inst(ResourceTypeCode.video, Data([1])), inst(ResourceTypeCode.pairedVideo, Data([2]))]
         XCTAssertEqual(roles(RestoreImportPlan.normalize(ins)), [ResourceTypeCode.video], "the orphaned paired clip is dropped")
+    }
+
+    func testVideoPrimaryWithUnusableStillRemainsVideo() {
+        let video = inst(ResourceTypeCode.video, Data([1]))
+        let still = inst(ResourceTypeCode.fullSizePhoto, Data([2]))
+        XCTAssertEqual(RestoreImportPlan.normalize([video, still]), [video])
+    }
+
+    func testVideoPrimaryWithStillAndOrphanClipRemainsVideo() {
+        let video = inst(ResourceTypeCode.video, Data([1]))
+        let ins = [inst(ResourceTypeCode.fullSizePhoto, Data([2])),
+                   inst(ResourceTypeCode.pairedVideo, Data([3])), video]
+        XCTAssertEqual(RestoreImportPlan.normalize(ins), [video])
     }
 
     func testPhotoDropsDerivedPairedRoleWithoutCanonicalClip() {
@@ -78,6 +125,23 @@ final class RestoreImportPlanTests: XCTestCase {
     }
 
     // MARK: - Incomplete subsets get a promoted primary (minimal valid asset)
+
+    func testMissingOriginalVideoRecoversFullSizeVideoInsteadOfStill() {
+        let instances = [inst(5, Data([5])), inst(6, Data([6])), inst(7, Data([7]))]
+        let result = RestoreImportPlan.normalize(instances)
+        XCTAssertEqual(result.map(\.role), [2])
+        XCTAssertEqual(result.first?.resourceHash, Data([6]))
+        XCTAssertEqual(result.first?.remoteRelativePath, instances[1].remoteRelativePath)
+    }
+
+    func testMissingAdjustmentRecoversSupportedPrimaryOnly() {
+        for roles in [[2, 5, 6], [1, 5]] {
+            let instances = roles.map { inst($0, Data([UInt8($0)])) }
+            let result = RestoreImportPlan.normalize(instances)
+            XCTAssertEqual(result, [instances[0]])
+            XCTAssertTrue(PHAssetCreationRequest.supportsAssetResourceTypes(result.map { NSNumber(value: $0.role) }))
+        }
+    }
 
     func testPairedVideoOnlyRestoresAsVideo() {
         // The reported case: a Live Photo that lost its still, leaving only the paired clip.

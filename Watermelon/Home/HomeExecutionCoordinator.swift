@@ -210,6 +210,29 @@ struct HomeExecutionTransferTracker {
     }
 }
 
+struct HomeDownloadRunProgress {
+    private var restoredFingerprintsByMonth: [LibraryMonthKey: Set<Data>] = [:]
+    private var skippedItemsByMonth: [LibraryMonthKey: [Data: String]] = [:]
+
+    mutating func recordRestored(_ fingerprint: Data, in month: LibraryMonthKey) {
+        restoredFingerprintsByMonth[month, default: []].insert(fingerprint)
+    }
+
+    mutating func recordSkipped(_ fingerprint: Data, displayName: String, in month: LibraryMonthKey) {
+        skippedItemsByMonth[month, default: [:]][fingerprint] = displayName
+    }
+
+    func skippedItems(in month: LibraryMonthKey) -> [Data: String] {
+        skippedItemsByMonth[month] ?? [:]
+    }
+
+    func pendingItems(_ items: [RemoteAlbumItem], in month: LibraryMonthKey) -> [RemoteAlbumItem] {
+        let restored = restoredFingerprintsByMonth[month] ?? []
+        let skipped = skippedItemsByMonth[month] ?? [:]
+        return items.filter { !restored.contains($0.assetFingerprint) && skipped[$0.assetFingerprint] == nil }
+    }
+}
+
 @MainActor
 final class HomeExecutionCoordinator {
 
@@ -243,6 +266,7 @@ final class HomeExecutionCoordinator {
     // MARK: - Public State
 
     var phase: ExecutionPhase? { session.phase }
+    var needsUserDecision: Bool { pendingSkipDecision != nil }
     var isActive: Bool { session.isActive }
     var isRunning: Bool {
         switch session.phase {
@@ -270,6 +294,7 @@ final class HomeExecutionCoordinator {
 
     var onStateChanged: (@MainActor () -> Void)?
     var onAlert: (@MainActor (String, String) -> Void)?
+    var onSkipDecisionRequest: (@MainActor (_ month: LibraryMonthKey, _ failure: RestoreItemFailure) async -> Bool)?
 
     // MARK: - Data Access (provided by Store)
 
@@ -327,6 +352,9 @@ final class HomeExecutionCoordinator {
     private var logObservers: [UUID: @MainActor (HomeExecutionLogSnapshot) -> Void] = [:]
     private var stateObservers: [UUID: @MainActor () -> Void] = [:]
     private var backupEventObserverID: UUID?
+    private var downloadRunProgress = HomeDownloadRunProgress()
+    private var pendingSkipDecision: (id: UUID, month: LibraryMonthKey, failure: RestoreItemFailure)?
+    private var skipDecisionTask: Task<Void, Never>?
     private(set) var currentSessionLogURL: URL?
     private var sessionLogStreamContinuation: AsyncStream<ExecutionLogEntry>.Continuation?
     private var sessionLogDrainTask: Task<Void, Never>?
@@ -366,6 +394,7 @@ final class HomeExecutionCoordinator {
     }
 
     deinit {
+        skipDecisionTask?.cancel()
         let pendingExecutionClaim = executionClaim
         let pendingExecutionTask = executionTask
         let pendingCancellationTask = hardCancellationTask
@@ -412,6 +441,8 @@ final class HomeExecutionCoordinator {
         exitSettlementTask = nil
         executionTerminationBridge = nil
         transientControlState = nil
+        downloadRunProgress = HomeDownloadRunProgress()
+        clearPendingSkipDecision()
         executionSettingsSnapshot = ExecutionSettingsSnapshot.fromCurrentSettings(
             profile: dependencies.appSession.activeProfile,
             monthGroupingTimeZone: dataAccess.localMonthGroupingTimeZone()
@@ -456,6 +487,8 @@ final class HomeExecutionCoordinator {
         executionTerminationBridge?.request(.stop)
         executionTerminationBridge = nil
         transientControlState = nil
+        downloadRunProgress = HomeDownloadRunProgress()
+        clearPendingSkipDecision()
         executionSettingsSnapshot = nil
         dataRefresher.cancel()
         if let backupEventObserverID {
@@ -638,6 +671,7 @@ final class HomeExecutionCoordinator {
 
         executionTask?.task.cancel()
         transientControlState = nil
+        clearPendingSkipDecision()
         dataRefresher.cancel()
         deactivateTransferMetrics()
         hardCancellationTask = backupBridge?.hardCancel() ?? hardCancellationTask
@@ -757,6 +791,8 @@ final class HomeExecutionCoordinator {
             appendWarningLog(String(localized: "home.execution.log.executionPaused"))
             setStatusText(String(localized: "home.execution.paused"), notifyState: false)
             notifyStateChanged()
+            // Inline complement failures settle with the upload run.
+            presentPendingSkipDecisionIfAny()
             return false
         case .failed(let alert):
             deactivateTransferMetrics(notify: false)
@@ -879,7 +915,7 @@ final class HomeExecutionCoordinator {
         var totalBytes: Int64 = 0
         for month in months {
             guard !Task.isCancelled else { return nil }
-            let items = await dataAccess.remoteOnlyItems(month)
+            let items = downloadRunProgress.pendingItems(await dataAccess.remoteOnlyItems(month), in: month)
             totalBytes += DownloadWorkflowHelper.estimatedDownloadBytes(for: items, incompletePolicy: incompleteDownloadPolicy) ?? 0
         }
         return totalBytes > 0 ? totalBytes : nil
@@ -1198,6 +1234,51 @@ final class HomeExecutionCoordinator {
         backupBridge?.markAssetIDsPendingForResume(session.uploadAssetIDsByMonth[month] ?? [])
     }
 
+    private func handleRestoreItemFailure(
+        month: LibraryMonthKey,
+        failure: RestoreItemFailure
+    ) {
+        appendWarningLog(String(format: String(localized: "home.execution.log.downloadItemFailed"), month.displayText, failure.displayName, failure.reason))
+        print("[HomeExecutionCoordinator] download item failed, pausing for skip decision: month=\(month.displayText), item=\(failure.displayName), reason=\(failure.reason)")
+        // Preserve a user-initiated stop through settlement.
+        guard transientControlState != .stopping else { return }
+        // Concurrent failures must not replace the pending decision.
+        guard pendingSkipDecision == nil else { return }
+        pendingSkipDecision = (UUID(), month, failure)
+        pause()
+    }
+
+    private func clearPendingSkipDecision() {
+        skipDecisionTask?.cancel()
+        skipDecisionTask = nil
+        pendingSkipDecision = nil
+    }
+
+    private func presentPendingSkipDecisionIfAny() {
+        guard let pending = pendingSkipDecision,
+              skipDecisionTask == nil else { return }
+        let request = onSkipDecisionRequest
+        skipDecisionTask = Task { @MainActor [weak self] in
+            let skip = await request?(pending.month, pending.failure) ?? false
+            guard !Task.isCancelled else { return }
+            self?.resolvePendingSkipDecision(skip: skip, id: pending.id)
+        }
+    }
+
+    private func resolvePendingSkipDecision(skip: Bool, id: UUID) {
+        guard let pending = pendingSkipDecision,
+              pending.id == id else { return }
+        skipDecisionTask = nil
+        pendingSkipDecision = nil
+        guard skip else {
+            stop()
+            return
+        }
+        downloadRunProgress.recordSkipped(pending.failure.identity, displayName: pending.failure.displayName, in: pending.month)
+        appendInfoLog(String(format: String(localized: "home.execution.log.downloadItemSkipped"), pending.failure.displayName))
+        resume()
+    }
+
     private func downloadRemoteMonth(
         _ month: LibraryMonthKey,
         assetIDs: Set<String>,
@@ -1235,6 +1316,8 @@ final class HomeExecutionCoordinator {
         } catch {
             if RemoteFaultLite.classify(error) == .cancelled { return .cancelled }
             let message = context.profile.userFacingStorageErrorMessage(error)
+            print("[HomeExecutionCoordinator] month verify FAILED: \(month.displayText), reason=\(message)")
+            print("[HomeExecutionCoordinator] verify error detail: \(RestoreService.diagnosticDescription(of: error))")
             appendWarningLog(String.localizedStringWithFormat(
                 String(localized: "manifest.log.reconcileFailed"),
                 month.displayText,
@@ -1249,7 +1332,7 @@ final class HomeExecutionCoordinator {
         }
         if Task.isCancelled || terminationControl?.shouldDrain == true { return .cancelled }
 
-        let remoteItems = await dataAccess.remoteOnlyItems(month)
+        let remoteItems = downloadRunProgress.pendingItems(await dataAccess.remoteOnlyItems(month), in: month)
         appendDebugLog(String(format: String(localized: "home.execution.log.pendingDownload"), month.displayText, remoteItems.count))
         guard let downloadHelper else { return .cancelled }
         if !usesExistingTransferPlan, estimatedDownloadTotalBytes == nil {
@@ -1270,10 +1353,14 @@ final class HomeExecutionCoordinator {
             shouldDrain: { terminationControl?.shouldDrain == true },
             onTransferState: { [weak self] state in
                 self?.updateTransferMetrics(state)
+            },
+            onItemFailed: { [weak self] failure in
+                await self?.handleRestoreItemFailure(month: month, failure: failure)
             }
-        ) { [weak self] assetID in
+        ) { [weak self] restoredItem in
             guard let self else { return }
-            await self.dataRefresher.refreshLocalIndexAndNotify([assetID])
+            self.downloadRunProgress.recordRestored(restoredItem.identity, in: month)
+            await self.dataRefresher.refreshLocalIndexAndNotify([restoredItem.asset.localIdentifier])
         }
     }
 
@@ -1303,13 +1390,30 @@ final class HomeExecutionCoordinator {
     ) -> BackupMonthFinalizationResult {
         switch result {
         case .success(_, let skippedIncompleteCount):
-            if skippedIncompleteCount > 0 {
+            // A prompt-driven skip resumes through a fresh download result.
+            let skippedItems = downloadRunProgress.skippedItems(in: month)
+            let skippedFailureCount = skippedItems.count
+            if skippedIncompleteCount > 0 || skippedFailureCount > 0 {
                 // Mark month failed so finishExecution reports partial; skip the alert — informational, not a crash.
-                let reason = String.localizedStringWithFormat(
-                    String(localized: "restore.log.skippedIncomplete"),
-                    month.displayText,
-                    skippedIncompleteCount
-                )
+                var reasons: [String] = []
+                if skippedIncompleteCount > 0 {
+                    reasons.append(String.localizedStringWithFormat(
+                        String(localized: "restore.log.skippedIncomplete"),
+                        month.displayText,
+                        skippedIncompleteCount
+                    ))
+                }
+                if skippedFailureCount > 0 {
+                    reasons.append(String.localizedStringWithFormat(
+                        String(localized: "restore.log.skippedFailedItems"),
+                        month.displayText,
+                        skippedFailureCount
+                    ))
+                    if !skippedItems.isEmpty {
+                        reasons.append(skippedItems.values.sorted().joined(separator: ", "))
+                    }
+                }
+                let reason = reasons.joined(separator: "\n")
                 session.failDownloadMonth(month, reason: reason)
                 appendWarningLog(reason)
                 refreshTerminalStatus(notifyState: false)
@@ -1736,6 +1840,7 @@ final class HomeExecutionCoordinator {
             setStatusText(String(localized: "home.execution.paused"), notifyState: false)
             appendWarningLog(String(localized: "home.execution.log.executionPaused"))
             notifyStateChanged()
+            presentPendingSkipDecisionIfAny()
         } else if sessionReachedTerminalPhase {
             transientControlState = nil
             refreshTerminalStatus(notifyState: false)

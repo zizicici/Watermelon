@@ -264,11 +264,11 @@ final class MediaBrowserActionRunner {
             let repo = self.env.hashIndexRepository
             do {
                 let restored = try await self.env.restoreService.restoreItems(
-                    items: [RestoreService.RestoreItemDescriptor(instances: instances, identity: fingerprint)],
+                    items: [RestoreService.RestoreItemDescriptor(instances: instances, identity: fingerprint, creationDate: resolved.creationDate, isIncomplete: resolved.isIncomplete)],
                     profile: profile,
                     password: password,
                     onItemCompleted: { _, _, restoredItem in
-                        guard let restoredItem else { return }
+                        guard let restoredItem, !restoredItem.asset.indexWriteHandled else { return }
                         // The asset is already imported into Photos here. A hash-index write failure must NOT
                         // abort the restore or surface as a download failure — that would leave an unindexed
                         // duplicate the user re-imports on a retry. Log and continue; the local hash-index
@@ -294,7 +294,7 @@ final class MediaBrowserActionRunner {
                 // A complete download flips the viewed item to on-device (it IS the same asset). An incomplete
                 // one imported a different asset (F′), so DON'T flip the remote record's badge — let the grid
                 // reload re-derive (a new local item appears; the remote record stays as-is).
-                onChanged(false, resolved.isIncomplete ? nil : localID)
+                onChanged(false, restored.first?.asset.isCompleteRestore == true ? localID : nil)
                 if self.isAlive(presenter) { HUD.flash(String(localized: "mediaBrowser.action.saved"), on: presenter) }
             } catch {
                 hud.dismiss()
@@ -319,7 +319,7 @@ final class MediaBrowserActionRunner {
     // read live (fresh) but must belong to `expectedProfileKey`: a profile switch racing the download can
     // repopulate the cache for another node, and resolving that node's paths against the captured creds would
     // fetch the wrong bytes (caught later by hash verification, but only after a spurious failure).
-    private func manifestInstances(for fingerprint: Data, month: LibraryMonthKey?, expectedProfileKey: String) async -> (instances: [RemoteAssetResourceInstance], isIncomplete: Bool)? {
+    private func manifestInstances(for fingerprint: Data, month: LibraryMonthKey?, expectedProfileKey: String) async -> (instances: [RemoteAssetResourceInstance], isIncomplete: Bool, creationDate: Date?)? {
         let coordinator = env.backupCoordinator
         return await withCancellableDetachedValue(priority: .userInitiated) {
             let state = coordinator.currentRemoteSnapshotState(since: nil)
@@ -339,7 +339,7 @@ final class MediaBrowserActionRunner {
     // ONCE and resolve every item against it instead of copying it per item.
     // Pure core of `resolveInstances`; `internal` (not `private`) so the freshness-of-completeness contract is
     // directly pinnable by tests — consent must read the LIVE record's completeness, not projection-time metadata.
-    nonisolated static func resolveInstances(from state: RemoteLibrarySnapshotState, fingerprint: Data, preferredMonth: LibraryMonthKey?) -> (instances: [RemoteAssetResourceInstance], isIncomplete: Bool) {
+    nonisolated static func resolveInstances(from state: RemoteLibrarySnapshotState, fingerprint: Data, preferredMonth: LibraryMonthKey?) -> (instances: [RemoteAssetResourceInstance], isIncomplete: Bool, creationDate: Date?) {
         let ordered = [state.monthDeltas.first { $0.month == preferredMonth }].compactMap { $0 }
             + state.monthDeltas.filter { $0.month != preferredMonth }
         for delta in ordered {
@@ -356,9 +356,9 @@ final class MediaBrowserActionRunner {
             // the browser/presence `containsRealMedia` rule.
             guard ResourceRole.containsRealMedia(instances.map(\.role)) else { continue }
             let isIncomplete = MonthManifestStore.isAssetIncomplete(links: links, isResourceAvailable: { byHash[$0] != nil }, assetFingerprint: fingerprint)
-            return (instances, isIncomplete)
+            return (instances, isIncomplete, delta.assets.first { $0.assetFingerprint == fingerprint }?.creationDate)
         }
-        return ([], false)
+        return ([], false, nil)
     }
 
     // The remote-only items a batch download should restore. Same-fingerprint twins (a grouping-TZ re-upload
@@ -406,7 +406,7 @@ final class MediaBrowserActionRunner {
     // legacy no-hash manifest leaves `resourceHash` empty, so a hash-only key would collapse distinct roles and
     // drop a complementary side (RestoreService avoids the same empty-hash trap). Pure + unit-testable.
     nonisolated static func dedupeResolvedDescriptors(_ descriptors: [RestoreService.RestoreItemDescriptor]) -> [RestoreService.RestoreItemDescriptor] {
-        struct Cluster { var identity: Data; var ids: Set<String>; var instances: [RemoteAssetResourceInstance] }
+        struct Cluster { var identity: Data; var ids: Set<String>; var instances: [RemoteAssetResourceInstance]; var creationDate: Date?; var isIncomplete: Bool }
         var clusters: [Cluster] = []
         for descriptor in descriptors {
             let ids = Set(descriptor.instances.map(\.id))
@@ -414,19 +414,23 @@ final class MediaBrowserActionRunner {
             if let keep = overlapping.first {
                 clusters[keep].ids.formUnion(ids)
                 clusters[keep].instances += descriptor.instances
+                clusters[keep].isIncomplete = clusters[keep].isIncomplete || descriptor.isIncomplete
+                clusters[keep].creationDate = clusters[keep].creationDate ?? descriptor.creationDate
                 for idx in overlapping.dropFirst().reversed() {   // a descriptor bridging two clusters folds them together
                     clusters[keep].ids.formUnion(clusters[idx].ids)
                     clusters[keep].instances += clusters[idx].instances
+                    clusters[keep].isIncomplete = clusters[keep].isIncomplete || clusters[idx].isIncomplete
+                    clusters[keep].creationDate = clusters[keep].creationDate ?? clusters[idx].creationDate
                     clusters.remove(at: idx)
                 }
             } else {
-                clusters.append(Cluster(identity: descriptor.identity, ids: ids, instances: descriptor.instances))
+                clusters.append(Cluster(identity: descriptor.identity, ids: ids, instances: descriptor.instances, creationDate: descriptor.creationDate, isIncomplete: descriptor.isIncomplete))
             }
         }
         return clusters.map { cluster in
             var seen = Set<String>()
             let instances = cluster.instances.filter { seen.insert($0.id).inserted }
-            return RestoreService.RestoreItemDescriptor(instances: instances, identity: cluster.identity)
+            return RestoreService.RestoreItemDescriptor(instances: instances, identity: cluster.identity, creationDate: cluster.creationDate, isIncomplete: cluster.isIncomplete)
         }
     }
 
@@ -465,10 +469,10 @@ final class MediaBrowserActionRunner {
             // never revalidated in-session), and deleting would destroy the only copy of the edit.
             if item.presence == .both, let fingerprint = item.fingerprint {
                 let presenceIndex = self.env.presenceIndex
-                let current: Data? = await withCancellableDetachedValue(priority: .userInitiated) {
-                    presenceIndex.currentFingerprints(forAssetIDs: [localID])[localID]
+                let matches = await withCancellableDetachedValue(priority: .userInitiated) {
+                    presenceIndex.currentAssetsMatch([localID: fingerprint])
                 }
-                guard current == fingerprint else {
+                guard matches else {
                     self.presentError(String(localized: "mediaBrowser.action.error"), on: presenter)
                     onChanged(false, nil)
                     return
@@ -772,10 +776,10 @@ final class MediaBrowserActionRunner {
                     let claims = Self.retainedDeviceDeleteClaims(deviceItems, fetchedIDs: fetched)
                     if !claims.isEmpty {
                         let presenceIndex = self.env.presenceIndex
-                        let current: [String: Data] = await withCancellableDetachedValue(priority: .userInitiated) {
-                            presenceIndex.currentFingerprints(forAssetIDs: claims.keys)
+                        let matches = await withCancellableDetachedValue(priority: .userInitiated) {
+                            presenceIndex.currentAssetsMatch(claims)
                         }
-                        guard claims.allSatisfy({ current[$0.key] == $0.value }) else {
+                        guard matches else {
                             self.presentError(String(localized: "mediaBrowser.action.error"), on: presenter)
                             // hadFailures: a delete-all viewer must stay open with the error; the reload reprojects.
                             onChanged(true, [])
@@ -1026,18 +1030,18 @@ final class MediaBrowserActionRunner {
         // partial subset would import (a new asset) without the consent the count exists to surface. Same root
         // cause as the single-item download consent. Fresh snapshot must belong to the captured profile — a switch
         // racing the batch must not resolve another node's paths against these creds (see manifestInstances).
-        let resolved: [(fingerprint: Data, instances: [RemoteAssetResourceInstance], isIncomplete: Bool)] = await withCancellableDetachedValue(priority: .userInitiated) {
+        let resolved: [(fingerprint: Data, instances: [RemoteAssetResourceInstance], isIncomplete: Bool, creationDate: Date?)] = await withCancellableDetachedValue(priority: .userInitiated) {
             let state = coordinator.currentRemoteSnapshotState(since: nil)
             guard RemoteSnapshotOwnership.matches(
                 ownerProfileKey: state.profileKey,
                 expectedProfileKey: expectedProfileKey
             ) else { return [] }
-            var out: [(fingerprint: Data, instances: [RemoteAssetResourceInstance], isIncomplete: Bool)] = []
+            var out: [(fingerprint: Data, instances: [RemoteAssetResourceInstance], isIncomplete: Bool, creationDate: Date?)] = []
             for item in downloadable {
                 guard let fp = item.fingerprint else { continue }
                 let r = Self.resolveInstances(from: state, fingerprint: fp, preferredMonth: item.remoteMonth)
                 guard !r.instances.isEmpty else { continue }
-                out.append((fp, r.instances, r.isIncomplete))
+                out.append((fp, r.instances, r.isIncomplete, r.creationDate))
             }
             return out
         }
@@ -1083,7 +1087,7 @@ final class MediaBrowserActionRunner {
             let hud = HUD.show(self.downloadingProgressText(0, pendingRestore.count), on: presenter)
             // Selection was deduped from stale item metadata; collapse any descriptors that the fresh snapshot
             // resolved to the same (or a subsumed) resource set so a snapshot change can't import one asset twice.
-            let descriptors = Self.dedupeResolvedDescriptors(pendingRestore.map { RestoreService.RestoreItemDescriptor(instances: $0.instances, identity: $0.fingerprint) })
+            let descriptors = Self.dedupeResolvedDescriptors(pendingRestore.map { RestoreService.RestoreItemDescriptor(instances: $0.instances, identity: $0.fingerprint, creationDate: $0.creationDate, isIncomplete: $0.isIncomplete) })
             guard !descriptors.isEmpty else {
                 hud.dismiss(); self.presentError(String(localized: "mediaBrowser.action.error"), on: presenter); return
             }
@@ -1097,6 +1101,7 @@ final class MediaBrowserActionRunner {
                         await MainActor.run { hud.update(self.downloadingProgressText(index, total)) }
                         guard let restoredItem else { return }
                         savedCount.increment()
+                        guard !restoredItem.asset.indexWriteHandled else { return }
                         // As in the single download: a hash-index write failure must not fail the restore (the
                         // asset is already imported; the index self-heals on the next rebuild).
                         do {

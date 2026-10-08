@@ -203,6 +203,9 @@ final class HomeViewController: UIViewController {
             dependencies.storageClientFactory.unregisterBrowserLink(token: registration)
         }
         resolveSFTPHostKeyPrompt(false)
+        if let skipPromptID {
+            cancelFailedItemSkipPrompt(id: skipPromptID)
+        }
     }
 
     override func viewDidLoad() {
@@ -625,6 +628,9 @@ final class HomeViewController: UIViewController {
 
         store.onAlert = { @MainActor [weak self] title, message in
             self?.showAlert(title: title, message: message)
+        }
+        store.onSkipDecisionRequest = { @MainActor [weak self] _, failure in
+            await self?.presentFailedItemSkipPrompt(failure) ?? false
         }
         store.onDataSourceError = { @MainActor [weak self] error in
             guard let self else { return }
@@ -2916,6 +2922,80 @@ final class HomeViewController: UIViewController {
         pendingSFTPHostKeyPromptContinuation = nil
         sftpHostKeyPromptAlert = nil
         continuation.resume(returning: accepted)
+    }
+
+    private var pendingSkipPromptContinuation: CheckedContinuation<Bool, Never>?
+    private var skipPromptAlert: UIAlertController?
+    private var skipPromptID: UUID?
+
+    private func presentFailedItemSkipPrompt(_ failure: RestoreItemFailure) async -> Bool {
+        guard pendingSkipPromptContinuation == nil else { return false }
+        let id = UUID()
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                guard !Task.isCancelled else {
+                    continuation.resume(returning: false)
+                    return
+                }
+                pendingSkipPromptContinuation = continuation
+                skipPromptID = id
+                let alert = UIAlertController(
+                    title: String(localized: "home.execution.skipItem.title"),
+                    message: String.localizedStringWithFormat(
+                        String(localized: "home.execution.skipItem.message"),
+                        failure.displayName,
+                        failure.reason
+                    ),
+                    preferredStyle: .alert
+                )
+                alert.addAction(UIAlertAction(title: String(localized: "common.stop"), style: .cancel) { [weak self, weak alert] _ in
+                    self?.resolveFailedItemSkipPromptAfterDismissal(false, alert: alert, id: id)
+                })
+                alert.addAction(UIAlertAction(title: String(localized: "home.execution.skipItem.skipAction"), style: .default) { [weak self, weak alert] _ in
+                    self?.resolveFailedItemSkipPromptAfterDismissal(true, alert: alert, id: id)
+                })
+                skipPromptAlert = alert
+                let basePresenter = navigationController ?? self
+                var presenter = basePresenter
+                while let presented = presenter.presentedViewController, !presented.isBeingDismissed {
+                    presenter = presented
+                }
+                guard presenter.viewIfLoaded?.window != nil, !presenter.isBeingDismissed else {
+                    resolveFailedItemSkipPrompt(false, id: id)
+                    return
+                }
+                presenter.present(alert, animated: true)
+            }
+        } onCancel: {
+            Task { @MainActor [weak self] in
+                self?.cancelFailedItemSkipPrompt(id: id)
+            }
+        }
+    }
+
+    private func resolveFailedItemSkipPromptAfterDismissal(_ skip: Bool, alert: UIAlertController?, id: UUID) {
+        Task { @MainActor [weak self, weak alert] in
+            await PresentationDismissalSequencer.waitUntilDismissed {
+                guard let alert else { return false }
+                return alert.presentingViewController != nil || alert.viewIfLoaded?.window != nil
+            }
+            self?.resolveFailedItemSkipPrompt(skip, id: id)
+        }
+    }
+
+    private func cancelFailedItemSkipPrompt(id: UUID) {
+        guard skipPromptID == id else { return }
+        skipPromptAlert?.dismiss(animated: true)
+        resolveFailedItemSkipPrompt(false, id: id)
+    }
+
+    private func resolveFailedItemSkipPrompt(_ skip: Bool, id: UUID) {
+        guard skipPromptID == id,
+              let continuation = pendingSkipPromptContinuation else { return }
+        pendingSkipPromptContinuation = nil
+        skipPromptAlert = nil
+        skipPromptID = nil
+        continuation.resume(returning: skip)
     }
 
     private func scrollToMonth(_ month: LibraryMonthKey) {

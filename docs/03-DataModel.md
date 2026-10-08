@@ -118,6 +118,16 @@ CREATE INDEX idx_local_asset_resources_hash
 ON local_asset_resources(contentHash);
 ```
 
+### `restore_origins`
+
+`v8_restore_origins` 保存本次安装的还原来源：`profileKey`、`remoteFingerprint`、`assetLocalIdentifier` 为联合主键；另存 `localFingerprint`、资源校验用的 `sourceResources` JSON、`completeCandidate`、`isEquivalent` 和 `importedAtMs`。
+
+Photos 导入成功后先记录待验证来源，再读取实际资源写入本地哈希索引。只有资源集合完整、媒体哈希一致且导入后没有编辑，才能设置 `isEquivalent`；允许 Photos 改写 `adjustmentData`，其实际哈希仍参与本地指纹。缺损恢复保留来源记录，但不能据此匹配完整远端资产。
+
+该表独立于可重建的本地索引，没有随 `local_assets` 删除的外键。读取对应关系时必须限定仓库，并与当前 `local_assets.assetFingerprint` 相等；调用者还要验证资产可访问且索引未过期。首页、浏览器和上传跳过判断共用 `RestoreOriginIndex`，本地文件哈希及远端 manifest 的指纹算法不变。未完成校验的记录可由重试还原或后续索引扫描完成验证。
+
+v8 会清空旧索引中带 `adjustmentData` 资产的指纹，促使下一次索引扫描读取实际内容；保留资产、资源记录和照片本身。旧版本没有来源记录的资产不会凭文件名或日期自动建立对应关系。
+
 ## 2. `connectionParams` 的真实内容
 
 类型定义位于 `Shared/Domain/StorageProfile.swift`：

@@ -51,6 +51,7 @@ final class PiPExecutionBridge {
                 pip.taskDidCancel()
             }
         }
+        pip.setNeedsUserDecision(coordinator.needsUserDecision)
     }
 
     private func apply(_ snapshot: HomeExecutionLogSnapshot) {

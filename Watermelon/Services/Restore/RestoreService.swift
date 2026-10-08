@@ -14,23 +14,52 @@ enum RestoreIntegrityError: Error, LocalizedError {
     var errorDescription: String? {
         switch self {
         case let .contentHashMismatch(fileName, expectedHashHex, actualHashHex):
-            return "Downloaded \(fileName) failed integrity check (expected \(expectedHashHex.prefix(8)), got \(actualHashHex.prefix(8)))"
+            return String.localizedStringWithFormat(
+                String(localized: "restore.error.contentHashMismatch"),
+                fileName,
+                String(expectedHashHex.prefix(8)),
+                String(actualHashHex.prefix(8))
+            )
         case let .fileSizeMismatch(fileName, expectedSize, actualSize):
-            return "Downloaded \(fileName) has an unexpected size (expected \(expectedSize), got \(actualSize))"
+            return String.localizedStringWithFormat(
+                String(localized: "restore.error.fileSizeMismatch"),
+                fileName,
+                expectedSize,
+                actualSize
+            )
         case .invalidManifestResource(let fileName):
-            return "The backup contains an invalid resource path for \(fileName)"
+            return String.localizedStringWithFormat(
+                String(localized: "restore.error.invalidManifestResource"),
+                fileName
+            )
         }
     }
 }
 
+struct RestoreItemFailure: Sendable {
+    let identity: Data
+    let displayName: String
+    let reason: String
+}
+
+private struct RestorePhotoLibraryImportFailure: LocalizedError {
+    let underlying: Error
+
+    var errorDescription: String? { underlying.localizedDescription }
+}
+
 final class RestoreService: @unchecked Sendable {
+    private let hashIndexRepository: ContentHashIndexRepository?
+    private let inspectImportedAsset: (@Sendable (String, [RemoteAssetResourceInstance]) async throws -> ImportedAssetSnapshot)?
     private let makeRemoteClient: @Sendable (ServerProfileRecord, String) throws -> any RemoteStorageClientProtocol
     private let importAsset: @Sendable ([(RemoteAssetResourceInstance, URL)], Date?) async throws -> String?
 
     init(
-        databaseManager _: DatabaseManager,
+        databaseManager: DatabaseManager,
         storageClientFactory: StorageClientFactory = StorageClientFactory()
     ) {
+        hashIndexRepository = ContentHashIndexRepository(databaseManager: databaseManager)
+        inspectImportedAsset = Self.readImportedAsset
         self.makeRemoteClient = { profile, password in
             try storageClientFactory.makeClient(profile: profile, credentialPayload: password)
         }
@@ -40,7 +69,12 @@ final class RestoreService: @unchecked Sendable {
     }
 
     // Test seam: inject the remote client directly, bypassing StorageClientFactory / DatabaseManager.
-    init(makeClient: @escaping @Sendable (ServerProfileRecord, String) throws -> any RemoteStorageClientProtocol) {
+    init(
+        makeClient: @escaping @Sendable (ServerProfileRecord, String) throws -> any RemoteStorageClientProtocol,
+        hashIndexRepository: ContentHashIndexRepository? = nil
+    ) {
+        self.hashIndexRepository = hashIndexRepository
+        inspectImportedAsset = Self.readImportedAsset
         self.makeRemoteClient = makeClient
         importAsset = { downloaded, creationDate in
             try await Self.saveToPhotoLibrary(downloaded: downloaded, creationDate: creationDate)
@@ -49,8 +83,12 @@ final class RestoreService: @unchecked Sendable {
 
     init(
         makeClient: @escaping @Sendable (ServerProfileRecord, String) throws -> any RemoteStorageClientProtocol,
-        importAsset: @escaping @Sendable ([(RemoteAssetResourceInstance, URL)], Date?) async throws -> String?
+        importAsset: @escaping @Sendable ([(RemoteAssetResourceInstance, URL)], Date?) async throws -> String?,
+        inspectImportedAsset: (@Sendable (String, [RemoteAssetResourceInstance]) async throws -> ImportedAssetSnapshot)? = nil,
+        hashIndexRepository: ContentHashIndexRepository? = nil
     ) {
+        self.hashIndexRepository = hashIndexRepository
+        self.inspectImportedAsset = inspectImportedAsset
         self.makeRemoteClient = makeClient
         self.importAsset = importAsset
     }
@@ -58,11 +96,20 @@ final class RestoreService: @unchecked Sendable {
     struct RestoreItemDescriptor: Sendable {
         let instances: [RemoteAssetResourceInstance]
         let identity: Data
+        var creationDate: Date? = nil
+        var isIncomplete: Bool = false
     }
 
-    struct RestoredAsset {
+    struct ImportedAssetSnapshot: Sendable {
+        let instances: [RemoteAssetResourceInstance]
+        let modificationDateMs: Int64?
+    }
+
+    struct RestoredAsset: Sendable {
         let localIdentifier: String
         let importedInstances: [RemoteAssetResourceInstance]
+        var indexWriteHandled = false
+        var isCompleteRestore = false
     }
 
     struct RestoredItem: Sendable {
@@ -76,6 +123,7 @@ final class RestoreService: @unchecked Sendable {
         password: String,
         shouldDrain: @escaping @Sendable () -> Bool = { false },
         onTransferState: (@Sendable (BackupTransferState) async -> Void)? = nil,
+        onItemFailed: (@Sendable (RestoreItemFailure) async -> Void)? = nil,
         onItemCompleted: @Sendable (Int, Int, RestoredItem?) async throws -> Void
     ) async throws -> [RestoredItem] {
         guard !items.isEmpty else { return [] }
@@ -123,26 +171,44 @@ final class RestoreService: @unchecked Sendable {
             for (index, item) in items.enumerated() {
                 if shouldDrain() { throw CancellationError() }
                 try Task.checkCancellation()
-                let creationDate = item.instances
+                let creationDate = item.creationDate ?? item.instances
                     .compactMap(\.creationDateMs)
                     .min()
                     .map { Date(millisecondsSinceEpoch: $0) }
-                let group = RestoreGroup(creationDate: creationDate, instances: item.instances)
+                let group = RestoreGroup(creationDate: creationDate, instances: item.instances, isIncomplete: item.isIncomplete)
                 var restoredItem: RestoredItem?
-                if let asset = try await restoreGroup(
-                    group,
-                    itemIdentity: item.identity,
-                    itemPosition: index + 1,
-                    totalItems: items.count,
-                    profile: profile,
-                    password: password,
-                    clientBox: clientBox,
-                    shouldDrain: shouldDrain,
-                    onTransferState: onTransferState
-                ) {
-                    let restored = RestoredItem(identity: item.identity, asset: asset)
-                    results.append(restored)
-                    restoredItem = restored
+                do {
+                    if let asset = try await resumePendingImport(item, profile: profile) {
+                        let restored = RestoredItem(identity: item.identity, asset: asset)
+                        results.append(restored)
+                        try await onItemCompleted(index + 1, items.count, restored)
+                        continue
+                    }
+                    if let asset = try await restoreGroup(
+                        group,
+                        itemIdentity: item.identity,
+                        itemPosition: index + 1,
+                        totalItems: items.count,
+                        profile: profile,
+                        password: password,
+                        clientBox: clientBox,
+                        shouldDrain: shouldDrain,
+                        onTransferState: onTransferState
+                    ) {
+                        let restored = RestoredItem(identity: item.identity, asset: asset)
+                        results.append(restored)
+                        restoredItem = restored
+                    }
+                } catch {
+                    guard let onItemFailed, Self.isItemLocalFailure(error) else { throw error }
+                    let failure = RestoreItemFailure(
+                        identity: item.identity,
+                        displayName: group.instances.first?.fileName ?? String(item.identity.hexString.prefix(12)),
+                        reason: error.localizedDescription
+                    )
+                    print("[RestoreService] item FAILED, requesting skip decision: \(failure.displayName), reason=\(failure.reason)")
+                    await onItemFailed(failure)
+                    throw CancellationError()
                 }
                 try await onItemCompleted(index + 1, items.count, restoredItem)
             }
@@ -152,6 +218,31 @@ final class RestoreService: @unchecked Sendable {
             await clientBox.client.disconnectSafely()
             throw error
         }
+    }
+
+    private func resumePendingImport(_ item: RestoreItemDescriptor, profile: ServerProfileRecord) async throws -> RestoredAsset? {
+        guard !item.isIncomplete, let repository = hashIndexRepository, let inspect = inspectImportedAsset else { return nil }
+        let key = RemoteIndexSyncService.remoteProfileKey(profile)
+        let planned = RestoreImportPlan.normalize(item.instances)
+        let fingerprint = BackupAssetResourcePlanner.assetFingerprint(resourceRoleSlotHashes: planned.map {
+            (role: $0.role, slot: $0.slot, contentHash: $0.resourceHash)
+        })
+        guard fingerprint == item.identity else { return nil }
+        for localID in try repository.pendingRestoreAssetIDs(profileKey: key, remoteFingerprint: item.identity) {
+            do {
+                let snapshot = try await inspect(localID, planned)
+                try repository.writeHashIndex(assetLocalIdentifier: localID, remoteAssetFingerprint: item.identity,
+                    instances: snapshot.instances, modificationDateMs: snapshot.modificationDateMs)
+                guard try !repository.fetchRestoreOrigins(profileKey: key, assetIDs: [localID]).isEmpty else { continue }
+                return RestoredAsset(localIdentifier: localID, importedInstances: snapshot.instances,
+                    indexWriteHandled: true, isCompleteRestore: true)
+            } catch {
+                let ns = error as NSError
+                if ns.domain == PHPhotosErrorDomain && ns.code == PHPhotosError.identifierNotFound.rawValue { continue }
+                throw error
+            }
+        }
+        return nil
     }
 
     private func restoreGroup(
@@ -240,12 +331,42 @@ final class RestoreService: @unchecked Sendable {
             print("[RestoreService]   saveToPhotoLibrary succeeded, localID=\(localID ?? "nil")")
 
             guard let localID else { return nil }
-            return RestoredAsset(
-                localIdentifier: localID,
-                importedInstances: acceptedDownloaded.map(\.0)
-            )
+            let importedAt = Date()
+            let planned = acceptedDownloaded.map(\.0)
+            let repository = hashIndexRepository
+            let inspect = inspectImportedAsset
+            let profileKey = RemoteIndexSyncService.remoteProfileKey(profile)
+            // Finish persistence even if the caller stops after Photos has committed the asset.
+            return try await Task.detached(priority: .userInitiated) {
+                try repository?.recordRestoreImport(profileKey: profileKey, remoteFingerprint: itemIdentity,
+                    assetLocalIdentifier: localID, instances: planned, isIncomplete: group.isIncomplete, importedAt: importedAt)
+                guard let inspect else {
+                    return RestoredAsset(localIdentifier: localID, importedInstances: planned)
+                }
+                do {
+                    let snapshot = try await inspect(localID, planned)
+                    try repository?.writeHashIndex(assetLocalIdentifier: localID,
+                        remoteAssetFingerprint: itemIdentity, instances: snapshot.instances,
+                        modificationDateMs: snapshot.modificationDateMs)
+                    let sourceFingerprint = BackupAssetResourcePlanner.assetFingerprint(resourceRoleSlotHashes: planned.map {
+                        (role: $0.role, slot: $0.slot, contentHash: $0.resourceHash)
+                    })
+                    let complete = !group.isIncomplete && sourceFingerprint == itemIdentity
+                        && ContentHashIndexRepository.restoredResourcesMatch(expected: planned.map(\.hashRecord), actual: snapshot.instances.map(\.hashRecord))
+                    return RestoredAsset(localIdentifier: localID, importedInstances: snapshot.instances,
+                        indexWriteHandled: repository != nil, isCompleteRestore: complete)
+                } catch {
+                    guard repository != nil else { throw error }
+                    print("[RestoreService] imported asset verification deferred: \(localID), \(error)")
+                    return RestoredAsset(localIdentifier: localID, importedInstances: [], indexWriteHandled: true)
+                }
+            }.value
         } catch {
             print("[RestoreService]   saveToPhotoLibrary FAILED: \(error)")
+            print("[RestoreService]   saveToPhotoLibrary error detail: \(Self.diagnosticDescription(of: error))")
+            if Self.isSkippablePhotoLibraryImportError(error) {
+                throw RestorePhotoLibraryImportFailure(underlying: error)
+            }
             throw error
         }
     }
@@ -337,6 +458,7 @@ final class RestoreService: @unchecked Sendable {
             throw CancellationError()
         case .failed(let error), .exhausted(let error):
             print("[RestoreService]   download FAILED: \(instanceName), remotePath=\(remotePath), reason=\(error.localizedDescription)")
+            print("[RestoreService]   download error detail: \(Self.diagnosticDescription(of: error))")
             throw error
         }
     }
@@ -423,9 +545,29 @@ final class RestoreService: @unchecked Sendable {
         init(_ client: any RemoteStorageClientProtocol) { self.client = client }
     }
 
-    private struct RestoreGroup {
+    private struct RestoreGroup: Sendable {
         let creationDate: Date?
         let instances: [RemoteAssetResourceInstance]
+        let isIncomplete: Bool
+    }
+
+    static func isItemLocalFailure(_ error: Error) -> Bool {
+        error is RestoreIntegrityError || error is RestorePhotoLibraryImportFailure
+    }
+
+    static func isSkippablePhotoLibraryImportError(_ error: Error) -> Bool {
+        var current: Error? = error
+        var depth = 0
+        while let node = current, depth < 8 {
+            let ns = node as NSError
+            if ns.domain == PHPhotosErrorDomain {
+                return [PHPhotosError.invalidResource.rawValue, PHPhotosError.changeNotSupported.rawValue,
+                        PHPhotosError.missingResource.rawValue].contains(ns.code)
+            }
+            current = ns.userInfo[NSUnderlyingErrorKey] as? Error
+            depth += 1
+        }
+        return false
     }
 
     // Manifest resourceHash is SHA-256 of the exact stored bytes; a completed-but-wrong/corrupt download must
@@ -527,6 +669,31 @@ final class RestoreService: @unchecked Sendable {
         }
 
         return accepted
+    }
+
+    static func readImportedAsset(_ localID: String, planned: [RemoteAssetResourceInstance]) async throws -> ImportedAssetSnapshot {
+        guard let asset = PHAsset.fetchAssets(withLocalIdentifiers: [localID], options: nil).firstObject else {
+            throw NSError(domain: PHPhotosErrorDomain, code: PHPhotosError.identifierNotFound.rawValue)
+        }
+        let service = PhotoLibraryService()
+        let selected = BackupAssetResourcePlanner.orderedResourcesWithRoleSlot(from: PHAssetResource.assetResources(for: asset))
+        var instances: [RemoteAssetResourceInstance] = []
+        for entry in selected {
+            let exported = try await service.exportResourceToTempFileAndDigest(entry.resource, allowNetworkAccess: false)
+            defer { try? FileManager.default.removeItem(at: exported.fileURL) }
+            let source = planned.first { $0.role == entry.role && $0.slot == entry.slot }
+            let fileName = PhotoLibraryService.safeOriginalFilename(for: entry.resource)
+            instances.append(RemoteAssetResourceInstance(role: entry.role, slot: entry.slot,
+                resourceHash: exported.contentHash, fileName: fileName, fileSize: exported.fileSize,
+                remoteRelativePath: source?.remoteRelativePath ?? fileName,
+                creationDateMs: asset.creationDate?.millisecondsSinceEpoch))
+        }
+        guard !instances.isEmpty,
+              let current = PHAsset.fetchAssets(withLocalIdentifiers: [localID], options: nil).firstObject,
+              current.modificationDate == asset.modificationDate else {
+            throw NSError(domain: PHPhotosErrorDomain, code: PHPhotosError.operationInterrupted.rawValue)
+        }
+        return ImportedAssetSnapshot(instances: instances, modificationDateMs: asset.modificationDate?.millisecondsSinceEpoch)
     }
 
     private static func saveToPhotoLibrary(
@@ -723,7 +890,7 @@ final class RestoreService: @unchecked Sendable {
         }
     }
 
-    private static func diagnosticDescription(of error: Error) -> String {
+    static func diagnosticDescription(of error: Error) -> String {
         var descriptions: [String] = []
         var current: Error? = error
         var depth = 0
@@ -760,5 +927,11 @@ final class RestoreService: @unchecked Sendable {
             return "\(PhotoLibraryService.resourceTypeName(resource.type))(\(resource.type.rawValue)) name=\(PhotoLibraryService.safeOriginalFilename(for: resource)) uti=\(contentType) size=\(PhotoLibraryService.resourceFileSize(resource))"
         }.joined(separator: "; ")
         return "placeholder=\(localIdentifier) fetch=found mediaType=\(asset.mediaType.rawValue) subtypes=\(asset.mediaSubtypes.rawValue) resources=[\(resources)]"
+    }
+}
+
+private extension RemoteAssetResourceInstance {
+    var hashRecord: LocalAssetResourceHashRecord {
+        LocalAssetResourceHashRecord(role: role, slot: slot, contentHash: resourceHash, fileSize: fileSize)
     }
 }

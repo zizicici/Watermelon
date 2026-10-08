@@ -4,6 +4,8 @@ struct LibraryLocalPresenceInput: Sendable {
     let localIDByFingerprint: [Data: String]
     let databaseMs: Double
     let source: String
+    var restoreOrigins = RestoreOriginIndex()
+    var profileKey: String? = nil
 }
 
 struct LibraryRemotePresenceInput: Sendable {
@@ -25,18 +27,25 @@ final class LibraryPresenceInputLoader: @unchecked Sendable {
         self.coordinator = coordinator
     }
 
-    func loadLocal(homeSeed: HomeBrowserLocalSeed?) async -> LibraryLocalPresenceInput? {
+    func loadLocal(homeSeed: HomeBrowserLocalSeed?, profileKey: String? = nil) async -> LibraryLocalPresenceInput? {
         let hashIndexRepository = hashIndexRepository
         return await withCancellableDetachedValue(priority: .userInitiated) {
             let startedAt = CFAbsoluteTimeGetCurrent()
-            let map = homeSeed?.localIDByFingerprint
+            var map = homeSeed?.localIDByFingerprint
                 ?? (try? hashIndexRepository.fetchLocalIdentifiersByFingerprint())
                 ?? [:]
+            let origins = RestoreOriginIndex((try? hashIndexRepository.fetchRestoreOrigins(profileKey: profileKey)) ?? [])
+            let visibleIDs = homeSeed.map { Set($0.assets.map(\.localIdentifier)) }
+            for (fingerprint, ids) in origins.localCandidates() where map[fingerprint] == nil {
+                map[fingerprint] = ids.first { visibleIDs?.contains($0) ?? true }
+            }
             guard !Task.isCancelled else { return nil }
             return LibraryLocalPresenceInput(
                 localIDByFingerprint: map,
                 databaseMs: (CFAbsoluteTimeGetCurrent() - startedAt) * 1_000,
-                source: homeSeed == nil ? "db" : "home"
+                source: homeSeed == nil ? "db" : "home",
+                restoreOrigins: origins,
+                profileKey: profileKey
             )
         }
     }

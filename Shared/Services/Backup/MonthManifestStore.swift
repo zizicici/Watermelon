@@ -480,6 +480,23 @@ final class MonthManifestStore {
         dirty = true
     }
 
+    func updateAssetCreationDate(_ date: Date?, for fingerprint: Data) throws -> RemoteManifestAsset? {
+        let creationDateMs = LibraryCreationDate.optionalMilliseconds(date)
+        guard let asset = assetsByFingerprint[fingerprint], asset.creationDateMs != creationDateMs else { return nil }
+        let updated = RemoteManifestAsset(
+            year: asset.year, month: asset.month, assetFingerprint: asset.assetFingerprint,
+            creationDateMs: creationDateMs, backedUpAtMs: asset.backedUpAtMs,
+            resourceCount: asset.resourceCount, totalFileSizeBytes: asset.totalFileSizeBytes
+        )
+        try dbQueue.write { db in
+            try db.execute(sql: "UPDATE assets SET creationDateMs = ? WHERE assetFingerprint = ?",
+                arguments: [creationDateMs, fingerprint])
+        }
+        assetsByFingerprint[fingerprint] = updated
+        dirty = true
+        return updated
+    }
+
     func adoptLeftoverAsset(
         _ candidate: LeftoverAdoptionCandidate,
         backedUpAtMs: Int64 = Date().millisecondsSinceEpoch

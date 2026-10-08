@@ -258,6 +258,30 @@ final class HomeExecutionTransferTrackerTests: XCTestCase {
         XCTAssertTrue(BackupParallelExecutor.shouldEmitResultCredit(result))
     }
 
+    func testRestoredAssetCreditAdvancesProgressWithoutInflatingSpeed() throws {
+        let result = AssetProcessResult(status: .skipped, reason: "asset_restored", displayName: "Restored",
+            assetFingerprint: nil, timing: AssetProcessTiming(), totalFileSizeBytes: 700, uploadedFileSizeBytes: 0)
+        var tracker = makeTracker(totalBytes: 1_000)
+        if BackupParallelExecutor.shouldEmitResultCredit(result) {
+            let credit = try XCTUnwrap(BackupParallelExecutor.estimatedAssetTransferState(
+                assetLocalIdentifier: "restored", displayName: result.displayName,
+                totalBytes: result.totalFileSizeBytes, workerID: 2, assetPosition: 1, totalAssets: 2))
+            _ = tracker.record(credit, now: 0)
+        }
+        let restored = tracker.snapshot(now: 0)
+        XCTAssertEqual(restored.progressFraction ?? 0, 0.7, accuracy: 0.001)
+        XCTAssertNil(restored.speedBytesPerSecond)
+
+        _ = tracker.record(state(transferredBytes: 100, totalBytes: 300), now: 10)
+        let uploading = tracker.record(state(transferredBytes: 200, totalBytes: 300), now: 20)
+        XCTAssertEqual(uploading.progressFraction ?? 0, 0.9, accuracy: 0.001)
+        XCTAssertEqual(uploading.speedBytesPerSecond ?? 0, 10, accuracy: 0.001)
+        XCTAssertEqual(uploading.remainingTimeSeconds ?? 0, 10, accuracy: 0.001)
+
+        let completed = tracker.record(state(transferredBytes: 300, totalBytes: 300), now: 30)
+        XCTAssertEqual(completed.progressFraction, 1)
+    }
+
     func testItemEventFactoryUsesPlannedMonthInsteadOfCreationDateMonth() throws {
         let plan = MonthWorkItem(
             month: LibraryMonthKey(year: 2026, month: 7),

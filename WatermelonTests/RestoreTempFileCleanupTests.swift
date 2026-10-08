@@ -263,6 +263,142 @@ final class RestoreTempFileCleanupTests: XCTestCase {
         XCTAssertTrue(completion.value)
     }
 
+    func testRejectedImportReportsItemFailureAndStopsBeforeNextItem() async throws {
+        let client = InMemoryRemoteStorageClient()
+        await client.enqueueDownloadData(Data("first".utf8))
+        await client.enqueueDownloadData(Data("second".utf8))
+        let recorder = RestoreDrainRecorder()
+        let service = RestoreService(
+            makeClient: { _, _ in client },
+            importAsset: { downloaded, _ in
+                await recorder.recordImport(downloaded)
+                throw NSError(domain: "PHPhotosErrorDomain", code: 3302)
+            }
+        )
+        let items = [
+            RestoreService.RestoreItemDescriptor(
+                instances: [instance(fileName: "first.jpg", fileSize: 5)],
+                identity: Data([0x01])
+            ),
+            RestoreService.RestoreItemDescriptor(
+                instances: [instance(fileName: "second.jpg", fileSize: 6)],
+                identity: Data([0x02])
+            )
+        ]
+
+        do {
+            _ = try await service.restoreItems(
+                items: items,
+                profile: profile(),
+                password: "pw",
+                onItemFailed: { failure in
+                    await recorder.recordFailure(name: failure.displayName)
+                },
+                onItemCompleted: { index, _, item in
+                    await recorder.recordCompletion(index: index, restored: item != nil)
+                }
+            )
+            XCTFail("expected the current restore call to stop for a user decision")
+        } catch is CancellationError {
+        } catch {
+            throw error
+        }
+
+        let snapshot = await recorder.snapshot()
+        XCTAssertEqual(snapshot.failedNames, ["first.jpg"])
+        XCTAssertEqual(snapshot.importCount, 1)
+        XCTAssertTrue(snapshot.completedIndices.isEmpty)
+        let attemptPaths = await client.downloadAttemptPaths
+        XCTAssertEqual(attemptPaths, ["/p/2026/06/first.jpg"])
+        await assertDownloadedTempFilesRemoved(client, expectedCount: 1)
+    }
+
+    func testSystemicPhotoLibraryFailureDoesNotOfferItemSkip() async throws {
+        let client = InMemoryRemoteStorageClient()
+        await client.enqueueDownloadData(Data("first".utf8))
+        let prompted = RestoreDrainFlag()
+        let service = RestoreService(
+            makeClient: { _, _ in client },
+            importAsset: { _, _ in
+                throw NSError(domain: "PHPhotosErrorDomain", code: 3305)
+            }
+        )
+
+        do {
+            _ = try await service.restoreItems(
+                items: [RestoreService.RestoreItemDescriptor(
+                    instances: [instance(fileName: "first.jpg", fileSize: 5)],
+                    identity: Data([0x01])
+                )],
+                profile: profile(),
+                password: "pw",
+                onItemFailed: { _ in
+                    prompted.request()
+                },
+                onItemCompleted: { _, _, _ in }
+            )
+            XCTFail("expected a library-wide failure")
+        } catch {
+            let error = error as NSError
+            XCTAssertEqual(error.domain, "PHPhotosErrorDomain")
+            XCTAssertEqual(error.code, 3305)
+        }
+        XCTAssertFalse(prompted.value)
+        await assertDownloadedTempFilesRemoved(client, expectedCount: 1)
+    }
+
+    func testCorruptItemReportsFailureWithoutImportingOrStartingNextItem() async throws {
+        let client = InMemoryRemoteStorageClient()
+        await client.enqueueDownloadData(Data("bad".utf8))
+        await client.enqueueDownloadData(Data("good".utf8))
+        let recorder = RestoreDrainRecorder()
+        let service = RestoreService(
+            makeClient: { _, _ in client },
+            importAsset: { downloaded, _ in
+                await recorder.recordImport(downloaded)
+                return "restored-good"
+            }
+        )
+        let corrupt = RemoteAssetResourceInstance(
+            role: 1,
+            slot: 0,
+            resourceHash: Data(repeating: 0, count: 32),
+            fileName: "corrupt.jpg",
+            fileSize: 3,
+            remoteRelativePath: "2026/06/corrupt.jpg",
+            creationDateMs: nil
+        )
+
+        do {
+            _ = try await service.restoreItems(
+                items: [
+                    RestoreService.RestoreItemDescriptor(instances: [corrupt], identity: Data([0x01])),
+                    RestoreService.RestoreItemDescriptor(
+                        instances: [instance(fileName: "good.jpg", fileSize: 4)],
+                        identity: Data([0x02])
+                    )
+                ],
+                profile: profile(),
+                password: "pw",
+                onItemFailed: { failure in
+                    await recorder.recordFailure(name: failure.displayName)
+                },
+                onItemCompleted: { _, _, _ in }
+            )
+            XCTFail("expected the current restore call to stop for a user decision")
+        } catch is CancellationError {
+        } catch {
+            throw error
+        }
+
+        let snapshot = await recorder.snapshot()
+        XCTAssertEqual(snapshot.failedNames, ["corrupt.jpg"])
+        XCTAssertEqual(snapshot.importCount, 0)
+        let attemptPaths = await client.downloadAttemptPaths
+        XCTAssertEqual(attemptPaths, ["/p/2026/06/corrupt.jpg"])
+        await assertDownloadedTempFilesRemoved(client, expectedCount: 1)
+    }
+
     @MainActor
     func testDownloadWorkflowForwardsDrainToRestoreService() async throws {
         let directory = FileManager.default.temporaryDirectory
@@ -354,6 +490,7 @@ private final class DrainObservingRestoreService: RestoreItemsServing, @unchecke
         password _: String,
         shouldDrain: @escaping @Sendable () -> Bool,
         onTransferState _: (nonisolated(nonsending) @Sendable (BackupTransferState) async -> Void)?,
+        onItemFailed _: (nonisolated(nonsending) @Sendable (RestoreItemFailure) async -> Void)?,
         onItemCompleted _: nonisolated(nonsending) @Sendable (Int, Int, RestoreService.RestoredItem?) async throws -> Void
     ) async throws -> [RestoreService.RestoredItem] {
         if shouldDrain() {
@@ -368,6 +505,7 @@ private actor RestoreDrainRecorder {
     private var importSawDownloadedFile = false
     private var completedIndices: [Int] = []
     private var restoredCompletionCount = 0
+    private var failedNames: [String] = []
 
     func recordImport(_ downloaded: [(RemoteAssetResourceInstance, URL)]) {
         importCount += 1
@@ -379,7 +517,11 @@ private actor RestoreDrainRecorder {
         if restored { restoredCompletionCount += 1 }
     }
 
-    func snapshot() -> (importCount: Int, importSawDownloadedFile: Bool, completedIndices: [Int], restoredCompletionCount: Int) {
-        (importCount, importSawDownloadedFile, completedIndices, restoredCompletionCount)
+    func recordFailure(name: String) {
+        failedNames.append(name)
+    }
+
+    func snapshot() -> (importCount: Int, importSawDownloadedFile: Bool, completedIndices: [Int], restoredCompletionCount: Int, failedNames: [String]) {
+        (importCount, importSawDownloadedFile, completedIndices, restoredCompletionCount, failedNames)
     }
 }

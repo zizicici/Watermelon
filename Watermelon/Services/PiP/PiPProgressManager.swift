@@ -23,6 +23,7 @@ final class PiPProgressManager: NSObject {
     private var isPiPShowing = false
     private var isFinished = false
     private var isPaused = false
+    private var needsUserDecision = false
 
     private var currentStatusText = ""
     private var currentElapsedText = ""
@@ -75,6 +76,7 @@ final class PiPProgressManager: NSObject {
         currentTransferMetrics = .inactive
         progressAccumulator.reset()
         isPaused = false
+        needsUserDecision = false
         elapsedTimeTracker.start(at: monotonicNow)
         currentElapsedText = formattedElapsed(0)
         if !isActive {
@@ -109,6 +111,12 @@ final class PiPProgressManager: NSObject {
         elapsedTimeTracker.setPaused(paused, at: now)
         currentElapsedText = formattedElapsed(elapsedTimeTracker.elapsed(at: now))
         isPaused = paused
+        if isActive { pushFrame() }
+    }
+
+    func setNeedsUserDecision(_ needsDecision: Bool) {
+        guard hasActiveTask, needsUserDecision != needsDecision else { return }
+        needsUserDecision = needsDecision
         if isActive { pushFrame() }
     }
 
@@ -165,6 +173,7 @@ final class PiPProgressManager: NSObject {
 
     private func finishPiP(statusText: String, tone: FinishTone) {
         hasActiveTask = false
+        needsUserDecision = false
         guard isActive, !isFinished else { return }
 
         if isPiPShowing {
@@ -258,6 +267,7 @@ final class PiPProgressManager: NSObject {
         progressAccumulator.reset()
         elapsedTimeTracker.reset()
         isPaused = false
+        needsUserDecision = false
     }
 
     // MARK: - Audio
@@ -427,9 +437,10 @@ final class PiPProgressManager: NSObject {
     private func drawStatusContent(palette: DisplayPalette) {
         let padding: CGFloat = 48
         let contentWidth = Self.pipSize.width - padding * 2
+        let decisionPending = needsUserDecision && !isFinished
 
         drawStatusLine(
-            finishedStatusText ?? currentStatusText,
+            decisionPending ? String(localized: "home.execution.paused") : finishedStatusText ?? currentStatusText,
             color: palette.text,
             accent: palette.accent,
             rect: CGRect(x: padding, y: 52, width: contentWidth, height: 38),
@@ -457,9 +468,9 @@ final class PiPProgressManager: NSObject {
         )
 
         drawCentered(
-            metricText(),
+            decisionPending ? String(localized: "pip.decision.title") : metricText(),
             baseFontSize: 24,
-            weight: .regular,
+            weight: decisionPending ? .semibold : .regular,
             monospacedDigits: false,
             color: palette.secondaryText,
             rect: CGRect(x: padding, y: 276, width: contentWidth, height: 32),
@@ -624,18 +635,19 @@ final class PiPProgressManager: NSObject {
 
     private func displayPalette() -> DisplayPalette {
         let traits = pipSourceView?.traitCollection ?? UIScreen.main.traitCollection
+        let decisionPending = needsUserDecision && !isFinished
         let surface = UIColor.materialSurface(
-            light: .Material.Green._100,
-            darkTint: .Material.Green._200,
-            darkAlpha: 0.16
+            light: decisionPending ? .Material.Orange._100 : .Material.Green._100,
+            darkTint: decisionPending ? .Material.Orange._200 : .Material.Green._200,
+            darkAlpha: decisionPending ? 0.25 : 0.16
         ).resolvedColor(with: traits)
         let text = UIColor.materialOnContainer(
-            light: .Material.Green._900,
-            dark: .Material.Green._100
+            light: decisionPending ? .Material.Orange._900 : .Material.Green._900,
+            dark: decisionPending ? .Material.Orange._100 : .Material.Green._100
         ).resolvedColor(with: traits)
         let secondaryText = UIColor.materialOnSurfaceVariant(
-            light: .Material.Green._700,
-            dark: .Material.Green._200
+            light: decisionPending ? .Material.Orange._700 : .Material.Green._700,
+            dark: decisionPending ? .Material.Orange._200 : .Material.Green._200
         ).resolvedColor(with: traits)
         let accent: UIColor
         switch finishedStatusTone {
@@ -643,6 +655,11 @@ final class PiPProgressManager: NSObject {
             accent = UIColor.materialPrimary(
                 light: .Material.Red._600,
                 dark: .Material.Red._200
+            ).resolvedColor(with: traits)
+        case .neutral where decisionPending:
+            accent = UIColor.materialPrimary(
+                light: .Material.Orange._700,
+                dark: .Material.Orange._200
             ).resolvedColor(with: traits)
         case .neutral where isFinished, .neutral where isPaused:
             accent = secondaryText

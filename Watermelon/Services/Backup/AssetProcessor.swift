@@ -3,6 +3,7 @@ import Foundation
 import Photos
 
 final class AssetProcessor: Sendable {
+    static let assetDateUpdatedReason = "asset_date_updated"
     static let smallFileThresholdBytes: Int64 = 5 * 1024 * 1024
     static let hashBufferSize = 64 * 1024
     static let transferProgressMinimumStep = 0.01
@@ -474,11 +475,27 @@ final class AssetProcessor: Sendable {
             return nil
         }
 
+        let origins = RestoreOriginIndex(try hashIndexRepository.fetchRestoreOrigins(
+            profileKey: RemoteIndexSyncService.remoteProfileKey(context.profile), assetIDs: [context.asset.localIdentifier]))
+        if let restoredFingerprint = origins.remoteFingerprints(for: context.asset.localIdentifier, localFingerprint: cachedFingerprint)
+            .sorted(by: { $0.lexicographicallyPrecedes($1) }).first(where: {
+            context.monthStore.containsAssetFingerprint($0) && !context.monthStore.isAssetIncomplete($0)
+        }) {
+            let dbStart = CFAbsoluteTimeGetCurrent()
+            let dateUpdated = try updateBackedUpAssetDate(restoredFingerprint, context: context)
+            timing.databaseSeconds += Self.elapsedSeconds(since: dbStart)
+            return AssetProcessResult(status: dateUpdated ? .success : .skipped,
+                reason: dateUpdated ? Self.assetDateUpdatedReason : "asset_restored", displayName: displayName,
+                assetFingerprint: cachedFingerprint, timing: timing,
+                totalFileSizeBytes: cachedLocalHash.totalFileSizeBytes, uploadedFileSizeBytes: 0)
+        }
+
         // Incomplete asset falls through to the full upload path so missing resources heal.
         if context.monthStore.containsAssetFingerprint(cachedFingerprint),
            !context.monthStore.isAssetIncomplete(cachedFingerprint) {
             let totalFileSizeBytes = Self.totalSizeBytes(of: context.selectedResources)
             let dbStart = CFAbsoluteTimeGetCurrent()
+            let dateUpdated = try updateBackedUpAssetDate(cachedFingerprint, context: context)
             try hashIndexRepository.upsertAssetFingerprint(
                 assetLocalIdentifier: context.asset.localIdentifier,
                 assetFingerprint: cachedFingerprint,
@@ -488,8 +505,8 @@ final class AssetProcessor: Sendable {
             )
             timing.databaseSeconds += Self.elapsedSeconds(since: dbStart)
             return AssetProcessResult(
-                status: .skipped,
-                reason: "asset_exists_cached",
+                status: dateUpdated ? .success : .skipped,
+                reason: dateUpdated ? Self.assetDateUpdatedReason : "asset_exists_cached",
                 displayName: displayName,
                 assetFingerprint: cachedFingerprint,
                 timing: timing,
@@ -552,6 +569,12 @@ final class AssetProcessor: Sendable {
             totalFileSizeBytes: totalFileSizeBytes,
             uploadedFileSizeBytes: 0
         )
+    }
+
+    private func updateBackedUpAssetDate(_ fingerprint: Data, context: AssetProcessContext) throws -> Bool {
+        guard let updated = try context.monthStore.updateAssetCreationDate(context.asset.creationDate, for: fingerprint) else { return false }
+        remoteIndexService.upsertCachedAsset(updated, expectedProfileKey: RemoteIndexSyncService.remoteProfileKey(context.profile))
+        return true
     }
 
     private func roleSlotHashes(

@@ -176,7 +176,7 @@ SMB / WebDAV / S3 / SFTP / OneDrive / Dropbox / Google Drive / BrowserLink 走 `
 
 `AssetProcessor`（核心类在 `AssetProcessor.swift`，命名细节在 `+Naming`，上传策略在 `+Upload`）的关键规则：
 
-1. 先基于 `LocalHashIndexBuildService` / `ContentHashIndexRepository` 的结果尝试本地 cache 快速命中（`processWithLocalCache`）
+1. 先基于 `LocalHashIndexBuildService` / `ContentHashIndexRepository` 的结果尝试本地 cache 快速命中（`processWithLocalCache`）。内容已存在或命中还原来源时，仍比较资产拍摄日期；日期不同只更新 manifest 的资产记录与快照缓存，记为成功并随月份 flush，不重传媒体。整月跳过同样要求拍摄日期一致。
 2. 未命中时，按 `BackupAssetResourcePlanner`（`Shared/Services/Backup/`）选择资源并分配 `role/slot`
 3. 将资源导出到临时文件并计算 `SHA-256`
 4. 生成 `assetFingerprint`（`role|slot|hashHex` token 排序、`\n` 连接、再 SHA-256）
@@ -242,6 +242,13 @@ SMB / WebDAV / S3 / SFTP / OneDrive / Dropbox / Google Drive / BrowserLink 走 `
 
 1. 纯下载和 sync 月份下载阶段都以 `matchedCount`（本地月聚合中的 `backedUpCount`）为准
 2. 每个 item 成功后立即刷新本地索引，因此百分比会逐步前进
+
+### 还原资源与身份
+
+- `RestoreItemDescriptor` 携带 manifest 资产的拍摄日期；资源日期只用于缺少资产日期的兼容回退。
+- 导入组合先通过 `PHAssetCreationRequest.supportsAssetResourceTypes` 验证。缺少原始视频时优先恢复存活的视频；缺少编辑配置导致组合不受支持时恢复可用主资源，避免只保留封面或提交无效组合。
+- Photos 导入成功后，`RestoreService` 在完成回调前读取实际资源并持久化哈希。该收尾不受调用者取消影响；校验暂时失败则保留待验证来源，下次重试先验证已有资产，避免再次导入。
+- 完整且验证通过的还原关系可用于首页计数、浏览器匹配和下载去重；上传只有在对应仓库的目标月份仍保有完整源资产时才跳过。部分恢复、编辑后指纹改变、不可访问或已删除的本地资产不满足完整匹配。
 
 ## 11. 暂停 / 恢复 / 停止
 

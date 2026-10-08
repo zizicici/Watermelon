@@ -7,6 +7,7 @@ protocol RestoreItemsServing: Sendable {
         password: String,
         shouldDrain: @escaping @Sendable () -> Bool,
         onTransferState: (@Sendable (BackupTransferState) async -> Void)?,
+        onItemFailed: (@Sendable (RestoreItemFailure) async -> Void)?,
         onItemCompleted: @Sendable (Int, Int, RestoreService.RestoredItem?) async throws -> Void
     ) async throws -> [RestoreService.RestoredItem]
 }
@@ -41,14 +42,14 @@ final class DownloadWorkflowHelper {
     }
 
     /// Downloads remote-only items via RestoreService and writes hash index per item.
-    /// `isIncomplete` items are filtered out (would 404) and reported via `skippedIncompleteCount`.
     func downloadItems(
         _ remoteItems: [RemoteAlbumItem],
         context: Context,
         incompletePolicy: IncompleteDownloadPolicy,
         shouldDrain: @escaping @Sendable () -> Bool = { false },
         onTransferState: @MainActor @escaping (BackupTransferState) -> Void,
-        onItemRestored: @MainActor @escaping (String) async -> Void
+        onItemFailed: (@Sendable (RestoreItemFailure) async -> Void)? = nil,
+        onItemRestored: @MainActor @escaping (RestoreService.RestoredItem) async -> Void
     ) async -> DownloadMonthResult {
         // Incomplete records can only import their resolvable subset — a new, differently-fingerprinted asset.
         // `.createNewAsset` downloads them anyway (informed consent given upfront); `.skip` leaves them.
@@ -71,7 +72,9 @@ final class DownloadWorkflowHelper {
             let descriptors = toRestore.map { item in
                 RestoreService.RestoreItemDescriptor(
                     instances: item.instances,
-                    identity: item.assetFingerprint
+                    identity: item.assetFingerprint,
+                    creationDate: item.creationDate,
+                    isIncomplete: item.isIncomplete
                 )
             }
             let restored = try await restoreService.restoreItems(
@@ -82,27 +85,28 @@ final class DownloadWorkflowHelper {
                 onTransferState: { state in
                     await onTransferState(state)
                 },
+                onItemFailed: onItemFailed,
                 onItemCompleted: { _, _, restoredItem in
                     if let restoredItem {
-                        try await Self.writeHashIndex(
-                            assetLocalIdentifier: restoredItem.asset.localIdentifier,
-                            remoteAssetFingerprint: restoredItem.identity,
-                            instances: restoredItem.asset.importedInstances,
-                            repository: hashIndexRepository
-                        )
-                        await onItemRestored(restoredItem.asset.localIdentifier)
+                        if !restoredItem.asset.indexWriteHandled {
+                            try await Self.writeHashIndex(
+                                assetLocalIdentifier: restoredItem.asset.localIdentifier,
+                                remoteAssetFingerprint: restoredItem.identity,
+                                instances: restoredItem.asset.importedInstances,
+                                repository: hashIndexRepository
+                            )
+                        }
+                        await onItemRestored(restoredItem)
                     }
                 }
             )
             if Task.isCancelled { return .cancelled }
-            return .success(
-                restoredCount: restored.count,
-                skippedIncompleteCount: skippedIncompleteCount
-            )
+            return .success(restoredCount: restored.count, skippedIncompleteCount: skippedIncompleteCount)
         } catch {
             if Task.isCancelled || RemoteFaultLite.classify(error) == .cancelled { return .cancelled }
             let message = context.profile.userFacingStorageErrorMessage(error)
             print("[DownloadWorkflowHelper] download FAILED: itemCount=\(toRestore.count), reason=\(message)")
+            print("[DownloadWorkflowHelper] error detail: \(RestoreService.diagnosticDescription(of: error))")
             return .failed(message)
         }
     }
