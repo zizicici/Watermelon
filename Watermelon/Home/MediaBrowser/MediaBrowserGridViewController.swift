@@ -147,6 +147,10 @@ final class MediaBrowserGridViewController: UIViewController {
     // source is now stale (disconnect, or profile A→B while still connected).
     private let sessionToken: () -> AnyHashable?
     private var currentMode: MediaBrowserMode
+    private var currentFilter = MediaBrowserFilter.all
+    private var effectiveFilter: MediaBrowserFilter {
+        currentMode.availableFilters.contains(currentFilter) ? currentFilter : .all
+    }
     private var sourceLease: MediaBrowserSourceLease
     private var source: MediaBrowserSource { sourceLease.source }
     private var sourceToken: AnyHashable?
@@ -160,6 +164,20 @@ final class MediaBrowserGridViewController: UIViewController {
     private var loadGeneration = 0
     private var thumbnailReloadTracker = MediaBrowserThumbnailReloadTracker()
     private weak var segmentedControl: UISegmentedControl?
+    private lazy var filterBarButtonItem: UIBarButtonItem = {
+        let button = UIBarButtonItem(
+            image: UIImage(systemName: "line.3.horizontal.decrease.circle"),
+            menu: UIMenu()
+        )
+        button.accessibilityLabel = String(localized: "mediaBrowser.filter")
+        return button
+    }()
+    private lazy var selectionBarButtonItem = UIBarButtonItem(
+        title: String(localized: "mediaBrowser.select"),
+        style: .plain,
+        target: self,
+        action: #selector(enterSelection)
+    )
 
     private var isSelecting = false
     private var selectedItemIDs: Set<MediaBrowserItemID> = []
@@ -260,6 +278,13 @@ final class MediaBrowserGridViewController: UIViewController {
             @unknown default:
                 break
             }
+        }
+
+        if effectiveFilter != .all {
+            return makeAlbumEmptyStateView(
+                title: String(localized: "mediaBrowser.filter.empty.title"),
+                message: String(localized: "mediaBrowser.filter.empty.message")
+            )
         }
 
         let title: String
@@ -383,7 +408,7 @@ final class MediaBrowserGridViewController: UIViewController {
     override func viewDidLoad() {
         super.viewDidLoad()
         view.backgroundColor = .appBackground
-        configureNavigationTitle()
+        configureNavigation()
         configureModeSwitcher()
         configureTransferTopBar()
         configureBatchBar()
@@ -392,6 +417,7 @@ final class MediaBrowserGridViewController: UIViewController {
         configureTransferFileSelection()
         configureDataSource()
         actionRunner.onActionStateChanged = { [weak self] isRunning in
+            self?.updateSelectBarButton()
             guard !isRunning else { return }
             self?.flushDeferredReloadIfNeeded()
         }
@@ -668,6 +694,7 @@ final class MediaBrowserGridViewController: UIViewController {
         browserSession.reset()
         collectionView.backgroundView = nil
         applySnapshot()
+        updateSelectBarButton()
         load(trigger: trigger)
     }
 
@@ -683,6 +710,10 @@ final class MediaBrowserGridViewController: UIViewController {
         collectionView.backgroundColor = .appBackground
         collectionView.alwaysBounceVertical = true
         collectionView.contentInsetAdjustmentBehavior = .always
+        if #available(iOS 26.0, *) {
+            // Preserve the floating month header appearance across changes to the automatic edge style.
+            collectionView.topEdgeEffect.style = .soft
+        }
         collectionView.allowsMultipleSelection = true
         // Avoid spawning thumbnail tasks for far off-screen cells during fast scrolling; cells that do
         // scroll past are recycled and cancel their in-flight request (renderLocalThumbnail is cancellable).
@@ -761,6 +792,7 @@ final class MediaBrowserGridViewController: UIViewController {
         let generation = loadGeneration
         let thumbnailReloadGeneration = thumbnailReloadTracker.requestedGeneration
         let source = source
+        let filter = effectiveFilter
         let trace = MediaBrowserLoadTrace.makeContext(mode: source.mode)
         MediaBrowserLoadTrace.emit(
             "start",
@@ -807,7 +839,7 @@ final class MediaBrowserGridViewController: UIViewController {
                     return
                 }
                 let snapshot = await withCancellableDetachedValue(priority: .userInitiated) {
-                    MediaBrowserSnapshot(sections: content.sections)
+                    MediaBrowserSnapshot(sections: content.sections, filter: filter)
                 }
                 let itemCount = snapshot.itemCount
                 MediaBrowserLoadTrace.emit(
@@ -938,9 +970,10 @@ final class MediaBrowserGridViewController: UIViewController {
 
     // MARK: - Multi-select
 
-    private func configureNavigationTitle() {
+    private func configureNavigation() {
         guard selectionAction == nil else { return }
         title = navTitle
+        navigationItem.rightBarButtonItems = [selectionBarButtonItem, filterBarButtonItem]
     }
 
     private func configureTransferTopBar() {
@@ -2099,17 +2132,27 @@ final class MediaBrowserGridViewController: UIViewController {
             updateTransferOptionsButton()
             return
         }
-        if isSelecting {
-            navigationItem.rightBarButtonItem = UIBarButtonItem(
-                barButtonSystemItem: .cancel,
-                target: self,
-                action: #selector(exitSelection)
-            )
-        } else if !months.isEmpty {
-            navigationItem.rightBarButtonItem = UIBarButtonItem(title: String(localized: "mediaBrowser.select"), style: .plain, target: self, action: #selector(enterSelection))
-        } else {
-            navigationItem.rightBarButtonItem = nil
-        }
+        filterBarButtonItem.menu = UIMenu(options: .singleSelection, children: currentMode.availableFilters.map { filter in
+            UIAction(title: filter.title, state: effectiveFilter == filter ? .on : .off) { [weak self] _ in
+                self?.setFilter(filter)
+            }
+        })
+        filterBarButtonItem.isEnabled = !isAnyActionRunning
+        filterBarButtonItem.accessibilityValue = effectiveFilter.title
+        selectionBarButtonItem.title = isSelecting
+            ? String(localized: "common.cancel")
+            : String(localized: "mediaBrowser.select")
+        selectionBarButtonItem.action = isSelecting ? #selector(exitSelection) : #selector(enterSelection)
+        selectionBarButtonItem.isEnabled = isSelecting || !months.isEmpty
+    }
+
+    private func setFilter(_ filter: MediaBrowserFilter) {
+        guard currentMode.availableFilters.contains(filter), filter != currentFilter, !defersSnapshotReload else { return }
+        exitSelection()
+        currentFilter = filter
+        pendingScrollMonth = nil
+        updateSelectBarButton()
+        load(trigger: "filter")
     }
 
     @objc private func enterSelection() {

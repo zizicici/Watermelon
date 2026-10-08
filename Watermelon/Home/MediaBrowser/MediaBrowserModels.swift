@@ -11,6 +11,39 @@ enum MediaBrowserMode: Hashable, Sendable {
     case local
     case remote
     case merged
+
+    var availableFilters: [MediaBrowserFilter] {
+        switch self {
+        case .local: [.all, .localOnly, .backedUp]
+        case .remote: [.all, .remoteOnly]
+        case .merged: [.all, .localOnly, .remoteOnly]
+        }
+    }
+}
+
+enum MediaBrowserFilter: Sendable {
+    case all
+    case localOnly
+    case backedUp
+    case remoteOnly
+
+    var title: String {
+        switch self {
+        case .all: String(localized: "mediaBrowser.filter.all")
+        case .localOnly: String(localized: "mediaBrowser.filter.localOnly")
+        case .backedUp: String(localized: "mediaBrowser.filter.backedUp")
+        case .remoteOnly: String(localized: "mediaBrowser.filter.remoteOnly")
+        }
+    }
+
+    func includes(_ item: MediaBrowserItem) -> Bool {
+        switch self {
+        case .all: true
+        case .localOnly: item.presence == .localOnly
+        case .backedUp: item.presence == .both
+        case .remoteOnly: item.presence == .remoteOnly
+        }
+    }
 }
 
 enum MediaBrowserItemID: Hashable, Sendable, Comparable {
@@ -269,7 +302,11 @@ struct MediaBrowserSnapshot: Sendable {
     private let sectionOffsets: [Int]
     private let itemIndexByID: [MediaBrowserItemID: Int]
 
-    init(sections: [MediaBrowserSection]) {
+    init(sections: [MediaBrowserSection], filter: MediaBrowserFilter = .all) {
+        let sections = filter == .all ? sections : sections.compactMap { section in
+            let items = section.items.filter { filter.includes($0) }
+            return items.isEmpty ? nil : MediaBrowserSection(month: section.month, items: items)
+        }
         self.sections = sections
         months = sections.map(\.month)
         let itemCount = sections.reduce(0) { $0 + $1.items.count }
