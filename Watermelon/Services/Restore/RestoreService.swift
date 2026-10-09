@@ -103,7 +103,6 @@ final class RestoreService: @unchecked Sendable {
     struct ImportedAssetSnapshot: Sendable {
         let instances: [RemoteAssetResourceInstance]
         let modificationDateMs: Int64?
-        var adjustmentData: [Data: Data] = [:]
     }
 
     struct RestoredAsset: Sendable {
@@ -297,11 +296,8 @@ final class RestoreService: @unchecked Sendable {
         let acceptedDownloaded = Self.acceptedDownloadedResources(from: downloaded)
         do {
             try Task.checkCancellation()
-            let adjustments = try Dictionary(acceptedDownloaded.filter { $0.0.role == ResourceTypeCode.adjustmentData }.map {
-                ($0.0.resourceHash, try Data(contentsOf: $0.1))
-            }, uniquingKeysWith: { first, _ in first })
-            let sourceContentFingerprint = try AssetContentFingerprint.fingerprint(
-                resources: acceptedDownloaded.map { $0.0.contentIdentityResource }, adjustmentData: adjustments)
+            let sourceContentFingerprint = AssetContentFingerprint.fingerprint(
+                resources: acceptedDownloaded.map { $0.0.contentIdentityResource })
             let localID = try await importAsset(acceptedDownloaded, group.creationDate)
             print("[RestoreService]   saveToPhotoLibrary succeeded, localID=\(localID ?? "nil")")
 
@@ -316,11 +312,11 @@ final class RestoreService: @unchecked Sendable {
                 }
                 do {
                     let snapshot = try await inspect(localID, planned)
-                    let importedContentFingerprint = try AssetContentFingerprint.fingerprint(
-                        resources: snapshot.instances.map(\.contentIdentityResource), adjustmentData: snapshot.adjustmentData)
+                    let importedContentFingerprint = AssetContentFingerprint.fingerprint(
+                        resources: snapshot.instances.map(\.contentIdentityResource))
                     try repository?.writeHashIndex(assetLocalIdentifier: localID,
-                        remoteAssetFingerprint: itemIdentity, instances: snapshot.instances,
-                        modificationDateMs: snapshot.modificationDateMs, adjustmentData: snapshot.adjustmentData)
+                        instances: snapshot.instances,
+                        modificationDateMs: snapshot.modificationDateMs)
                     let complete = !group.isIncomplete && sourceContentFingerprint == itemIdentity
                         && planned.allSatisfy { $0.resourceHash.count == 32 }
                         && sourceContentFingerprint == importedContentFingerprint
@@ -649,13 +645,9 @@ final class RestoreService: @unchecked Sendable {
         let service = PhotoLibraryService()
         let selected = BackupAssetResourcePlanner.orderedResourcesWithRoleSlot(from: PHAssetResource.assetResources(for: asset))
         var instances: [RemoteAssetResourceInstance] = []
-        var adjustments: [Data: Data] = [:]
         for entry in selected {
             let exported = try await service.exportResourceToTempFileAndDigest(entry.resource, allowNetworkAccess: false)
             defer { try? FileManager.default.removeItem(at: exported.fileURL) }
-            if entry.role == ResourceTypeCode.adjustmentData {
-                adjustments[exported.contentHash] = try Data(contentsOf: exported.fileURL)
-            }
             let source = planned.first { $0.role == entry.role && $0.slot == entry.slot }
             let fileName = PhotoLibraryService.safeOriginalFilename(for: entry.resource)
             instances.append(RemoteAssetResourceInstance(role: entry.role, slot: entry.slot,
@@ -668,7 +660,7 @@ final class RestoreService: @unchecked Sendable {
               current.modificationDate == asset.modificationDate else {
             throw NSError(domain: PHPhotosErrorDomain, code: PHPhotosError.operationInterrupted.rawValue)
         }
-        return ImportedAssetSnapshot(instances: instances, modificationDateMs: asset.modificationDate?.millisecondsSinceEpoch, adjustmentData: adjustments)
+        return ImportedAssetSnapshot(instances: instances, modificationDateMs: asset.modificationDate?.millisecondsSinceEpoch)
     }
 
     private static func saveToPhotoLibrary(

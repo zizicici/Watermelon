@@ -520,10 +520,8 @@ final class ContentHashIndexRepository: @unchecked Sendable {
 
     func writeHashIndex(
         assetLocalIdentifier: String,
-        remoteAssetFingerprint: Data,
         instances: [RemoteAssetResourceInstance],
-        modificationDateMs: Int64? = nil,
-        adjustmentData: [Data: Data] = [:]
+        modificationDateMs: Int64? = nil
     ) throws {
         let records = instances.map { instance in
             LocalAssetResourceHashRecord(
@@ -538,7 +536,7 @@ final class ContentHashIndexRepository: @unchecked Sendable {
         }
         try upsertAssetHashSnapshot(
             assetLocalIdentifier: assetLocalIdentifier,
-            assetFingerprint: try AssetContentFingerprint.fingerprint(resources: instances.map(\.contentIdentityResource), adjustmentData: adjustmentData),
+            assetFingerprint: AssetContentFingerprint.fingerprint(resources: instances.map(\.contentIdentityResource)),
             resources: records,
             totalFileSizeBytes: totalSize,
             modificationDateMs: modificationDateMs

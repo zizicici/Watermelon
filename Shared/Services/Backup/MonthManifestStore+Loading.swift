@@ -616,16 +616,14 @@ extension MonthManifestStore {
                         assetFingerprint,
                         resourceHash,
                         role,
-                        slot,
-                        fingerprintHash
-                    ) VALUES (?, ?, ?, ?, ?)
+                        slot
+                    ) VALUES (?, ?, ?, ?)
                     """,
                     arguments: [
                         link.assetFingerprint,
                         link.resourceHash,
                         link.role,
-                        link.slot,
-                        link.fingerprintHash
+                        link.slot
                     ]
                 )
             }
@@ -685,7 +683,7 @@ extension MonthManifestStore {
             links.reserveCapacity(assets.count)
             let linkCursor = try Row.fetchCursor(
                 db,
-                sql: "SELECT assetFingerprint, resourceHash, role, slot, fingerprintHash FROM asset_resources ORDER BY assetFingerprint, role, slot"
+                sql: "SELECT assetFingerprint, resourceHash, role, slot FROM asset_resources ORDER BY assetFingerprint, role, slot"
             )
             while let row = try linkCursor.next() {
                 let link = RemoteAssetResourceLink(
@@ -694,8 +692,7 @@ extension MonthManifestStore {
                     assetFingerprint: row[0],
                     resourceHash: row[1],
                     role: row[2],
-                    slot: row[3],
-                    fingerprintHash: row[4]
+                    slot: row[3]
                 )
                 links[link.assetFingerprint, default: []].append(link)
             }

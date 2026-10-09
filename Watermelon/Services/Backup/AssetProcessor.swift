@@ -204,16 +204,9 @@ final class AssetProcessor: Sendable {
             shouldRemoveTempFile = false
         }
 
-        let adjustments = try Dictionary(preparedResources.filter { $0.local.resourceRole == ResourceTypeCode.adjustmentData }.map {
-            ($0.contentHash, try Data(contentsOf: $0.tempFileURL))
-        }, uniquingKeysWith: { first, _ in first })
-        let fingerprintResources = try AssetContentFingerprint.resourceHashes(resources: preparedResources.map {
-            .init(role: $0.local.resourceRole, slot: $0.local.resourceSlot, hash: $0.contentHash)
-        }, adjustmentData: adjustments)
-        let fingerprintHashes = Dictionary(uniqueKeysWithValues: fingerprintResources.map {
-            (AssetResourceRoleSlot(role: $0.role, slot: $0.slot), $0.hash)
+        let assetFingerprint = BackupAssetResourcePlanner.assetFingerprint(resourceRoleSlotHashes: preparedResources.map {
+            (role: $0.local.resourceRole, slot: $0.local.resourceSlot, contentHash: $0.contentHash)
         })
-        let assetFingerprint = BackupAssetResourcePlanner.assetFingerprint(resourceRoleSlotHashes: fingerprintResources.map { ($0.role, $0.slot, $0.hash) })
         if context.monthStore.containsAssetFingerprint(assetFingerprint), !context.monthStore.isAssetIncomplete(assetFingerprint) {
             try hashIndexRepository.upsertAssetHashSnapshot(assetLocalIdentifier: context.asset.localIdentifier,
                 assetFingerprint: assetFingerprint, resources: preparedResources.map {
@@ -284,9 +277,7 @@ final class AssetProcessor: Sendable {
                         assetFingerprint: assetFingerprint,
                         resourceHash: prepared.contentHash,
                         role: prepared.local.resourceRole,
-                        slot: prepared.local.resourceSlot,
-                        fingerprintHash: prepared.local.resourceRole == ResourceTypeCode.adjustmentData
-                            ? fingerprintHashes[.init(role: prepared.local.resourceRole, slot: prepared.local.resourceSlot)] : nil
+                        slot: prepared.local.resourceSlot
                     )
                 )
             }
@@ -487,8 +478,7 @@ final class AssetProcessor: Sendable {
         }
 
         let cachedFingerprint = cachedLocalHash.assetFingerprint
-        if !roleSlotHashes.contains(where: { $0.role == ResourceTypeCode.adjustmentData }),
-           cachedFingerprint != BackupAssetResourcePlanner.assetFingerprint(resourceRoleSlotHashes: roleSlotHashes) { return nil }
+        if cachedFingerprint != BackupAssetResourcePlanner.assetFingerprint(resourceRoleSlotHashes: roleSlotHashes) { return nil }
 
         // Incomplete asset falls through to the full upload path so missing resources heal.
         if context.monthStore.containsAssetFingerprint(cachedFingerprint),
@@ -515,7 +505,6 @@ final class AssetProcessor: Sendable {
             )
         }
 
-        guard !roleSlotHashes.contains(where: { $0.role == ResourceTypeCode.adjustmentData }) else { return nil }
         let links = roleSlotHashes.map { item in
             RemoteAssetResourceLink(
                 year: context.monthStore.year,

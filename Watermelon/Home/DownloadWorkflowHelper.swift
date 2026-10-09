@@ -91,7 +91,6 @@ final class DownloadWorkflowHelper {
                         if !restoredItem.asset.indexWriteHandled {
                             try await Self.writeHashIndex(
                                 assetLocalIdentifier: restoredItem.asset.localIdentifier,
-                                remoteAssetFingerprint: restoredItem.identity,
                                 instances: restoredItem.asset.importedInstances,
                                 repository: hashIndexRepository
                             )
@@ -125,14 +124,12 @@ final class DownloadWorkflowHelper {
 
     private static func writeHashIndex(
         assetLocalIdentifier: String,
-        remoteAssetFingerprint: Data,
         instances: [RemoteAssetResourceInstance],
         repository: ContentHashIndexRepository
     ) async throws {
         try await Task.detached(priority: .utility) {
             try repository.writeHashIndex(
                 assetLocalIdentifier: assetLocalIdentifier,
-                remoteAssetFingerprint: remoteAssetFingerprint,
                 instances: instances
             )
         }.value

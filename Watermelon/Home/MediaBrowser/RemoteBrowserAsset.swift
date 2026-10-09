@@ -440,7 +440,7 @@ enum RemoteBrowserAssetBuilder {
 
         let fingerprintMatches = allResourcesAvailable && BackupAssetResourcePlanner.assetFingerprint(
             resourceRoleSlotHashes: links.lazy.map {
-                (role: $0.role, slot: $0.slot, contentHash: $0.assetFingerprintHash)
+                (role: $0.role, slot: $0.slot, contentHash: $0.resourceHash)
             }
         ) == assetFingerprint
         let classification = ResourceRole.classify(

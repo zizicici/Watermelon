@@ -134,10 +134,24 @@ final class DatabaseManager: @unchecked Sendable {
             let key = "local_asset_fingerprint_version"
             let version = String(AssetContentFingerprint.version)
             guard try String.fetchOne(db, sql: "SELECT stateValue FROM sync_state WHERE stateKey = ?", arguments: [key]) != version else { return }
-            try db.execute(sql: """
-                UPDATE local_assets SET assetFingerprint = NULL
+            let assets = try Row.fetchAll(db, sql: """
+                SELECT assetLocalIdentifier, resourceCount FROM local_assets
                 WHERE assetLocalIdentifier IN (SELECT assetLocalIdentifier FROM local_asset_resources WHERE role = 7)
                 """)
+            for asset in assets {
+                let id: String = asset[0]
+                let count: Int = asset[1]
+                let rows = try Row.fetchAll(db, sql: """
+                    SELECT role, slot, contentHash FROM local_asset_resources WHERE assetLocalIdentifier = ?
+                    """, arguments: [id])
+                let resources = rows.map { (role: $0[0] as Int, slot: $0[1] as Int, contentHash: $0[2] as Data) }
+                let complete = resources.count == count && resources.allSatisfy { $0.contentHash.count == 32 }
+                    && resources.contains { !ResourceRole.isMetadataOnly($0.role) }
+                let fingerprint = complete ? BackupAssetResourcePlanner.assetFingerprint(resourceRoleSlotHashes: resources) : nil
+                // Preserve cache age so Photos edits still invalidate the re-keyed snapshot.
+                try db.execute(sql: "UPDATE local_assets SET assetFingerprint = ? WHERE assetLocalIdentifier = ?",
+                    arguments: [fingerprint, id])
+            }
             try db.execute(sql: """
                 INSERT INTO sync_state (stateKey, stateValue, updatedAt) VALUES (?, ?, ?)
                 ON CONFLICT(stateKey) DO UPDATE SET stateValue = excluded.stateValue, updatedAt = excluded.updatedAt

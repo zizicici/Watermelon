@@ -483,7 +483,6 @@ final class LocalHashIndexBuildService: @unchecked Sendable {
             }
 
             var roleSlotHashes: [(role: Int, slot: Int, contentHash: Data, fileSize: Int64)] = []
-            var adjustments: [Data: Data] = [:]
             roleSlotHashes.reserveCapacity(selectedResources.count)
             var totalFileSizeBytes: Int64 = 0
 
@@ -494,9 +493,6 @@ final class LocalHashIndexBuildService: @unchecked Sendable {
                     allowNetworkAccess: allowNetworkAccess
                 )
                 defer { try? FileManager.default.removeItem(at: exported.fileURL) }
-                if selected.role == ResourceTypeCode.adjustmentData {
-                    adjustments[exported.contentHash] = try Data(contentsOf: exported.fileURL)
-                }
 
                 let localFileSize = max(
                     PhotoLibraryService.resourceFileSize(selected.resource),
@@ -511,9 +507,9 @@ final class LocalHashIndexBuildService: @unchecked Sendable {
                 ))
             }
 
-            let fingerprint = try AssetContentFingerprint.fingerprint(resources: roleSlotHashes.map {
+            let fingerprint = AssetContentFingerprint.fingerprint(resources: roleSlotHashes.map {
                 .init(role: $0.role, slot: $0.slot, hash: $0.contentHash)
-            }, adjustmentData: adjustments)
+            })
 
             try repository.upsertAssetHashSnapshot(
                 assetLocalIdentifier: asset.localIdentifier,

@@ -68,7 +68,7 @@ final class RestorePhotoKitIntegrationTests: XCTestCase {
         #endif
     }
 
-    func testMigrationPreservesCopiedLibraryAndInvalidatesLegacyAdjustmentHashes() throws {
+    func testMigrationPreservesCopiedLibraryAndRekeysCachedHashes() throws {
         #if targetEnvironment(simulator)
         let fixtures = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("RestoreSimulatorMatrixFixtures")
@@ -90,10 +90,17 @@ final class RestorePhotoKitIntegrationTests: XCTestCase {
         try migrated.read { db in
             XCTAssertEqual(try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM local_assets"), before.0)
             XCTAssertEqual(try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM local_asset_resources"), before.1)
-            XCTAssertEqual(try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM local_assets WHERE assetFingerprint IS NOT NULL AND assetLocalIdentifier IN (SELECT assetLocalIdentifier FROM local_asset_resources WHERE role = 7)"), 0)
+            let assets = try Row.fetchAll(db, sql: "SELECT assetLocalIdentifier, assetFingerprint FROM local_assets WHERE assetFingerprint IS NOT NULL AND assetLocalIdentifier IN (SELECT assetLocalIdentifier FROM local_asset_resources WHERE role = 7)")
+            for asset in assets {
+                let resources = try Row.fetchAll(db, sql: "SELECT role, slot, contentHash FROM local_asset_resources WHERE assetLocalIdentifier = ?", arguments: [asset[0] as String])
+                let expected = BackupAssetResourcePlanner.assetFingerprint(resourceRoleSlotHashes: resources.map {
+                    (role: $0[0] as Int, slot: $0[1] as Int, contentHash: $0[2] as Data)
+                })
+                XCTAssertEqual(asset[1] as Data, expected)
+            }
             XCTAssertEqual(try String.fetchOne(db, sql: "PRAGMA integrity_check"), "ok")
         }
-        print("RESTORE_MIGRATION assets=\(before.0) resources=\(before.1) invalidated=\(before.2)")
+        print("RESTORE_MIGRATION assets=\(before.0) resources=\(before.1) rekeyCandidates=\(before.2)")
         #else
         throw XCTSkip("Simulator-only fixture")
         #endif
@@ -107,7 +114,7 @@ final class RestorePhotoKitIntegrationTests: XCTestCase {
         }
         let instances = fixture.resources.map(\.instance)
         let expected = fixture.expectedResources.map(\.instance)
-        let expectedFingerprint = try fingerprint(expected, adjustmentData: adjustmentData(fixture.expectedResources, directory: directory))
+        let expectedFingerprint = fingerprint(expected)
         let profile = ServerProfileRecord(id: nil, name: "fixture", storageType: StorageType.webdav.rawValue,
             connectionParams: nil, sortOrder: 0, host: "fixture.local", port: 0, shareName: "fixture", basePath: "/p",
             username: "fixture", domain: nil, credentialRef: "fixture", backgroundBackupEnabled: false,
@@ -120,7 +127,7 @@ final class RestorePhotoKitIntegrationTests: XCTestCase {
         let profileKey = RemoteIndexSyncService.remoteProfileKey(profile)
         let service = RestoreService(makeClient: { _, _ in client }, hashIndexRepository: repository)
         let restored = try await service.restoreItems(
-            items: [.init(instances: instances, identity: try fingerprint(instances, adjustmentData: adjustmentData(fixture.resources, directory: directory)), creationDate: fixture.creationDateMs.map { Date(millisecondsSinceEpoch: $0) })], profile: profile,
+            items: [.init(instances: instances, identity: fingerprint(instances), creationDate: fixture.creationDateMs.map { Date(millisecondsSinceEpoch: $0) })], profile: profile,
             password: "", onItemCompleted: { _, _, _ in }
         )
         let item = try XCTUnwrap(restored.first)
@@ -138,7 +145,6 @@ final class RestorePhotoKitIntegrationTests: XCTestCase {
         let selected = BackupAssetResourcePlanner.orderedResourcesWithRoleSlot(from: PHAssetResource.assetResources(for: asset))
         XCTAssertEqual(selected.map(\.role).sorted(), expected.map(\.role).sorted(), fixture.id)
         var tokens: [(role: Int, slot: Int, contentHash: Data)] = []
-        var importedAdjustments: [Data: Data] = [:]
         var checks: [[String: Any]] = []
         var mediaMatches = true
         for entry in selected {
@@ -152,52 +158,29 @@ final class RestorePhotoKitIntegrationTests: XCTestCase {
             let original = try XCTUnwrap(fixture.expectedResources.first { $0.role == entry.role && $0.slot == entry.slot })
             let hash = try AssetProcessor.contentHash(of: url)
             let matches = hash.hexString == original.hash
-            var check: [String: Any] = ["role": entry.role, "slot": entry.slot, "sha256Matches": matches]
+            let check: [String: Any] = ["role": entry.role, "slot": entry.slot, "sha256Matches": matches]
             if entry.role != ResourceTypeCode.adjustmentData {
                 XCTAssertTrue(matches, "\(fixture.id) role=\(entry.role)")
                 mediaMatches = mediaMatches && matches
-            } else if !matches {
-                let before = try XCTUnwrap(try PropertyListSerialization.propertyList(
-                    from: Data(contentsOf: directory.appendingPathComponent(original.fixturePath)), format: nil
-                ) as? [String: Any])
-                let after = try XCTUnwrap(try PropertyListSerialization.propertyList(
-                    from: Data(contentsOf: url), format: nil
-                ) as? [String: Any])
-                let changed = Set(before.keys).union(after.keys).filter {
-                    !NSDictionary(dictionary: ["value": before[$0] ?? NSNull()]).isEqual(to: ["value": after[$0] ?? NSNull()])
-                }.sorted()
-                check["changedPlistKeys"] = changed
-                XCTAssertTrue(Set(changed).isSubset(of: ["adjustmentTimestamp", "adjustmentRenderTypes"]), fixture.id)
-                let output = directory.appendingPathComponent("\(fixture.id)-imported-adjustment.plist")
-                try Data(contentsOf: url).write(to: output, options: .atomic)
             }
-            if entry.role == 7 { importedAdjustments[hash] = try Data(contentsOf: url) }
             checks.append(check)
             tokens.append((entry.role, entry.slot, hash))
         }
-        let importedFingerprint = try AssetContentFingerprint.fingerprint(resources: tokens.map { .init(role: $0.role, slot: $0.slot, hash: $0.contentHash) }, adjustmentData: importedAdjustments)
+        let importedFingerprint = AssetContentFingerprint.fingerprint(resources: tokens.map { .init(role: $0.role, slot: $0.slot, hash: $0.contentHash) })
         XCTAssertEqual(importedFingerprint, expectedFingerprint, fixture.id)
         let ids: Set<String> = [item.asset.localIdentifier]
         let initial = try XCTUnwrap(repository.fetchAssetHashCaches(assetIDs: ids)[item.asset.localIdentifier])
         XCTAssertEqual(initial.assetFingerprint, importedFingerprint, fixture.id)
-        let sourceAdjustmentData = try adjustmentData(fixture.resources, directory: directory)
-        let sourceFingerprint = try fingerprint(instances, adjustmentData: sourceAdjustmentData)
+        let sourceFingerprint = fingerprint(instances)
         let complete = expectedFingerprint == sourceFingerprint
         XCTAssertEqual(item.asset.isCompleteRestore, complete, fixture.id)
-        let hasAdjustment = tokens.contains { $0.role == ResourceTypeCode.adjustmentData }
         try database.write { db in
             try db.execute(sql: "DELETE FROM sync_state WHERE stateKey = 'local_asset_fingerprint_version'")
         }
         let restartedRepository = ContentHashIndexRepository(databaseManager: try DatabaseManager(databaseURL: dbDirectory.appendingPathComponent("index.sqlite")))
-        if hasAdjustment {
-            XCTAssertEqual(try restartedRepository.fetchInvalidatedFingerprintAssetIDs(), ids)
-            let validationWorker = HomeDataProcessingWorker(photoLibraryService: PhotoLibraryService(),
-                contentHashIndexRepository: restartedRepository, remoteMonthSnapshot: { _ in nil })
-            let loaded = await validationWorker.loadLocalIndex(forceReload: true, scope: .device(.all))
-            XCTAssertTrue(loaded.fingerprintValidationAssetIDs.isSuperset(of: ids))
-        } else {
-            try restartedRepository.clearLocalHashIndex()
-        }
+        XCTAssertTrue(try restartedRepository.fetchInvalidatedFingerprintAssetIDs().isEmpty)
+        XCTAssertEqual(try restartedRepository.fetchAssetHashCaches(assetIDs: ids)[item.asset.localIdentifier]?.assetFingerprint, importedFingerprint)
+        try restartedRepository.clearLocalHashIndex()
         let builder = LocalHashIndexBuildService(photoLibraryService: PhotoLibraryService(), repository: restartedRepository)
         try await LocalDownloadIndexPreflight.run(
             assetIDs: ids, buildService: builder, iCloudPhotoBackupMode: .disable,
@@ -212,8 +195,7 @@ final class RestorePhotoKitIntegrationTests: XCTestCase {
             creationDateMs: asset.creationDate?.millisecondsSinceEpoch, backedUpAtMs: 0, resourceCount: instances.count,
             totalFileSizeBytes: instances.reduce(0) { $0 + $1.fileSize })
         let links = instances.map { RemoteAssetResourceLink(year: month.year, month: month.month,
-            assetFingerprint: sourceFingerprint, resourceHash: $0.resourceHash, role: $0.role, slot: $0.slot,
-                fingerprintHash: $0.role == 7 ? AssetContentFingerprint.adjustmentHash(sourceAdjustmentData[$0.resourceHash]!, roles: Set(instances.map(\.role))) : nil) }
+            assetFingerprint: sourceFingerprint, resourceHash: $0.resourceHash, role: $0.role, slot: $0.slot) }
         var destinationProfile = profile
         destinationProfile.host = "second-fixture.local"
         let destinationKey = RemoteIndexSyncService.remoteProfileKey(destinationProfile)
@@ -308,8 +290,7 @@ final class RestorePhotoKitIntegrationTests: XCTestCase {
                 fileName: resource.fileName, fileSize: resource.fileSize,
                 remoteRelativePath: "2026/01/" + resource.fileName, creationDateMs: oldDate.millisecondsSinceEpoch)
         }
-        let sourceAdjustmentData = try adjustmentData(fixture.resources, directory: directory)
-        let remoteFingerprint = try fingerprint(instances, adjustmentData: sourceAdjustmentData)
+        let remoteFingerprint = fingerprint(instances)
         let client = InMemoryRemoteStorageClient()
         await client.seedDirectory("/p/2026/01")
         for (instance, resource) in zip(instances, fixture.resources) {
@@ -353,8 +334,7 @@ final class RestorePhotoKitIntegrationTests: XCTestCase {
         try store.upsertAsset(.init(year: 2026, month: 1, assetFingerprint: remoteFingerprint,
             creationDateMs: oldDate.millisecondsSinceEpoch, backedUpAtMs: 0, resourceCount: instances.count,
             totalFileSizeBytes: instances.reduce(0) { $0 + $1.fileSize }), links: instances.map {
-                .init(year: 2026, month: 1, assetFingerprint: remoteFingerprint, resourceHash: $0.resourceHash, role: $0.role, slot: $0.slot,
-                    fingerprintHash: $0.role == 7 ? AssetContentFingerprint.adjustmentHash(sourceAdjustmentData[$0.resourceHash]!, roles: Set(instances.map(\.role))) : nil)
+                .init(year: 2026, month: 1, assetFingerprint: remoteFingerprint, resourceHash: $0.resourceHash, role: $0.role, slot: $0.slot)
             })
         _ = try await store.flushToRemote()
         let uploadsBefore = await client.uploadedPaths.count
@@ -402,15 +382,7 @@ final class RestorePhotoKitIntegrationTests: XCTestCase {
         print("DATE_ROUND_TRIP \(fixture.id) date=\(newDate.millisecondsSinceEpoch) mediaUploads=0 repeatWrites=0")
     }
 
-    private func adjustmentData(_ resources: [Resource], directory: URL) throws -> [Data: Data] {
-        var bytes: [Data: Data] = [:]
-        for resource in resources where resource.role == 7 {
-            bytes[resource.instance.resourceHash] = try Data(contentsOf: directory.appendingPathComponent(resource.fixturePath))
-        }
-        return bytes
-    }
-
-    private func fingerprint(_ instances: [RemoteAssetResourceInstance], adjustmentData: [Data: Data]) throws -> Data {
-        try AssetContentFingerprint.fingerprint(resources: instances.map(\.contentIdentityResource), adjustmentData: adjustmentData)
+    private func fingerprint(_ instances: [RemoteAssetResourceInstance]) -> Data {
+        AssetContentFingerprint.fingerprint(resources: instances.map(\.contentIdentityResource))
     }
 }

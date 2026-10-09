@@ -281,7 +281,6 @@ final class MediaBrowserActionRunner {
                             try await Task.detached(priority: .utility) {
                                 try repo.writeHashIndex(
                                     assetLocalIdentifier: restoredItem.asset.localIdentifier,
-                                    remoteAssetFingerprint: restoredItem.identity,
                                     instances: restoredItem.asset.importedInstances
                                 )
                             }.value
@@ -1138,7 +1137,6 @@ final class MediaBrowserActionRunner {
                             try await Task.detached(priority: .utility) {
                                 try repo.writeHashIndex(
                                     assetLocalIdentifier: restoredItem.asset.localIdentifier,
-                                    remoteAssetFingerprint: restoredItem.identity,
                                     instances: restoredItem.asset.importedInstances
                                 )
                             }.value

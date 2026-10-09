@@ -120,7 +120,7 @@ ON local_asset_resources(contentHash);
 
 ### 指纹算法缓存版本
 
-本地数据库保持 v7，不新增表。`sync_state.local_asset_fingerprint_version` 标记当前算法版本（1）。首次使用新算法时，在同一事务中清空带 `adjustmentData` 资源的 `local_assets.assetFingerprint` 并写入版本标记；资产行、资源哈希和普通媒体缓存保留。Home 加载时将有资源哈希但指纹为空的可见资产加入离线自动重建队列，不包括仅缓存文件大小的记录。浏览器单项和批量下载会先预检整个可访问图库的索引；第一轮离线，允许 iCloud 原件时再处理云端资源，索引仍不完整则终止下载，避免将未知指纹误判为本地不存在。
+本地数据库保持 v7，不新增表。`sync_state.local_asset_fingerprint_version` 标记当前算法版本（1）。首次使用新算法时，在同一事务中使用已缓存的非 AAE 资源哈希重算受影响资产的 `local_assets.assetFingerprint` 并写入版本标记；资产行、全部资源哈希、缓存时间和普通媒体缓存保留。资源哈希记录不完整的资产才清空指纹，等待正常预检补齐。Home 加载时将有资源哈希但指纹为空的可见资产加入离线自动重建队列，不包括仅缓存文件大小的记录。浏览器单项和批量下载会先预检整个可访问图库的索引；第一轮离线，允许 iCloud 原件时再处理云端资源，索引仍不完整则终止下载，避免将未知指纹误判为本地不存在。
 
 `assetFingerprint` 本身就是跨设备、跨仓库的内容身份，不保存还原来源、原始指纹映射或待完成导入记录。
 
@@ -324,7 +324,6 @@ CREATE TABLE asset_resources (
   resourceHash BLOB NOT NULL,
   role INTEGER NOT NULL,
   slot INTEGER NOT NULL,
-  fingerprintHash BLOB,
   PRIMARY KEY(assetFingerprint, role, slot)
 );
 
@@ -354,26 +353,26 @@ ON asset_resources(resourceHash);
 
 1. 连接逻辑资产与资源 hash
 2. 保留 `role / slot`，方便重建资源实例与媒体类型判定
-3. `resourceHash` 始终保存文件完整字节 SHA-256；编辑描述的 `fingerprintHash` 保存规范化后的哈希。其他角色该列为 NULL，指纹计算回退到 `resourceHash`
+3. `resourceHash` 始终保存文件完整字节 SHA-256，包括 AAE；不增加额外的匹配哈希列。
 
 ## 6. `assetFingerprint` 计算规则
 
 当前规则：
 
-1. 对每个资源生成 token：`role|slot|hashHex`；编辑描述使用规范化哈希，其他资源使用完整字节哈希
+1. 排除 `adjustmentData`（role 7 / AAE），对其余资源的原始哈希生成 token：`role|slot|hashHex`
 2. token 排序
 3. 用 `\n` 连接
 4. 对最终字符串做 SHA-256
 
-编辑描述解析后排除外层 `adjustmentTimestamp`，其他字段采用带类型、按键排序的稳定编码。仅对角色集合 `[2,5,6,7]`、格式 `com.apple.photo` / `1.6`，将已验证等价的 `adjustmentRenderTypes` 值 `16384` 和 `18944` 归一；实际编辑参数、格式、版本、未知字段继续参与计算。无法识别的描述回退到完整字节哈希。
+按 `adjustmentData` 类型排除，覆盖 AAE、Adjustments.plist 等编辑描述，不依赖文件扩展名；这些描述的内容和存在与否不参与资产指纹。AAE 仍作为完整备份资源上传、下载、校验并传入 Photos；如果只有 AAE 变化而媒体资源相同，则视为同一个资产。
 
 ### 1.11.0 远端格式升级
 
 `.watermelon/version.json` 使用 `format_version: 3`、`min_app_version: "1.11.0"`。1.10 及更早的 Lite 客户端只接受格式 2，因此拒绝使用格式 3。新客户端将格式 2 或带 `upgrade_pending: true` 的格式 3 路由到现有升级流程。
 
-连接升级取得现有写权限后，先发布并回读格式 3 的升级中标记，再逐月补齐 `fingerprintHash`、重算资产主键和链接。仅下载需要转换的编辑描述并校验原始 SHA-256；媒体文件及资源哈希不变。月份使用原有临时文件发布和回读校验，成功后将 SQLite `user_version` 设为算法版本 1。全部月份成功后发布完整版本标记。远端快照磁盘缓存版本提升到 2，升级连接同时清空该节点的旧缓存。
+连接升级取得现有写权限后，先发布并回读格式 3 的升级中标记，再逐月直接使用数据库中的非 AAE 资源哈希重算资产主键和链接。不下载任何资源文件，不增加数据库列；照片、视频和 AAE 文件及资源哈希不变。月份使用原有临时文件发布和回读校验，成功后将 SQLite `user_version` 设为算法版本 1。全部月份成功后发布完整版本标记。远端快照磁盘缓存版本提升到 2，升级连接同时清空该节点的旧缓存。
 
-升级检查允许应用已有的 `.watermelon/thumbs` 目录。编辑描述下载明确返回文件不存在时，沿用现有 reconcile 规则移除缺失资源行，保留仍有媒体的部分资产及原指纹、链接，再继续转换其他完整资产。网络、权限和完整性错误仍会阻止升级完成。
+升级检查允许应用已有的 `.watermelon/thumbs` 目录。原本不完整或指纹与旧资源链接不一致的资产保留原记录，不通过重算将其伪装成完整资产；正常资源核对仍由现有 reconcile / 维护流程负责。月份清单读取、发布和回读校验失败会阻止升级完成。
 
 V1 仓库先沿用原有逐字节复制、校验和旧 manifest 清理，再执行上述指纹升级。失败不发布完整版本，已转换月份可在下次连接时复用；没有新增本地升级任务表。
 

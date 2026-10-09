@@ -10,7 +10,7 @@ final class RestoreCompletionTests: XCTestCase {
             createdAt: Date(), updatedAt: Date(), writerID: nil)
     }
 
-    func testImportPersistsActualHashesAndNormalizedFingerprintDespiteCancellation() async throws {
+    func testImportPreservesAdjustmentAndPersistsMediaFingerprintDespiteCancellation() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -31,18 +31,19 @@ final class RestoreCompletionTests: XCTestCase {
             actual.append(instance(role == 7 ? actualAdjustment : bytes))
         }
         let imported = actual
-        let remoteFingerprint = try AssetContentFingerprint.fingerprint(resources: source.map(\.contentIdentityResource), adjustmentData: [ContentIdentityFixtures.hash(sourceAdjustment): sourceAdjustment])
-        let actualFingerprint = try AssetContentFingerprint.fingerprint(resources: actual.map(\.contentIdentityResource), adjustmentData: [ContentIdentityFixtures.hash(actualAdjustment): actualAdjustment])
+        let remoteFingerprint = AssetContentFingerprint.fingerprint(resources: source.map(\.contentIdentityResource))
+        let actualFingerprint = AssetContentFingerprint.fingerprint(resources: actual.map(\.contentIdentityResource))
         let expectedDate = Date(timeIntervalSince1970: 123_456)
         let modified = Date().millisecondsSinceEpoch - 1_000
-        let service = RestoreService(makeClient: { _, _ in client }, importAsset: { _, date in
+        let service = RestoreService(makeClient: { _, _ in client }, importAsset: { downloaded, date in
+            XCTAssertEqual(downloaded.map { $0.0.role }, [2, 5, 6, 7])
+            XCTAssertEqual(try Data(contentsOf: XCTUnwrap(downloaded.last?.1)), sourceAdjustment)
             XCTAssertEqual(date, expectedDate)
             withUnsafeCurrentTask { $0?.cancel() }
             return "restored"
         }, inspectImportedAsset: { _, _ in
             XCTAssertFalse(Task.isCancelled)
-            return .init(instances: imported, modificationDateMs: modified,
-                adjustmentData: [ContentIdentityFixtures.hash(actualAdjustment): actualAdjustment])
+            return .init(instances: imported, modificationDateMs: modified)
         }, hashIndexRepository: repository)
         let profile = profile()
         let item = RestoreService.RestoreItemDescriptor(instances: source, identity: remoteFingerprint, creationDate: expectedDate)
@@ -56,6 +57,7 @@ final class RestoreCompletionTests: XCTestCase {
         XCTAssertEqual(restored.count, 1)
         XCTAssertEqual(remoteFingerprint, actualFingerprint)
         XCTAssertNotEqual(source.last?.resourceHash, actual.last?.resourceHash)
+        XCTAssertEqual(try repository.fetchAssetHashCaches(assetIDs: ["restored"])["restored"]?.hashesByRoleSlot[.init(role: 7, slot: 0)], actual.last?.resourceHash)
     }
 
     func testInspectionFailureDoesNotRecordUnverifiedSourceHashes() async throws {

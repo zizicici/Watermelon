@@ -41,7 +41,7 @@ iOS photo-backup app: reads `PHAsset`, writes to `SMB` / `WebDAV` / `S3`-compati
 
 - Home selection is disabled when not connected, photo access missing, execution active, scope reloading, or remote maintenance running.
 - Local hash-index preflight runs before any download / sync execution. First round is always offline; iCloud-only assets get a network-allowed second pass only when `allow iCloud originals` is enabled (otherwise the run aborts).
-- `assetFingerprint` = SHA-256 of sorted `role|slot|hashHex` tokens joined by `\n`; it remains the manifest key and integrity check. `AssetContentFingerprint` provides normalized content matching across destinations without changing resource hashes.
+- `assetFingerprint` = SHA-256 of sorted `role|slot|hashHex` tokens joined by `\n`, excluding `adjustmentData` (AAE). AAE still participates in backup, restore, and raw resource integrity checks.
 - Sync months reach `uploadDone` after upload flush, then `completed` only after `BackupParallelExecutor`'s `onMonthUploaded` finishes the inline download. **Don't treat `uploadDone` as "month done".**
 - Successful downloads write a hash-index entry immediately, so they survive stop / restart.
 - `MonthManifestStore.loadSeeded(...)` lists the actual remote directory to detect orphans from an unflushed manifest.

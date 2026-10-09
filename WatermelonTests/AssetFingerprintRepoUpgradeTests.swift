@@ -32,8 +32,8 @@ final class AssetFingerprintRepoUpgradeTests: XCTestCase {
             let inputs: [(Int, String, Data)] = [(1, "original.jpg", Data("original".utf8)),
                 (5, "edited.jpg", Data("edited".utf8)), (7, "edit-\(copy).AAE", adjustment)]
             let resources = inputs.map { AssetContentFingerprint.Resource(role: $0.0, slot: 0, hash: ContentIdentityFixtures.hash($0.2)) }
-            let raw = BackupAssetResourcePlanner.assetFingerprint(resourceRoleSlotHashes: resources.map { ($0.role, $0.slot, $0.hash) })
-            expected = try AssetContentFingerprint.fingerprint(resources: resources, adjustmentData: [ContentIdentityFixtures.hash(adjustment): adjustment])
+            let raw = BackupAssetResourcePlanner.legacyAssetFingerprint(resourceRoleSlotHashes: resources.map { ($0.role, $0.slot, $0.hash) })
+            expected = AssetContentFingerprint.fingerprint(resources: resources)
             for (role, name, data) in inputs {
                 files[name] = data
                 _ = try store.upsertResource(.init(year: 2026, month: month, fileName: name,
@@ -44,7 +44,6 @@ final class AssetFingerprintRepoUpgradeTests: XCTestCase {
                 backedUpAtMs: Int64(200 + copy), resourceCount: 3, totalFileSizeBytes: inputs.reduce(0) { $0 + Int64($1.2.count) }),
                 links: resources.map { .init(year: 2026, month: month, assetFingerprint: raw, resourceHash: $0.hash, role: $0.role, slot: 0) })
         }
-        try queue.write { try $0.execute(sql: "ALTER TABLE asset_resources DROP COLUMN fingerprintHash") }
         return (try Data(contentsOf: url), expected, files)
     }
 
@@ -70,8 +69,8 @@ final class AssetFingerprintRepoUpgradeTests: XCTestCase {
         XCTAssertEqual(Set(store.assetsByFingerprint.keys), [expected])
         let links = try XCTUnwrap(store.assetLinksByFingerprint[expected])
         XCTAssertFalse(MonthManifestStore.isAssetIncomplete(links: links, isResourceAvailable: { store.itemsByHash[$0] != nil }, assetFingerprint: expected))
-        XCTAssertNotEqual(links.first { $0.role == 7 }?.resourceHash, links.first { $0.role == 7 }?.fingerprintHash)
-        XCTAssertTrue(MonthManifestStore.isAssetIncomplete(links: Array(links.dropLast()), isResourceAvailable: { _ in true }, assetFingerprint: expected))
+        XCTAssertEqual(links.first { $0.role == 7 }?.resourceHash, originalBytes.map(ContentIdentityFixtures.hash))
+        XCTAssertTrue(MonthManifestStore.isAssetIncomplete(links: links.filter { $0.role != 5 }, isResourceAvailable: { _ in true }, assetFingerprint: expected))
         let bytes = await client.fileData(path: versionPath)
         let manifest = try VersionManifestLite.decode(XCTUnwrap(bytes))
         XCTAssertEqual(manifest.formatVersion, 3)
@@ -79,7 +78,7 @@ final class AssetFingerprintRepoUpgradeTests: XCTestCase {
         XCTAssertNil(manifest.upgradePending)
         XCTAssertNotEqual(manifest.formatVersion, 2, "Released 1.10 clients reject any format other than 2")
         let downloads = await client.downloadAttemptPaths
-        XCTAssertEqual(downloads.filter { $0.hasSuffix(".AAE") }, [base + "/2026/01/edit-0.AAE"])
+        XCTAssertFalse(downloads.contains { $0.hasSuffix(".AAE") })
         XCTAssertFalse(downloads.contains { $0.hasSuffix(".jpg") })
         let uploads = await client.uploadedPaths
         XCTAssertTrue(uploads.allSatisfy { $0.hasPrefix(base + "/.watermelon/") })
@@ -128,40 +127,29 @@ final class AssetFingerprintRepoUpgradeTests: XCTestCase {
         }
     }
 
-    func testMissingAdjustmentKeepsPartialMediaAndAllowsOtherMonthsToUpgrade() async throws {
+    func testUpgradeUsesOnlyManifestHashesAndPreservesEveryResourceRow() async throws {
         let client = InMemoryRemoteStorageClient()
-        _ = try await seed(client)
-        let second = try await seed(client, month: 2)
-        let oldResult = try await MonthManifestStore.loadManifestDirect(
-            client: client, basePath: base, year: 2026, month: 1, layout: .v1,
-            manifestAbsolutePath: monthPath(1), pushSchemaUpgrade: false, surfaceDownloadFailure: true
-        )
-        let oldStore = try XCTUnwrap(oldResult)
-        let oldFingerprint = try XCTUnwrap(oldStore.assetsByFingerprint.keys.first)
-        try await client.delete(path: base + "/2026/01/edit-0.AAE")
-        let prepared = try await RemoteLiteRepoGateway.prepareForegroundWrite(
-            client: client, lockClient: client, basePath: base, writerID: UUID().uuidString.lowercased()
-        )
-        await prepared.session.stopAndRelease()
-        let firstStore = try await snapshot(client)
-        XCTAssertEqual(Set(firstStore.assetsByFingerprint.keys), [oldFingerprint])
-        XCTAssertEqual(Set(firstStore.itemsByFileName.keys), ["original.jpg", "edited.jpg"])
-        let links = try XCTUnwrap(firstStore.assetLinksByFingerprint[oldFingerprint])
-        XCTAssertEqual(Set(links.map(\.role)), [1, 5, 7])
-        XCTAssertEqual(Set(links.filter { firstStore.itemsByHash[$0.resourceHash] != nil }.map(\.role)), [1, 5])
-        XCTAssertTrue(MonthManifestStore.isAssetIncomplete(links: links,
-            isResourceAvailable: { firstStore.itemsByHash[$0] != nil }, assetFingerprint: oldFingerprint))
-        let secondStore = try await snapshot(client, month: 2)
-        XCTAssertNotNil(secondStore.assetsByFingerprint[second])
-        let decision = try await RepoFormatRouter(client: client, basePath: base).classify()
-        XCTAssertEqual(decision, .current)
+        let expected = try await seed(client)
+        let resourcePrefix = base + "/2026/01/"
+        await client.setOnDownloadAttempt { path in
+            if path.hasPrefix(resourcePrefix) { XCTFail("Fingerprint upgrades must never download resource files") }
+        }
+        try await upgrade(client)
+        let store = try await snapshot(client)
+        XCTAssertEqual(Set(store.assetsByFingerprint.keys), [expected])
+        XCTAssertEqual(Set(store.itemsByFileName.keys), ["original.jpg", "edited.jpg", "edit-0.AAE"])
+        XCTAssertEqual(Set(store.assetLinksByFingerprint[expected]?.map(\.role) ?? []), [1, 5, 7])
+        try await store.dbQueue.read { db in
+            XCTAssertFalse(try db.columns(in: "asset_resources").contains { $0.name == "fingerprintHash" })
+            XCTAssertEqual(try Int.fetchOne(db, sql: "PRAGMA user_version"), AssetContentFingerprint.version)
+        }
     }
 
-    func testAdjustmentDownloadFaultsDoNotRemoveResourcesOrFinishUpgrade() async throws {
+    func testManifestDownloadFaultsDoNotRemoveResourcesOrFinishUpgrade() async throws {
         for error in [RemoteErrorFixtures.retryable, RemoteErrorFixtures.terminal, RemoteErrorFixtures.cancelled] {
             let client = InMemoryRemoteStorageClient()
             _ = try await seed(client)
-            let path = base + "/2026/01/edit-0.AAE"
+            let path = monthPath(1)
             let originalManifest = await client.fileData(path: monthPath(1))
             await client.setOnDownloadAttempt { attempted in
                 if attempted == path { await client.enqueueDownloadError(error) }
@@ -171,7 +159,7 @@ final class AssetFingerprintRepoUpgradeTests: XCTestCase {
             XCTAssertEqual(try VersionManifestLite.decode(XCTUnwrap(bytes)).upgradePending, true)
             let manifestAfter = await client.fileData(path: monthPath(1))
             XCTAssertEqual(manifestAfter, originalManifest)
-            let adjustmentAfter = await client.fileData(path: path)
+            let adjustmentAfter = await client.fileData(path: base + "/2026/01/edit-0.AAE")
             XCTAssertNotNil(adjustmentAfter)
         }
     }
@@ -180,21 +168,21 @@ final class AssetFingerprintRepoUpgradeTests: XCTestCase {
         let client = InMemoryRemoteStorageClient()
         let first = try await seed(client)
         let second = try await seed(client, month: 2)
-        let corruptPath = base + "/2026/02/edit-0.AAE"
+        let corruptPath = monthPath(2)
         let originalBytes = await client.fileData(path: corruptPath)
         await client.seedFile(path: corruptPath, data: Data("corrupted".utf8))
-        do { try await upgrade(client); XCTFail("Corrupt adjustment must prevent final commit") } catch { }
+        do { try await upgrade(client); XCTFail("Corrupt manifest must prevent final commit") } catch { }
         let decision = try await RepoFormatRouter(client: client, basePath: base).classify()
         XCTAssertEqual(decision, .fingerprintUpgrade)
         let pendingData = await client.fileData(path: versionPath)
         let pending = try VersionManifestLite.decode(XCTUnwrap(pendingData))
         XCTAssertEqual(pending.formatVersion, 3)
         XCTAssertEqual(pending.upgradePending, true)
-        let downloadsBefore = await client.downloadAttemptPaths.count
+        let uploadsBefore = await client.uploadedPaths.count
         await client.seedFile(path: corruptPath, data: try XCTUnwrap(originalBytes))
         try await upgrade(client)
-        let downloads = await client.downloadAttemptPaths
-        XCTAssertFalse(downloads.dropFirst(downloadsBefore).contains(base + "/2026/01/edit-0.AAE"))
+        let uploads = await client.uploadedPaths
+        XCTAssertFalse(uploads.dropFirst(uploadsBefore).contains { $0.contains("2026-01") })
         let month1 = try await snapshot(client)
         let month2 = try await snapshot(client, month: 2)
         XCTAssertNotNil(month1.assetsByFingerprint[first])
@@ -215,7 +203,7 @@ final class AssetFingerprintRepoUpgradeTests: XCTestCase {
         try await upgrade(client)
     }
 
-    func testDirectPutBackendKeepsCanonicalVersionAndNormalizedMonth() async throws {
+    func testDirectPutBackendKeepsCanonicalVersionAndMediaFingerprint() async throws {
         let client = InMemoryRemoteStorageClient(moveMayNotBeIndependent: true)
         let expected = try await seed(client)
         try await upgrade(client)

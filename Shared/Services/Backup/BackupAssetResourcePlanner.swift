@@ -17,6 +17,14 @@ enum BackupAssetResourcePlanner {
     static func assetFingerprint<Values: Collection>(
         resourceRoleSlotHashes: Values
     ) -> Data where Values.Element == (role: Int, slot: Int, contentHash: Data) {
+        legacyAssetFingerprint(resourceRoleSlotHashes: resourceRoleSlotHashes.filter {
+            $0.role != ResourceTypeCode.adjustmentData
+        })
+    }
+
+    static func legacyAssetFingerprint<Values: Collection>(
+        resourceRoleSlotHashes: Values
+    ) -> Data where Values.Element == (role: Int, slot: Int, contentHash: Data) {
         switch resourceRoleSlotHashes.count {
         case 0:
             return sha256(Data())

@@ -1209,7 +1209,6 @@ final class RemoteManifestSnapshotDiskCache: @unchecked Sendable {
         let resourceHashHex: String
         let role: Int
         let slot: Int
-        let fingerprintHashHex: String?
 
         init(_ link: RemoteAssetResourceLink) {
             year = link.year
@@ -1218,7 +1217,6 @@ final class RemoteManifestSnapshotDiskCache: @unchecked Sendable {
             resourceHashHex = link.resourceHash.hexString
             role = link.role
             slot = link.slot
-            fingerprintHashHex = link.fingerprintHash?.hexString
         }
 
         var value: RemoteAssetResourceLink? {
@@ -1230,8 +1228,7 @@ final class RemoteManifestSnapshotDiskCache: @unchecked Sendable {
                 assetFingerprint: assetFingerprint,
                 resourceHash: resourceHash,
                 role: role,
-                slot: slot,
-                fingerprintHash: fingerprintHashHex.flatMap { Data(hexString: $0) }
+                slot: slot
             )
         }
     }
