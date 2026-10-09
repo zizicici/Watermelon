@@ -170,6 +170,9 @@ final class MediaBrowserGridViewController: UIViewController {
             menu: UIMenu()
         )
         button.accessibilityLabel = String(localized: "mediaBrowser.filter")
+        if #available(iOS 26.0, *) {
+            button.sharesBackground = false
+        }
         return button
     }()
     private lazy var selectionBarButtonItem = UIBarButtonItem(
@@ -177,6 +180,24 @@ final class MediaBrowserGridViewController: UIViewController {
         style: .plain,
         target: self,
         action: #selector(enterSelection)
+    )
+    private lazy var selectAllBarButtonItem: UIBarButtonItem = {
+        let button = UIBarButtonItem(
+            title: String(localized: "mediaBrowser.selectAll"),
+            style: .plain,
+            target: self,
+            action: #selector(selectAllItems)
+        )
+        button.isHidden = true
+        return button
+    }()
+    private lazy var selectionBarButtonGroup = UIBarButtonItemGroup.fixedGroup(
+        representativeItem: nil,
+        items: [selectAllBarButtonItem, selectionBarButtonItem]
+    )
+    private lazy var filterBarButtonGroup = UIBarButtonItemGroup.fixedGroup(
+        representativeItem: nil,
+        items: [filterBarButtonItem]
     )
 
     private var isSelecting = false
@@ -973,7 +994,7 @@ final class MediaBrowserGridViewController: UIViewController {
     private func configureNavigation() {
         guard selectionAction == nil else { return }
         title = navTitle
-        navigationItem.rightBarButtonItems = [selectionBarButtonItem, filterBarButtonItem]
+        navigationItem.trailingItemGroups = [filterBarButtonGroup, selectionBarButtonGroup]
     }
 
     private func configureTransferTopBar() {
@@ -2127,7 +2148,7 @@ final class MediaBrowserGridViewController: UIViewController {
         selectionActionTask?.cancel()
     }
 
-    private func updateSelectBarButton() {
+    private func updateSelectBarButton(animated: Bool = false) {
         if selectionAction != nil {
             updateTransferOptionsButton()
             return
@@ -2139,11 +2160,34 @@ final class MediaBrowserGridViewController: UIViewController {
         })
         filterBarButtonItem.isEnabled = !isAnyActionRunning
         filterBarButtonItem.accessibilityValue = effectiveFilter.title
-        selectionBarButtonItem.title = isSelecting
+        selectionBarButtonItem.accessibilityLabel = isSelecting
             ? String(localized: "common.cancel")
             : String(localized: "mediaBrowser.select")
         selectionBarButtonItem.action = isSelecting ? #selector(exitSelection) : #selector(enterSelection)
         selectionBarButtonItem.isEnabled = isSelecting || !months.isEmpty
+        selectAllBarButtonItem.isEnabled = isSelecting && !browserSnapshot.isEmpty && !isAnyActionRunning
+
+        let updateAppearance = {
+            self.selectionBarButtonItem.title = self.isSelecting ? nil : String(localized: "mediaBrowser.select")
+            self.selectionBarButtonItem.image = self.isSelecting ? UIImage(systemName: "xmark") : nil
+            self.selectAllBarButtonItem.isHidden = !self.isSelecting
+        }
+        guard animated,
+              let navigationBar = navigationController?.navigationBar,
+              viewIfLoaded?.window != nil,
+              !UIAccessibility.isReduceMotionEnabled else {
+            updateAppearance()
+            return
+        }
+        navigationBar.layoutIfNeeded()
+        UIView.animate(
+            withDuration: 0.25,
+            delay: 0,
+            options: [.beginFromCurrentState, .allowUserInteraction, .curveEaseInOut]
+        ) {
+            updateAppearance()
+            navigationBar.layoutIfNeeded()
+        }
     }
 
     private func setFilter(_ filter: MediaBrowserFilter) {
@@ -2160,9 +2204,14 @@ final class MediaBrowserGridViewController: UIViewController {
         isSelecting = true
         selectedItemIDs.removeAll()
         setBatchBarVisible(selectionAction == nil, animated: false)
-        updateSelectBarButton()
+        updateSelectBarButton(animated: true)
         recomputeBatchBar()
         refreshVisibleSelectionOverlays()
+    }
+
+    @objc private func selectAllItems() {
+        guard selectionAction == nil, isSelecting, !defersSnapshotReload else { return }
+        applySelectedItemIDs(Set(browserSnapshot.itemIDs))
     }
 
     @objc private func exitSelection() {
@@ -2175,7 +2224,7 @@ final class MediaBrowserGridViewController: UIViewController {
             collectionView.deselectItem(at: $0, animated: false)
         }
         setBatchBarVisible(false, animated: false)
-        updateSelectBarButton()
+        updateSelectBarButton(animated: true)
         refreshVisibleSelectionOverlays()
         if selectionAction != nil { recomputeBatchBar() }
     }
