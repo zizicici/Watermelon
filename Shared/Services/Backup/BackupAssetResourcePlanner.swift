@@ -14,6 +14,26 @@ struct BackupSelectedResource {
 #endif
 
 enum BackupAssetResourcePlanner {
+    static func updatedAdjustmentLinks(
+        localResources: [(role: Int, slot: Int, contentHash: Data)],
+        remoteAsset: RemoteManifestAsset,
+        remoteLinks: [RemoteAssetResourceLink]
+    ) -> [RemoteAssetResourceLink]? {
+        let adjustments = localResources.filter { $0.role == ResourceTypeCode.adjustmentData }
+        // An absent local description does not authorize deleting the remote editing recipe.
+        guard !adjustments.isEmpty else { return nil }
+        let localLinks = adjustments.map {
+            RemoteAssetResourceLink(
+                year: remoteAsset.year, month: remoteAsset.month,
+                assetFingerprint: remoteAsset.assetFingerprint, resourceHash: $0.contentHash,
+                role: $0.role, slot: $0.slot
+            )
+        }
+        let remoteAdjustments = remoteLinks.filter { $0.role == ResourceTypeCode.adjustmentData }
+        guard Set(localLinks) != Set(remoteAdjustments) else { return nil }
+        return remoteLinks.filter { $0.role != ResourceTypeCode.adjustmentData } + localLinks
+    }
+
     static func assetFingerprint<Values: Collection>(
         resourceRoleSlotHashes: Values
     ) -> Data where Values.Element == (role: Int, slot: Int, contentHash: Data) {

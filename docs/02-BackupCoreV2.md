@@ -176,7 +176,7 @@ SMB / WebDAV / S3 / SFTP / OneDrive / Dropbox / Google Drive / BrowserLink 走 `
 
 `AssetProcessor`（核心类在 `AssetProcessor.swift`，命名细节在 `+Naming`，上传策略在 `+Upload`）的关键规则：
 
-1. 先基于 `LocalHashIndexBuildService` / `ContentHashIndexRepository` 的结果尝试本地 cache 快速命中（`processWithLocalCache`）。规范化 `assetFingerprint` 命中目标月份完整资产时，仍比较资产拍摄日期；日期不同只更新 manifest 的资产记录与快照缓存，记为成功并随月份 flush，不重传媒体。整月跳过同样要求拍摄日期一致。
+1. 先基于 `LocalHashIndexBuildService` / `ContentHashIndexRepository` 的结果尝试本地 cache 快速命中（`processWithLocalCache`）。`assetFingerprint` 命中目标月份完整资产后，仍比较资产拍摄日期和 `adjustmentData` 的 `role/slot/原始哈希`；整月跳过使用相同规则。日期不同只更新资产记录。描述不同则复用远端已有哈希，仅导出上传缺少的描述文件，全部成功后事务替换描述关联、更新数量和大小，记为 `asset_resources_updated` 成功并参与月份 flush、检查点和失败回滚。媒体关联与资产指纹保持不变，原描述文件和资源行保留；本地没有描述时保留远端描述，不自动删除。缓存与导出哈希不符会清除该资产缓存并退回完整校验；上传期间 Photos 修改了资产则中止关联更新。
 2. 未命中时，按 `BackupAssetResourcePlanner`（`Shared/Services/Backup/`）选择资源并分配 `role/slot`
 3. 将资源导出到临时文件并计算 `SHA-256`
 4. 生成 `assetFingerprint`（`role|slot|hashHex` token 排序、`\n` 连接、再 SHA-256）
@@ -248,7 +248,7 @@ SMB / WebDAV / S3 / SFTP / OneDrive / Dropbox / Google Drive / BrowserLink 走 `
 - `RestoreItemDescriptor` 携带 manifest 资产的拍摄日期；资源日期只用于缺少资产日期的兼容回退。
 - 导入组合先通过 `PHAssetCreationRequest.supportsAssetResourceTypes` 验证。缺少原始视频时优先恢复存活的视频；缺少编辑配置导致组合不受支持时恢复可用主资源，避免只保留封面或提交无效组合。
 - Photos 导入成功后，`RestoreService` 在完成回调前读取实际资源并持久化哈希。该收尾不受调用者取消影响；校验失败则不写入未经验证的源哈希，后续本地索引预检可从 Photos 实际资源重新计算。
-- 首页计数、浏览器匹配和下载去重统一使用排除 AAE 的内容指纹，不依赖还原来源或 `localIdentifier` 稳定。上传仍要求当前目标月份存在完整的对应资产；另一个仓库拥有它不会让空仓库跳过上传。媒体资源缺失或改变、不可访问或已删除的本地资产不满足完整匹配。仅 AAE 改变不影响资产匹配。
+- 首页计数、浏览器匹配和下载去重统一使用排除 AAE 的内容指纹，不依赖还原来源或 `localIdentifier` 稳定。上传仍要求当前目标月份存在完整的对应资产；另一个仓库拥有它不会让空仓库跳过上传。媒体资源缺失或改变、不可访问或已删除的本地资产不满足完整匹配。仅 AAE 改变不影响资产匹配，但下次备份会更新远端描述；包括仅时间戳变化，以本次备份的本地描述为准。
 - 文件下载保留完整字节 SHA-256 校验。manifest 链接使用非 AAE 资源的原始哈希验证资产键；AAE 仍记录原始哈希并完整备份、下载、校验和还原。旧远端连接时通过现有升级机制直接读取数据库中的资源哈希重算资产键，不下载 AAE 或重传媒体。
 
 ## 11. 暂停 / 恢复 / 停止

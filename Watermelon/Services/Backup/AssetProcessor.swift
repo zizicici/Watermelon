@@ -4,6 +4,7 @@ import Photos
 
 final class AssetProcessor: Sendable {
     static let assetDateUpdatedReason = "asset_date_updated"
+    static let assetResourcesUpdatedReason = "asset_resources_updated"
     static let smallFileThresholdBytes: Int64 = 5 * 1024 * 1024
     static let hashBufferSize = 64 * 1024
     static let transferProgressMinimumStep = 0.01
@@ -92,131 +93,52 @@ final class AssetProcessor: Sendable {
             selectedResources: context.selectedResources
         )
 
-        if let cachedResult = try processWithLocalCache(
+        if let cachedResult = try await processWithLocalCache(
             context: context,
             displayName: displayName,
+            client: client,
+            eventStream: eventStream,
             cancellationController: cancellationController
         ) {
             return cachedResult
         }
 
-        let preferredAssetNameStem = Self.preferredAssetNameStem(
-            asset: context.asset,
-            selectedResources: context.selectedResources
-        )
-
         for (resourcePosition, selected) in context.selectedResources.enumerated() {
-            try cancellationController?.throwIfCancelled()
-            try Task.checkCancellation()
-
-            let local = makeLocalResource(
-                asset: context.asset,
-                selected: selected,
-                preferredAssetNameStem: preferredAssetNameStem
-            )
-            let workerID = context.workerID
-            let assetID = context.asset.localIdentifier
-            let resourceDate = local.asset.creationDate ?? local.resourceModificationDate
-            let assetPosition = context.assetPosition
-            let totalAssets = context.totalAssets
-            let resourceName = local.originalFilename
-            let resourceCount = context.selectedResources.count
-            let reportPreparationProgress: @Sendable (Double) -> Void = { fraction in
-                eventStream.emit(.transferState(Self.makeTransferState(
-                    kind: .upload,
-                    workerID: workerID,
-                    assetLocalIdentifier: assetID,
-                    assetDisplayName: displayName,
-                    resourceDate: resourceDate,
-                    assetPosition: assetPosition,
-                    totalAssets: totalAssets,
-                    resourceDisplayName: resourceName,
-                    resourcePosition: resourcePosition + 1,
-                    totalResources: resourceCount,
-                    resourceFraction: Float(fraction),
-                    resourceBytesTransferred: nil,
-                    resourceTotalBytes: nil,
-                    countsTowardTransferSpeed: false,
-                    stageDescription: String(localized: "backup.transfer.prepareResource")
-                )))
-            }
-            if emitTransferState { reportPreparationProgress(0) }
-
-            let exportHashStart = CFAbsoluteTimeGetCurrent()
-            let exportedResource: ExportedResourceFile
             do {
-                exportedResource = try await photoLibraryService.exportResourceToTempFileAndDigest(
-                    local.resource,
-                    cancellationController: cancellationController,
-                    allowNetworkAccess: context.allowsNetworkExport,
-                    onProgress: reportPreparationProgress
-                )
-                timing.exportHashSeconds += Self.elapsedSeconds(since: exportHashStart)
+                preparedResources.append(try await prepareResource(
+                    selected, position: resourcePosition + 1, context: context,
+                    displayName: displayName, eventStream: eventStream,
+                    timing: &timing, cancellationController: cancellationController
+                ))
             } catch {
-                timing.exportHashSeconds += Self.elapsedSeconds(since: exportHashStart)
-                if !context.allowsNetworkExport,
-                   PhotoLibraryService.isNetworkAccessRequiredError(error) {
-                    if context.defersNetworkResources {
-                        return Self.makeICloudDeferredResult(
-                            context: context,
-                            displayName: displayName,
-                            timing: timing
-                        )
-                    }
-                    eventStream.emitLog(
-                        String.localizedStringWithFormat(
-                            String(localized: "backup.log.skipICloudResource"),
-                            displayName
-                        ),
-                        level: .warning
-                    )
-                    return Self.makeICloudDisabledSkipResult(
-                        context: context,
-                        displayName: displayName,
-                        timing: timing
-                    )
+                if let result = networkExportResult(error: error, context: context,
+                    displayName: displayName, timing: timing, eventStream: eventStream) {
+                    return result
                 }
                 throw error
             }
-            let tempFileURL = exportedResource.fileURL
-            var shouldRemoveTempFile = true
-            defer {
-                if shouldRemoveTempFile {
-                    try? FileManager.default.removeItem(at: tempFileURL)
-                }
-            }
-            let localHash = exportedResource.contentHash
-            let localFileSize = exportedResource.fileSize
-            let shotDate = local.asset.creationDate ?? local.resourceModificationDate
-            if let shotDate {
-                try? FileManager.default.setAttributes([.modificationDate: shotDate], ofItemAtPath: tempFileURL.path)
-            }
-
-            preparedResources.append(
-                PreparedResource(
-                    local: local,
-                    tempFileURL: tempFileURL,
-                    contentHash: localHash,
-                    fileSize: localFileSize,
-                    shotDate: shotDate
-                )
-            )
-            shouldRemoveTempFile = false
         }
 
         let assetFingerprint = BackupAssetResourcePlanner.assetFingerprint(resourceRoleSlotHashes: preparedResources.map {
             (role: $0.local.resourceRole, slot: $0.local.resourceSlot, contentHash: $0.contentHash)
         })
         if context.monthStore.containsAssetFingerprint(assetFingerprint), !context.monthStore.isAssetIncomplete(assetFingerprint) {
+            try assertAssetUnchanged(context.asset)
             try hashIndexRepository.upsertAssetHashSnapshot(assetLocalIdentifier: context.asset.localIdentifier,
                 assetFingerprint: assetFingerprint, resources: preparedResources.map {
                     .init(role: $0.local.resourceRole, slot: $0.local.resourceSlot, contentHash: $0.contentHash, fileSize: $0.fileSize)
                 }, totalFileSizeBytes: preparedResources.reduce(0) { $0 + $1.fileSize }, modificationDateMs: context.asset.modificationDate?.millisecondsSinceEpoch)
-            let dateUpdated = try updateBackedUpAssetDate(assetFingerprint, context: context)
-            return AssetProcessResult(status: dateUpdated ? .success : .skipped,
-                reason: dateUpdated ? Self.assetDateUpdatedReason : "asset_content_exists", displayName: displayName,
-                assetFingerprint: assetFingerprint, timing: timing,
-                totalFileSizeBytes: preparedResources.reduce(0) { $0 + $1.fileSize }, uploadedFileSizeBytes: 0)
+            if let result = try await processMatchedAsset(
+                fingerprint: assetFingerprint,
+                localResources: preparedResources.map { ($0.local.resourceRole, $0.local.resourceSlot, $0.contentHash) },
+                preparedResources: preparedResources,
+                totalFileSizeBytes: preparedResources.reduce(0) { $0 + $1.fileSize },
+                context: context, displayName: displayName, skipReason: "asset_content_exists",
+                client: client, eventStream: eventStream, timing: &timing,
+                cancellationController: cancellationController
+            ) {
+                return result
+            }
         }
 
         var uploadResults: [ResourceUploadResult] = []
@@ -248,25 +170,8 @@ final class AssetProcessor: Sendable {
             uploadResults.append(uploadResult)
 
             if emitTransferState {
-                eventStream.emit(.transferState(
-                    Self.makeTransferState(
-                        kind: .upload,
-                        workerID: context.workerID,
-                        assetLocalIdentifier: prepared.local.assetLocalIdentifier,
-                        assetDisplayName: displayName,
-                        resourceDate: prepared.shotDate,
-                        assetPosition: context.assetPosition,
-                        totalAssets: context.totalAssets,
-                        resourceDisplayName: prepared.local.originalFilename,
-                        resourcePosition: resourcePosition + 1,
-                        totalResources: preparedResources.count,
-                        resourceFraction: 1,
-                        resourceBytesTransferred: prepared.fileSize,
-                        resourceTotalBytes: prepared.fileSize,
-                        countsTowardTransferSpeed: uploadResult.status == .success,
-                        stageDescription: String(localized: "backup.transfer.uploadCompleted")
-                    )
-                ))
+                emitUploadCompletion(prepared: prepared, result: uploadResult, position: resourcePosition + 1,
+                    totalResources: preparedResources.count, context: context, displayName: displayName, eventStream: eventStream)
             }
 
             if uploadResult.status != .failed {
@@ -453,55 +358,209 @@ final class AssetProcessor: Sendable {
         try await transfer.value
     }
 
+    private func emitUploadCompletion(
+        prepared: PreparedResource,
+        result: ResourceUploadResult,
+        position: Int,
+        totalResources: Int,
+        context: AssetProcessContext,
+        displayName: String,
+        eventStream: BackupEventStream
+    ) {
+        eventStream.emit(.transferState(Self.makeTransferState(
+            kind: .upload, workerID: context.workerID, assetLocalIdentifier: prepared.local.assetLocalIdentifier,
+            assetDisplayName: displayName, resourceDate: prepared.shotDate,
+            assetPosition: context.assetPosition, totalAssets: context.totalAssets,
+            resourceDisplayName: prepared.local.originalFilename, resourcePosition: position,
+            totalResources: totalResources, resourceFraction: 1,
+            resourceBytesTransferred: prepared.fileSize, resourceTotalBytes: prepared.fileSize,
+            countsTowardTransferSpeed: result.status == .success,
+            stageDescription: String(localized: "backup.transfer.uploadCompleted")
+        )))
+    }
+
+    private func prepareResource(
+        _ selected: BackupSelectedResource,
+        position: Int,
+        context: AssetProcessContext,
+        displayName: String,
+        eventStream: BackupEventStream,
+        timing: inout AssetProcessTiming,
+        cancellationController: BackupCancellationController?
+    ) async throws -> PreparedResource {
+        try cancellationController?.throwIfCancelled()
+        try Task.checkCancellation()
+        let local = makeLocalResource(asset: context.asset, selected: selected,
+            preferredAssetNameStem: Self.preferredAssetNameStem(asset: context.asset, selectedResources: context.selectedResources))
+        let shotDate = local.asset.creationDate ?? local.resourceModificationDate
+        let reportProgress: @Sendable (Double) -> Void = { fraction in
+            eventStream.emit(.transferState(Self.makeTransferState(
+                kind: .upload, workerID: context.workerID, assetLocalIdentifier: local.assetLocalIdentifier,
+                assetDisplayName: displayName, resourceDate: shotDate,
+                assetPosition: context.assetPosition, totalAssets: context.totalAssets,
+                resourceDisplayName: local.originalFilename, resourcePosition: position,
+                totalResources: context.selectedResources.count, resourceFraction: Float(fraction),
+                resourceBytesTransferred: nil, resourceTotalBytes: nil, countsTowardTransferSpeed: false,
+                stageDescription: String(localized: "backup.transfer.prepareResource")
+            )))
+        }
+        reportProgress(0)
+        let start = CFAbsoluteTimeGetCurrent()
+        defer { timing.exportHashSeconds += Self.elapsedSeconds(since: start) }
+        let exported = try await photoLibraryService.exportResourceToTempFileAndDigest(
+            local.resource, cancellationController: cancellationController,
+            allowNetworkAccess: context.allowsNetworkExport, onProgress: reportProgress
+        )
+        if let shotDate {
+            try? FileManager.default.setAttributes([.modificationDate: shotDate], ofItemAtPath: exported.fileURL.path)
+        }
+        return PreparedResource(local: local, tempFileURL: exported.fileURL,
+            contentHash: exported.contentHash, fileSize: exported.fileSize, shotDate: shotDate)
+    }
+
+    private func networkExportResult(
+        error: Error,
+        context: AssetProcessContext,
+        displayName: String,
+        timing: AssetProcessTiming,
+        eventStream: BackupEventStream
+    ) -> AssetProcessResult? {
+        guard !context.allowsNetworkExport, PhotoLibraryService.isNetworkAccessRequiredError(error) else { return nil }
+        if context.defersNetworkResources {
+            return Self.makeICloudDeferredResult(context: context, displayName: displayName, timing: timing)
+        }
+        eventStream.emitLog(String.localizedStringWithFormat(
+            String(localized: "backup.log.skipICloudResource"), displayName), level: .warning)
+        return Self.makeICloudDisabledSkipResult(context: context, displayName: displayName, timing: timing)
+    }
+
+    private func assertAssetUnchanged(_ asset: PHAsset) throws {
+        guard let current = PHAsset.fetchAssets(withLocalIdentifiers: [asset.localIdentifier], options: nil).firstObject,
+              current.modificationDate == asset.modificationDate else {
+            try hashIndexRepository.deleteIndexEntries(assetIDs: [asset.localIdentifier])
+            throw NSError(domain: PHPhotosErrorDomain, code: PHPhotosError.operationInterrupted.rawValue)
+        }
+    }
+
+    private func processMatchedAsset(
+        fingerprint: Data,
+        localResources: [(role: Int, slot: Int, contentHash: Data)],
+        preparedResources: [PreparedResource],
+        totalFileSizeBytes: Int64,
+        context: AssetProcessContext,
+        displayName: String,
+        skipReason: String,
+        client: RemoteStorageClientProtocol,
+        eventStream: BackupEventStream,
+        timing: inout AssetProcessTiming,
+        cancellationController: BackupCancellationController?
+    ) async throws -> AssetProcessResult? {
+        guard let remoteAsset = context.monthStore.assetsByFingerprint[fingerprint] else { return nil }
+        guard let links = BackupAssetResourcePlanner.updatedAdjustmentLinks(
+            localResources: localResources, remoteAsset: remoteAsset,
+            remoteLinks: context.monthStore.links(forAssetFingerprint: fingerprint)
+        ) else {
+            let start = CFAbsoluteTimeGetCurrent()
+            let dateUpdated = try updateBackedUpAssetDate(fingerprint, context: context)
+            timing.databaseSeconds += Self.elapsedSeconds(since: start)
+            return AssetProcessResult(status: dateUpdated ? .success : .skipped,
+                reason: dateUpdated ? Self.assetDateUpdatedReason : skipReason,
+                displayName: displayName, assetFingerprint: fingerprint, timing: timing,
+                totalFileSizeBytes: totalFileSizeBytes, uploadedFileSizeBytes: 0)
+        }
+
+        var exports: [PreparedResource] = []
+        var uploads: [(position: Int, resource: PreparedResource)] = []
+        defer { for resource in exports { try? FileManager.default.removeItem(at: resource.tempFileURL) } }
+        for link in links where context.monthStore.findResourceByHash(link.resourceHash) == nil {
+            guard link.role == ResourceTypeCode.adjustmentData,
+                  let position = context.selectedResources.firstIndex(where: { $0.role == link.role && $0.slot == link.slot }) else { return nil }
+            let prepared: PreparedResource
+            if let existing = preparedResources.first(where: { $0.local.resourceRole == link.role && $0.local.resourceSlot == link.slot }) {
+                prepared = existing
+            } else {
+                do {
+                    prepared = try await prepareResource(context.selectedResources[position], position: position + 1,
+                        context: context, displayName: displayName, eventStream: eventStream,
+                        timing: &timing, cancellationController: cancellationController)
+                    exports.append(prepared)
+                } catch {
+                    if let result = networkExportResult(error: error, context: context,
+                        displayName: displayName, timing: timing, eventStream: eventStream) { return result }
+                    throw error
+                }
+            }
+            guard prepared.contentHash == link.resourceHash else {
+                try hashIndexRepository.deleteIndexEntries(assetIDs: [context.asset.localIdentifier])
+                return nil
+            }
+            uploads.append((position + 1, prepared))
+        }
+        try assertAssetUnchanged(context.asset)
+
+        var uploadedBytes: Int64 = 0
+        for (position, prepared) in uploads {
+            try cancellationController?.throwIfCancelled()
+            try Task.checkCancellation()
+            let result = try await uploadResource(prepared: prepared, monthStore: context.monthStore,
+                profile: context.profile, client: client, workerID: context.workerID,
+                resourcePosition: position, totalResources: context.selectedResources.count,
+                assetPosition: context.assetPosition, totalAssets: context.totalAssets, displayName: displayName,
+                eventStream: eventStream, emitTransferState: true, assetTiming: &timing,
+                cancellationController: cancellationController, writeMode: context.writeMode)
+            if result.status == .success { uploadedBytes += max(prepared.fileSize, 0) }
+            if result.status != .failed {
+                emitUploadCompletion(prepared: prepared, result: result, position: position,
+                    totalResources: context.selectedResources.count, context: context, displayName: displayName, eventStream: eventStream)
+            }
+            if result.status == .failed {
+                return AssetProcessResult(status: .failed, reason: result.reason,
+                    displayName: displayName, assetFingerprint: fingerprint, timing: timing,
+                    totalFileSizeBytes: totalFileSizeBytes, uploadedFileSizeBytes: uploadedBytes)
+            }
+        }
+
+        try await RepoWriteGuard.assertOrdinaryWriteAllowed(context.writeMode)
+        try cancellationController?.throwIfCancelled()
+        try Task.checkCancellation()
+        try assertAssetUnchanged(context.asset)
+        let updated = RemoteManifestAsset(year: remoteAsset.year, month: remoteAsset.month,
+            assetFingerprint: fingerprint, creationDateMs: LibraryCreationDate.optionalMilliseconds(context.asset.creationDate),
+            backedUpAtMs: Date().millisecondsSinceEpoch, resourceCount: links.count,
+            totalFileSizeBytes: links.reduce(0) { $0 + max(context.monthStore.findResourceByHash($1.resourceHash)?.fileSize ?? 0, 0) })
+        let start = CFAbsoluteTimeGetCurrent()
+        try context.monthStore.upsertAsset(updated, links: links)
+        remoteIndexService.upsertCachedAsset(updated, links: links, expectedProfileKey: RemoteIndexSyncService.remoteProfileKey(context.profile))
+        timing.databaseSeconds += Self.elapsedSeconds(since: start)
+        return AssetProcessResult(status: .success, reason: Self.assetResourcesUpdatedReason,
+            displayName: displayName, assetFingerprint: fingerprint, timing: timing,
+            totalFileSizeBytes: totalFileSizeBytes, uploadedFileSizeBytes: uploadedBytes)
+    }
+
     private func processWithLocalCache(
         context: AssetProcessContext,
         displayName: String,
+        client: RemoteStorageClientProtocol,
+        eventStream: BackupEventStream,
         cancellationController: BackupCancellationController?
-    ) throws -> AssetProcessResult? {
+    ) async throws -> AssetProcessResult? {
         var timing = AssetProcessTiming()
         try cancellationController?.throwIfCancelled()
         try Task.checkCancellation()
         guard let cachedLocalHash = context.cachedLocalHash else { return nil }
-        guard cachedLocalHash.resourceCount == context.selectedResources.count else { return nil }
-
-        if let modificationDate = context.asset.modificationDate, modificationDate > cachedLocalHash.updatedAt {
-            return nil
-        }
-
-        try cancellationController?.throwIfCancelled()
-        try Task.checkCancellation()
-        guard let roleSlotHashes = roleSlotHashes(
-            from: context.selectedResources,
-            cachedLocalHash: cachedLocalHash
-        ), roleSlotHashes.count == context.selectedResources.count else {
-            return nil
-        }
-
+        guard let roleSlotHashes = Self.cachedRoleSlotHashes(
+            asset: context.asset, selectedResources: context.selectedResources, cachedLocalHash: cachedLocalHash
+        ) else { return nil }
         let cachedFingerprint = cachedLocalHash.assetFingerprint
-        if cachedFingerprint != BackupAssetResourcePlanner.assetFingerprint(resourceRoleSlotHashes: roleSlotHashes) { return nil }
 
-        // Incomplete asset falls through to the full upload path so missing resources heal.
         if context.monthStore.containsAssetFingerprint(cachedFingerprint),
            !context.monthStore.isAssetIncomplete(cachedFingerprint) {
-            let totalFileSizeBytes = Self.totalSizeBytes(of: context.selectedResources)
-            let dbStart = CFAbsoluteTimeGetCurrent()
-            let dateUpdated = try updateBackedUpAssetDate(cachedFingerprint, context: context)
-            try hashIndexRepository.upsertAssetFingerprint(
-                assetLocalIdentifier: context.asset.localIdentifier,
-                assetFingerprint: cachedFingerprint,
-                resourceCount: context.selectedResources.count,
-                totalFileSizeBytes: totalFileSizeBytes,
-                modificationDateMs: context.asset.modificationDate?.millisecondsSinceEpoch
-            )
-            timing.databaseSeconds += Self.elapsedSeconds(since: dbStart)
-            return AssetProcessResult(
-                status: dateUpdated ? .success : .skipped,
-                reason: dateUpdated ? Self.assetDateUpdatedReason : "asset_exists_cached",
-                displayName: displayName,
-                assetFingerprint: cachedFingerprint,
-                timing: timing,
-                totalFileSizeBytes: totalFileSizeBytes,
-                uploadedFileSizeBytes: 0
+            return try await processMatchedAsset(
+                fingerprint: cachedFingerprint, localResources: roleSlotHashes, preparedResources: [],
+                totalFileSizeBytes: cachedLocalHash.totalFileSizeBytes,
+                context: context, displayName: displayName, skipReason: "asset_exists_cached",
+                client: client, eventStream: eventStream, timing: &timing,
+                cancellationController: cancellationController
             )
         }
 
@@ -567,10 +626,14 @@ final class AssetProcessor: Sendable {
         return true
     }
 
-    private func roleSlotHashes(
-        from selectedResources: [BackupSelectedResource],
+    static func cachedRoleSlotHashes(
+        asset: PHAsset,
+        selectedResources: [BackupSelectedResource],
         cachedLocalHash: LocalAssetHashCache
     ) -> [(role: Int, slot: Int, contentHash: Data)]? {
+        guard cachedLocalHash.resourceCount == selectedResources.count,
+              cachedLocalHash.hashesByRoleSlot.count == selectedResources.count else { return nil }
+        if let modificationDate = asset.modificationDate, modificationDate > cachedLocalHash.updatedAt { return nil }
         var result: [(role: Int, slot: Int, contentHash: Data)] = []
         result.reserveCapacity(selectedResources.count)
 
@@ -582,6 +645,7 @@ final class AssetProcessor: Sendable {
             result.append((role: selected.role, slot: selected.slot, contentHash: contentHash))
         }
 
+        guard cachedLocalHash.assetFingerprint == BackupAssetResourcePlanner.assetFingerprint(resourceRoleSlotHashes: result) else { return nil }
         return result
     }
 

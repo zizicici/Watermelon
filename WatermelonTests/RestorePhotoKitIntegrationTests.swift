@@ -233,17 +233,32 @@ final class RestorePhotoKitIntegrationTests: XCTestCase {
                 layout: .lite, liteWriteOwnership: .uniform({}))
             for resource in remoteResources { _ = try store.upsertResource(resource) }
             try store.upsertAsset(remoteAsset, links: links)
-            let lock = try XCTUnwrap(WriteLockService(basePath: "/p", writerID: UUID().uuidString.lowercased(), client: client))
+            let session = try XCTUnwrap(LocalVolumeWriteSession.claim(key: UUID().uuidString))
+            defer { session.stop() }
             let context = AssetProcessContext(workerID: 0, asset: asset, selectedResources: selected,
                 cachedLocalHash: try restartedRepository.fetchAssetHashCaches(assetIDs: ids)[item.asset.localIdentifier],
                 iCloudPhotoBackupMode: .disable, pass: .localResources, monthStore: store, profile: destinationProfile,
-                assetPosition: 1, totalAssets: 1, writeMode: .lite(RepoLeaseSession(lock: lock), nil))
+                assetPosition: 1, totalAssets: 1, writeMode: .lite(session, nil))
             let processor = AssetProcessor(photoLibraryService: PhotoLibraryService(), hashIndexRepository: restartedRepository,
                 remoteIndexService: RemoteIndexSyncService())
+            let adjustmentChanged = tokens.contains { local in
+                local.role == ResourceTypeCode.adjustmentData && !links.contains {
+                    $0.role == local.role && $0.slot == local.slot && $0.resourceHash == local.contentHash
+                }
+            }
+            let executor = BackupParallelExecutor(hashIndexRepository: restartedRepository, assetProcessor: processor,
+                remoteIndexService: RemoteIndexSyncService())
+            XCTAssertEqual(executor.monthAlreadyFullyBackedUp(monthAssetIDs: [asset.localIdentifier], monthStore: store), !adjustmentChanged)
             let outcome = try await processor.process(context: context, client: client, eventStream: BackupEventStream(), cancellationController: nil)
-            XCTAssertEqual(outcome.status, .skipped)
+            XCTAssertEqual(outcome.status, adjustmentChanged ? .success : .skipped)
             XCTAssertTrue(BackupParallelExecutor.shouldEmitResultCredit(outcome))
-            XCTAssertEqual(outcome.uploadedFileSizeBytes, 0)
+            if adjustmentChanged {
+                XCTAssertEqual(outcome.reason, AssetProcessor.assetResourcesUpdatedReason)
+                XCTAssertGreaterThan(outcome.uploadedFileSizeBytes, 0)
+            } else {
+                XCTAssertEqual(outcome.uploadedFileSizeBytes, 0)
+            }
+            XCTAssertTrue(executor.monthAlreadyFullyBackedUp(monthAssetIDs: [asset.localIdentifier], monthStore: store))
             XCTAssertEqual(store.assetsByFingerprint.count, 1)
         }
         return ["case": fixture.id, "expectedKind": fixture.expectedKind, "actualKind": kind,
@@ -285,7 +300,7 @@ final class RestorePhotoKitIntegrationTests: XCTestCase {
     private func verifyCreationDateBackupRoundTrip(_ fixture: Fixture, directory: URL) async throws {
         let oldDate = Date(millisecondsSinceEpoch: 1_768_478_400_000)
         let newDate = oldDate.addingTimeInterval(86_400)
-        let instances = fixture.resources.map { resource in
+        var instances = fixture.resources.map { resource in
             RemoteAssetResourceInstance(role: resource.role, slot: resource.slot, resourceHash: resource.instance.resourceHash,
                 fileName: resource.fileName, fileSize: resource.fileSize,
                 remoteRelativePath: "2026/01/" + resource.fileName, creationDateMs: oldDate.millisecondsSinceEpoch)
@@ -320,6 +335,16 @@ final class RestorePhotoKitIntegrationTests: XCTestCase {
         let asset = try XCTUnwrap(PHAsset.fetchAssets(withLocalIdentifiers: [localID], options: nil).firstObject)
         let cached = try XCTUnwrap(repository.fetchAssetHashCaches(assetIDs: [localID])[localID])
         XCTAssertEqual(cached.assetFingerprint, remoteFingerprint)
+        for selected in BackupAssetResourcePlanner.orderedResourcesWithRoleSlot(from: PHAssetResource.assetResources(for: asset))
+            where selected.role == ResourceTypeCode.adjustmentData {
+            let exported = try await PhotoLibraryService().exportResourceToTempFileAndDigest(selected.resource, allowNetworkAccess: false)
+            defer { try? FileManager.default.removeItem(at: exported.fileURL) }
+            let position = try XCTUnwrap(instances.firstIndex { $0.role == selected.role && $0.slot == selected.slot })
+            let old = instances[position]
+            instances[position] = .init(role: old.role, slot: old.slot, resourceHash: exported.contentHash,
+                fileName: old.fileName, fileSize: exported.fileSize, remoteRelativePath: old.remoteRelativePath, creationDateMs: old.creationDateMs)
+            await client.seedFile(path: "/p/" + old.remoteRelativePath, data: try Data(contentsOf: exported.fileURL))
+        }
         let manifestURL = dbDirectory.appendingPathComponent("manifest.sqlite")
         let queue = try DatabaseQueue(path: manifestURL.path)
         try MonthManifestStore.migrate(queue)
@@ -380,6 +405,216 @@ final class RestorePhotoKitIntegrationTests: XCTestCase {
         let photo = try XCTUnwrap(PHAsset.fetchAssets(withLocalIdentifiers: [restoredID], options: nil).firstObject)
         XCTAssertEqual(photo.creationDate?.millisecondsSinceEpoch, newDate.millisecondsSinceEpoch)
         print("DATE_ROUND_TRIP \(fixture.id) date=\(newDate.millisecondsSinceEpoch) mediaUploads=0 repeatWrites=0")
+    }
+
+    func testMatchedAdjustmentUpdateAndFailures() async throws {
+        #if targetEnvironment(simulator)
+        let directory = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("RestoreSimulatorMatrixFixtures")
+        guard FileManager.default.fileExists(atPath: directory.appendingPathComponent("RUN_RESTORE_INTEGRATION").path) else {
+            throw XCTSkip("Requires opt-in local simulator fixtures")
+        }
+        let fixtures = try JSONDecoder().decode([Fixture].self, from: Data(contentsOf: directory.appendingPathComponent("fixed-cases.json")))
+        let fixture = try XCTUnwrap(fixtures.first { $0.id == "edited-video-4" })
+        let authorization = await PHPhotoLibrary.requestAuthorization(for: .readWrite)
+        XCTAssertEqual(authorization, .authorized)
+        guard authorization == .authorized else { return }
+        addTeardownBlock { [self] in
+            let assets = PHAsset.fetchAssets(withLocalIdentifiers: createdIDs, options: nil)
+            guard assets.count > 0 else { return }
+            try await PHPhotoLibrary.shared().performChanges { PHAssetChangeRequest.deleteAssets(assets) }
+        }
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let repository = ContentHashIndexRepository(databaseManager: try DatabaseManager(databaseURL: root.appendingPathComponent("index.sqlite")))
+        let profile = ServerProfileRecord(id: nil, name: "adjustment-test", storageType: StorageType.webdav.rawValue,
+            connectionParams: nil, sortOrder: 0, host: "fixture.local", port: 0, shareName: "fixture", basePath: "/p",
+            username: "fixture", domain: nil, credentialRef: "fixture", backgroundBackupEnabled: false,
+            createdAt: Date(), updatedAt: Date(), writerID: nil)
+        let sourceClient = InMemoryRemoteStorageClient()
+        for resource in fixture.resources {
+            await sourceClient.seedFile(path: "/p/" + resource.instance.remoteRelativePath,
+                data: try Data(contentsOf: directory.appendingPathComponent(resource.fixturePath)))
+        }
+        let sourceFingerprint = fingerprint(fixture.resources.map(\.instance))
+        let restored = try await RestoreService(makeClient: { _, _ in sourceClient }, hashIndexRepository: repository).restoreItems(
+            items: [.init(instances: fixture.resources.map(\.instance), identity: sourceFingerprint,
+                creationDate: fixture.creationDateMs.map { Date(millisecondsSinceEpoch: $0) })],
+            profile: profile, password: "", onItemCompleted: { _, _, _ in })
+        let localID = try XCTUnwrap(restored.first?.asset.localIdentifier)
+        createdIDs.append(localID)
+        let asset = try XCTUnwrap(PHAsset.fetchAssets(withLocalIdentifiers: [localID], options: nil).firstObject)
+        let selected = BackupAssetResourcePlanner.orderedResourcesWithRoleSlot(from: PHAssetResource.assetResources(for: asset))
+        let adjustment = try XCTUnwrap(selected.first { $0.role == ResourceTypeCode.adjustmentData })
+        let exported = try await PhotoLibraryService().exportResourceToTempFileAndDigest(adjustment.resource, allowNetworkAccess: false)
+        defer { try? FileManager.default.removeItem(at: exported.fileURL) }
+        let adjustmentBytes = try Data(contentsOf: exported.fileURL)
+        let oldAdjustment = try XCTUnwrap(fixture.resources.first { $0.role == ResourceTypeCode.adjustmentData })
+        XCTAssertNotEqual(oldAdjustment.instance.resourceHash, exported.contentHash)
+        let profileKey = RemoteIndexSyncService.remoteProfileKey(profile)
+
+        for scenario in ["cached", "uncached", "stale-cache", "existing-resource", "upload-failure", "manifest-failure", "lease-loss", "cancel"] {
+            let client = InMemoryRemoteStorageClient()
+            await client.seedDirectory("/p/2026/01")
+            let manifestURL = root.appendingPathComponent(scenario + ".sqlite")
+            let queue = try DatabaseQueue(path: manifestURL.path)
+            try MonthManifestStore.migrate(queue)
+            let store = MonthManifestStore(client: client, basePath: "/p", year: 2026, month: 1,
+                localManifestURL: manifestURL, dbQueue: queue, remoteFilesByName: [:], dirty: false,
+                layout: .lite, liteWriteOwnership: .uniform({}))
+            for resource in fixture.resources {
+                let instance = resource.instance
+                _ = try store.upsertResource(.init(year: 2026, month: 1, fileName: instance.fileName,
+                    contentHash: instance.resourceHash, fileSize: instance.fileSize, resourceType: instance.role,
+                    creationDateMs: asset.creationDate?.millisecondsSinceEpoch, backedUpAtMs: 0))
+                await client.seedFile(path: "/p/2026/01/" + instance.fileName,
+                    data: try Data(contentsOf: directory.appendingPathComponent(resource.fixturePath)))
+            }
+            let oldAsset = RemoteManifestAsset(year: 2026, month: 1, assetFingerprint: sourceFingerprint,
+                creationDateMs: asset.creationDate?.millisecondsSinceEpoch, backedUpAtMs: 0,
+                resourceCount: fixture.resources.count, totalFileSizeBytes: fixture.resources.reduce(0) { $0 + $1.fileSize })
+            let oldLinks = fixture.resources.map {
+                RemoteAssetResourceLink(year: 2026, month: 1, assetFingerprint: sourceFingerprint,
+                    resourceHash: $0.instance.resourceHash, role: $0.role, slot: $0.slot)
+            }
+            try store.upsertAsset(oldAsset, links: oldLinks)
+            if scenario == "existing-resource" {
+                _ = try store.upsertResource(.init(year: 2026, month: 1, fileName: "existing.aae",
+                    contentHash: exported.contentHash, fileSize: exported.fileSize, resourceType: 7, creationDateMs: nil, backedUpAtMs: 0))
+                await client.seedFile(path: "/p/2026/01/existing.aae", data: adjustmentBytes)
+            }
+            _ = try await store.flushToRemote()
+            let originalManifest = await client.fileData(path: store.manifestAbsolutePath)
+            let uploadCount = await client.uploadedPaths.count
+            let snapshotCache = RemoteLibrarySnapshotCache()
+            snapshotCache.setProfileKey(profileKey)
+            let remoteIndex = RemoteIndexSyncService(snapshotCache: snapshotCache)
+            let original = store.unsortedSnapshot()
+            remoteIndex.replaceCachedMonth(.init(year: 2026, month: 1), resources: original.resources,
+                assets: original.assets, links: original.links, expectedProfileKey: profileKey)
+            let processor = AssetProcessor(photoLibraryService: PhotoLibraryService(), hashIndexRepository: repository, remoteIndexService: remoteIndex)
+            let executor = BackupParallelExecutor(hashIndexRepository: repository, assetProcessor: processor, remoteIndexService: remoteIndex)
+            XCTAssertFalse(executor.monthAlreadyFullyBackedUp(monthAssetIDs: [localID], monthStore: store), scenario)
+            var cache = try XCTUnwrap(repository.fetchAssetHashCaches(assetIDs: [localID])[localID])
+            if scenario == "stale-cache" { cache.hashesByRoleSlot[.init(role: 7, slot: adjustment.slot)] = Data(repeating: 99, count: 32) }
+            let session = try XCTUnwrap(LocalVolumeWriteSession.claim(key: UUID().uuidString))
+            defer { session.stop() }
+            let cancellation = BackupCancellationController()
+            if scenario == "upload-failure" {
+                for _ in 0..<3 { await client.enqueueUploadError(RemoteErrorFixtures.terminal) }
+            } else if scenario == "lease-loss" {
+                await client.setOnUploadAfterWrite { session.stop() }
+            } else if scenario == "cancel" {
+                await client.setOnUploadAfterWrite { cancellation.cancel() }
+            }
+            let context = AssetProcessContext(workerID: 0, asset: asset, selectedResources: selected,
+                cachedLocalHash: scenario == "uncached" ? nil : cache, iCloudPhotoBackupMode: .disable, pass: .localResources,
+                monthStore: store, profile: profile, assetPosition: 1, totalAssets: 1, writeMode: .lite(session, nil))
+            let events = BackupEventStream()
+            var result: AssetProcessResult?
+            do {
+                result = try await processor.process(context: context, client: client, eventStream: events, cancellationController: cancellation)
+                if scenario == "lease-loss" || scenario == "cancel" { XCTFail("Expected interruption: \(scenario)") }
+            } catch {
+                XCTAssertTrue(scenario == "lease-loss" || scenario == "cancel", "\(scenario): \(error)")
+            }
+            events.finish()
+            var progress = HomeExecutionTransferTracker()
+            progress.updateTotalBytes(cache.totalFileSizeBytes * 2)
+            var exportedNames = Set<String>()
+            var completedUploadBytes: Int64 = 0
+            for await event in events.stream {
+                if case .transferState(let state) = event { _ = progress.record(state, now: 1) }
+                if case .transferState(let state) = event, state.stageDescription == String(localized: "backup.transfer.prepareResource") {
+                    exportedNames.insert(state.resourceDisplayName)
+                }
+                if case .transferState(let state) = event, state.countsTowardTransferSpeed,
+                   state.stageDescription == String(localized: "backup.transfer.uploadCompleted") {
+                    completedUploadBytes += state.resourceBytesTransferred ?? 0
+                }
+            }
+            let adjustmentName = PhotoLibraryService.safeOriginalFilename(for: adjustment.resource)
+            if scenario == "existing-resource" {
+                XCTAssertTrue(exportedNames.isEmpty)
+            } else if scenario != "uncached" && scenario != "stale-cache" {
+                XCTAssertEqual(exportedNames, [adjustmentName], scenario)
+            }
+            let oldBytes = await client.fileData(path: "/p/2026/01/" + oldAdjustment.fileName)
+            XCTAssertEqual(oldBytes, try Data(contentsOf: directory.appendingPathComponent(oldAdjustment.fixturePath)), scenario)
+            if ["upload-failure", "lease-loss", "cancel"].contains(scenario) {
+                if scenario == "upload-failure" { XCTAssertEqual(result?.status, .failed) }
+                XCTAssertEqual(Set(store.links(forAssetFingerprint: sourceFingerprint)), Set(oldLinks), scenario)
+                XCTAssertEqual(store.assetsByFingerprint[sourceFingerprint], oldAsset, scenario)
+                XCTAssertEqual(Set(remoteIndex.fullSnapshot().assetResourceLinks), Set(oldLinks), scenario)
+                let unchanged = await client.fileData(path: store.manifestAbsolutePath)
+                XCTAssertEqual(unchanged, originalManifest, scenario)
+                XCTAssertFalse(executor.monthAlreadyFullyBackedUp(monthAssetIDs: [localID], monthStore: store), scenario)
+                continue
+            }
+            XCTAssertEqual(result?.status, .success, scenario)
+            XCTAssertEqual(result?.reason, AssetProcessor.assetResourcesUpdatedReason, scenario)
+            XCTAssertEqual(result?.uploadedFileSizeBytes, scenario == "existing-resource" ? 0 : exported.fileSize, scenario)
+            XCTAssertEqual(completedUploadBytes, result?.uploadedFileSizeBytes, scenario)
+            for state in BackupParallelExecutor.assetResourceCompletionStates(asset: asset, selectedResources: selected,
+                workerID: 0, assetPosition: 1, totalAssets: 1, displayName: result!.displayName) {
+                _ = progress.record(state, now: 2)
+            }
+            XCTAssertEqual(try XCTUnwrap(progress.snapshot(now: 2).progressFraction), 0.5, accuracy: 0.000001, scenario)
+            let uploads = await client.uploadedPaths
+            XCTAssertEqual(uploads.count - uploadCount, scenario == "existing-resource" ? 0 : 1, scenario)
+            let newLink = try XCTUnwrap(store.links(forAssetFingerprint: sourceFingerprint).first { $0.role == 7 })
+            XCTAssertEqual(newLink.resourceHash, exported.contentHash, scenario)
+            XCTAssertEqual(Set(store.links(forAssetFingerprint: sourceFingerprint).filter { $0.role != 7 }), Set(oldLinks.filter { $0.role != 7 }))
+            let newResource = try XCTUnwrap(store.findResourceByHash(newLink.resourceHash))
+            let publishedBytes = await client.fileData(path: "/p/2026/01/" + newResource.fileName)
+            XCTAssertEqual(publishedBytes, adjustmentBytes, scenario)
+            XCTAssertNotNil(store.findResourceByHash(oldAdjustment.instance.resourceHash))
+            XCTAssertEqual(store.assetsByFingerprint.count, 1)
+            XCTAssertEqual(store.assetsByFingerprint[sourceFingerprint]?.totalFileSizeBytes,
+                oldAsset.totalFileSizeBytes - oldAdjustment.fileSize + exported.fileSize)
+            XCTAssertEqual(try repository.fetchAssetHashCaches(assetIDs: [localID])[localID]?.hashesByRoleSlot[.init(role: 7, slot: adjustment.slot)], exported.contentHash)
+            if scenario == "manifest-failure" {
+                await client.enqueueUploadError(RemoteErrorFixtures.terminal)
+                do { _ = try await store.flushToRemote(); XCTFail("Expected failed manifest upload") } catch {}
+                XCTAssertTrue(store.dirty)
+                let unchanged = await client.fileData(path: store.manifestAbsolutePath)
+                XCTAssertEqual(unchanged, originalManifest)
+            }
+            _ = try await store.flushToRemote()
+            XCTAssertFalse(store.dirty)
+            let reloaded = try await MonthManifestStore.loadOrCreate(client: client, basePath: "/p", year: 2026, month: 1, layout: .lite)
+            XCTAssertEqual(Set(reloaded.links(forAssetFingerprint: sourceFingerprint)), Set(store.links(forAssetFingerprint: sourceFingerprint)))
+            XCTAssertTrue(executor.monthAlreadyFullyBackedUp(monthAssetIDs: [localID], monthStore: store))
+            let repeatedContext = AssetProcessContext(workerID: 0, asset: asset, selectedResources: selected,
+                cachedLocalHash: try repository.fetchAssetHashCaches(assetIDs: [localID])[localID],
+                iCloudPhotoBackupMode: .disable, pass: .localResources, monthStore: store, profile: profile,
+                assetPosition: 1, totalAssets: 1, writeMode: .lite(session, nil))
+            let uploadsBeforeRepeat = await client.uploadedPaths.count
+            let repeated = try await processor.process(context: repeatedContext, client: client, eventStream: BackupEventStream(), cancellationController: nil)
+            XCTAssertEqual(repeated.status, .skipped)
+            XCTAssertFalse(store.dirty)
+            let uploadsAfterRepeat = await client.uploadedPaths.count
+            XCTAssertEqual(uploadsAfterRepeat, uploadsBeforeRepeat)
+            if scenario == "cached" {
+                let instances = reloaded.links(forAssetFingerprint: sourceFingerprint).map { link in
+                    let resource = reloaded.findResourceByHash(link.resourceHash)!
+                    return RemoteAssetResourceInstance(role: link.role, slot: link.slot, resourceHash: link.resourceHash,
+                        fileName: resource.fileName, fileSize: resource.fileSize,
+                        remoteRelativePath: "2026/01/" + resource.fileName, creationDateMs: resource.creationDateMs)
+                }
+                let imported = try await RestoreService(makeClient: { _, _ in client }, hashIndexRepository: repository).restoreItems(
+                    items: [.init(instances: instances, identity: sourceFingerprint, creationDate: asset.creationDate)],
+                    profile: profile, password: "", onItemCompleted: { _, _, _ in })
+                let importedID = try XCTUnwrap(imported.first?.asset.localIdentifier)
+                createdIDs.append(importedID)
+                XCTAssertEqual(try repository.fetchAssetHashCaches(assetIDs: [importedID])[importedID]?.assetFingerprint, sourceFingerprint)
+            }
+            print("ADJUSTMENT_UPDATE \(scenario) uploaded=\(result?.uploadedFileSizeBytes ?? -1) repeatWrites=0")
+        }
+        #else
+        throw XCTSkip("Simulator-only diagnostic")
+        #endif
     }
 
     private func fingerprint(_ instances: [RemoteAssetResourceInstance]) -> Data {

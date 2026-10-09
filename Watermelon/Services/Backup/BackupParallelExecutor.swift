@@ -172,7 +172,7 @@ struct BackupParallelExecutor: Sendable {
         )
     }
 
-    static func failedAssetTransferStates(
+    static func assetResourceCompletionStates(
         asset: PHAsset,
         selectedResources: [BackupSelectedResource],
         workerID: Int,
@@ -233,7 +233,8 @@ struct BackupParallelExecutor: Sendable {
     }
 
     static func shouldEmitResultCredit(_ result: AssetProcessResult) -> Bool {
-        if result.status == .success, result.reason == AssetProcessor.assetDateUpdatedReason { return true }
+        if result.status == .success,
+           result.reason == AssetProcessor.assetDateUpdatedReason || result.reason == AssetProcessor.assetResourcesUpdatedReason { return true }
         guard result.status == .skipped else { return false }
         switch result.reason {
         case "asset_exists_cached",
@@ -1306,7 +1307,7 @@ struct BackupParallelExecutor: Sendable {
 
                                 let progressState = await aggregator.recordFailure()
                                 monthProgressCounts.failed += 1
-                                let failureTransferStates = Self.failedAssetTransferStates(
+                                let failureTransferStates = Self.assetResourceCompletionStates(
                                     asset: asset,
                                     selectedResources: selectedResources,
                                     workerID: workerID + 1,
@@ -1376,7 +1377,13 @@ struct BackupParallelExecutor: Sendable {
 
                         let progressState = await aggregator.record(result: result)
                         monthProgressCounts.record(result.status)
-                        if Self.shouldEmitResultCredit(result),
+                        if result.status == .success, result.reason == AssetProcessor.assetResourcesUpdatedReason {
+                            for state in Self.assetResourceCompletionStates(asset: asset, selectedResources: selectedResources,
+                                workerID: workerID + 1, assetPosition: dispatch.position, totalAssets: dispatch.total,
+                                displayName: result.displayName) {
+                                eventStream.emit(.transferState(state))
+                            }
+                        } else if Self.shouldEmitResultCredit(result),
                            let transferState = Self.estimatedAssetTransferState(
                             assetLocalIdentifier: asset.localIdentifier,
                             displayName: result.displayName,
@@ -1918,12 +1925,13 @@ struct BackupParallelExecutor: Sendable {
         for index in 0 ..< fetchResult.count {
             let asset = fetchResult.object(at: index)
             guard let cache = cachedHashes[asset.localIdentifier] else { return false }
-            if let modDate = asset.modificationDate, modDate > cache.updatedAt {
-                return false
-            }
-            guard monthStore.containsAssetFingerprint(cache.assetFingerprint),
+            let selected = BackupAssetResourcePlanner.orderedResourcesWithRoleSlot(from: PHAssetResource.assetResources(for: asset))
+            guard let hashes = AssetProcessor.cachedRoleSlotHashes(asset: asset, selectedResources: selected, cachedLocalHash: cache),
+                  let remoteAsset = monthStore.assetsByFingerprint[cache.assetFingerprint],
                   !monthStore.isAssetIncomplete(cache.assetFingerprint),
-                  monthStore.assetsByFingerprint[cache.assetFingerprint]?.creationDateMs == LibraryCreationDate.optionalMilliseconds(asset.creationDate) else { return false }
+                  remoteAsset.creationDateMs == LibraryCreationDate.optionalMilliseconds(asset.creationDate),
+                  BackupAssetResourcePlanner.updatedAdjustmentLinks(localResources: hashes, remoteAsset: remoteAsset,
+                    remoteLinks: monthStore.links(forAssetFingerprint: cache.assetFingerprint)) == nil else { return false }
         }
         return true
     }
