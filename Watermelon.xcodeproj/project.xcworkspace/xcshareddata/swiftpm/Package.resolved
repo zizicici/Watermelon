@@ -168,8 +168,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/zizicici/MoreKit",
       "state" : {
-        "revision" : "e278a691443f0b29ebb52eab9fff089f2da81a6b",
-        "version" : "2.0.1"
+        "revision" : "5bb70440ac52a52bad739ac1bc866a25d57e46a1",
+        "version" : "2.1.0"
       }
     },
     {

@@ -53,6 +53,7 @@ final class RestoreService: @unchecked Sendable {
     private let inspectImportedAsset: (@Sendable (String, [RemoteAssetResourceInstance]) async throws -> ImportedAssetSnapshot)?
     private let makeRemoteClient: @Sendable (ServerProfileRecord, String) throws -> any RemoteStorageClientProtocol
     private let importAsset: @Sendable ([(RemoteAssetResourceInstance, URL)], Date?) async throws -> String?
+    private let availableCapacity: @Sendable () -> Int64?
 
     init(
         databaseManager: DatabaseManager,
@@ -60,6 +61,7 @@ final class RestoreService: @unchecked Sendable {
     ) {
         hashIndexRepository = ContentHashIndexRepository(databaseManager: databaseManager)
         inspectImportedAsset = Self.readImportedAsset
+        availableCapacity = RestoreStagingStore.availableCapacity
         self.makeRemoteClient = { profile, password in
             try storageClientFactory.makeClient(profile: profile, credentialPayload: password)
         }
@@ -75,6 +77,7 @@ final class RestoreService: @unchecked Sendable {
     ) {
         self.hashIndexRepository = hashIndexRepository
         inspectImportedAsset = Self.readImportedAsset
+        availableCapacity = RestoreStagingStore.availableCapacity
         self.makeRemoteClient = makeClient
         importAsset = { downloaded, creationDate in
             try await Self.saveToPhotoLibrary(downloaded: downloaded, creationDate: creationDate)
@@ -85,10 +88,12 @@ final class RestoreService: @unchecked Sendable {
         makeClient: @escaping @Sendable (ServerProfileRecord, String) throws -> any RemoteStorageClientProtocol,
         importAsset: @escaping @Sendable ([(RemoteAssetResourceInstance, URL)], Date?) async throws -> String?,
         inspectImportedAsset: (@Sendable (String, [RemoteAssetResourceInstance]) async throws -> ImportedAssetSnapshot)? = nil,
-        hashIndexRepository: ContentHashIndexRepository? = nil
+        hashIndexRepository: ContentHashIndexRepository? = nil,
+        availableCapacity: @escaping @Sendable () -> Int64? = RestoreStagingStore.availableCapacity
     ) {
         self.hashIndexRepository = hashIndexRepository
         self.inspectImportedAsset = inspectImportedAsset
+        self.availableCapacity = availableCapacity
         self.makeRemoteClient = makeClient
         self.importAsset = importAsset
     }
@@ -121,14 +126,130 @@ final class RestoreService: @unchecked Sendable {
         items: [RestoreItemDescriptor],
         profile: ServerProfileRecord,
         password: String,
+        downloadPolicy: RestoreDownloadPolicy = .serial,
         shouldDrain: @escaping @Sendable () -> Bool = { false },
         onTransferState: (@Sendable (BackupTransferState) async -> Void)? = nil,
         onItemFailed: (@Sendable (RestoreItemFailure) async -> Void)? = nil,
         onItemCompleted: @Sendable (Int, Int, RestoredItem?) async throws -> Void
     ) async throws -> [RestoredItem] {
         guard !items.isEmpty else { return [] }
+        try Task.checkCancellation()
         if shouldDrain() { throw CancellationError() }
+        let staging = try RestoreStagingStore()
+        let workerCount = min(items.count, min(max(1, downloadPolicy.workerCount), profile.isBrowserLinkProfile ? 2 : 4))
+        var policy = downloadPolicy
+        policy.workerCount = workerCount
+        let workers = (0..<workerCount).map { _ in RestoreDownloadWorker() }
+        let pipeline = OrderedRestorePipeline<PreparedRestoreGroup>(policy: policy)
+        var results: [RestoredItem] = []
+        let outcome: Result<Void, Error>
+        do {
+            try await pipeline.run(
+                estimatedBytes: items.map { RestoreDownloadPolicy.estimatedBytes(for: $0.instances) },
+                shouldDrain: shouldDrain,
+                availableCapacity: availableCapacity,
+                byteCount: { $0.byteCount },
+                resolveSize: { [self] index in
+                    try await resolveDownloadSize(items[index], profile: profile, password: password, shouldDrain: shouldDrain)
+                },
+                prepare: { [self] index, workerID in
+                    try await workers[workerID].prepare(
+                        service: self, item: items[index], index: index, totalItems: items.count,
+                        workerID: workerID + 1, profile: profile, password: password,
+                        directory: staging.itemDirectory(index), shouldDrain: shouldDrain,
+                        onTransferState: onTransferState
+                    )
+                },
+                commit: { [self] index, result in
+                    let item = items[index]
+                    var restoredItem: RestoredItem?
+                    do {
+                        let prepared = try result.get()
+                        defer { prepared.removeFiles() }
+                        if let asset = try await importGroup(prepared.group, downloaded: prepared.downloaded, itemIdentity: item.identity) {
+                            let restored = RestoredItem(identity: item.identity, asset: asset)
+                            results.append(restored)
+                            restoredItem = restored
+                        }
+                    } catch {
+                        guard let onItemFailed, Self.isItemLocalFailure(error) else { throw error }
+                        await onItemFailed(RestoreItemFailure(
+                            identity: item.identity,
+                            displayName: item.instances.first?.fileName ?? String(item.identity.hexString.prefix(12)),
+                            reason: error.localizedDescription
+                        ))
+                        throw CancellationError()
+                    }
+                    try await onItemCompleted(index + 1, items.count, restoredItem)
+                }
+            )
+            outcome = .success(())
+        } catch {
+            outcome = .failure(error)
+        }
+        for worker in workers { await worker.disconnect() }
+        staging.removeAll()
+        try outcome.get()
+        return results
+    }
 
+    private func resolveDownloadSize(
+        _ item: RestoreItemDescriptor,
+        profile: ServerProfileRecord,
+        password: String,
+        shouldDrain: @escaping @Sendable () -> Bool
+    ) async throws -> Int64? {
+        try Task.checkCancellation()
+        if shouldDrain() { throw CancellationError() }
+        guard !profile.isBrowserLinkProfile, item.instances.allSatisfy(Self.isSafeRestoreResource) else { return nil }
+        let handle = NetworkAttemptClientHandle()
+        let result = await NetworkRecovery.boundedAttempt(
+            deadline: Date().addingTimeInterval(NetworkRecoveryPolicy.connectTimeout),
+            abortIf: { shouldDrain() },
+            onAbandon: { handle.abandon() },
+            reap: { (_: Int64?) in await handle.reap() },
+            op: { [makeRemoteClient] () async -> Int64? in
+                guard let client = try? makeRemoteClient(profile, password), handle.install(client) else { return nil }
+                let size: Int64?
+                do {
+                    try Task.checkCancellation()
+                    try await client.connect()
+                    size = try await Self.remoteDownloadSize(item.instances, client: client, basePath: profile.basePath)
+                } catch {
+                    size = nil
+                }
+                if !Task.isCancelled { await client.disconnectSafely() }
+                return size
+            }
+        )
+        try Task.checkCancellation()
+        if shouldDrain() { throw CancellationError() }
+        switch result {
+        case .completed(let size): return size
+        case .timedOut: return nil
+        }
+    }
+
+    private static func remoteDownloadSize(
+        _ instances: [RemoteAssetResourceInstance], client: any RemoteStorageClientProtocol, basePath: String
+    ) async throws -> Int64? {
+        var hashes = Set<Data>()
+        var bytes: Int64 = 0
+        for instance in instances {
+            try Task.checkCancellation()
+            if !instance.resourceHash.isEmpty, !hashes.insert(instance.resourceHash).inserted { continue }
+            let path = RemotePathBuilder.absolutePath(basePath: basePath, remoteRelativePath: instance.remoteRelativePath)
+            guard let metadata = try await client.metadata(path: path), !metadata.isDirectory, metadata.size >= 0 else { return nil }
+            bytes = RestoreDownloadPolicy.adding(bytes, metadata.size)
+        }
+        return bytes
+    }
+
+    private func connect(
+        profile: ServerProfileRecord,
+        password: String,
+        shouldDrain: @escaping @Sendable () -> Bool
+    ) async throws -> any RemoteStorageClientProtocol {
         let storageClient: any RemoteStorageClientProtocol
         if profile.isBrowserLinkProfile {
             let client = try makeRemoteClient(profile, password)
@@ -164,67 +285,22 @@ final class RestoreService: @unchecked Sendable {
                 throw CancellationError()
             }
         }
-        // Boxed so a mid-restore reconnect can hot-swap the client for all subsequent downloads.
-        let clientBox = RestoreClientBox(storageClient)
-        do {
-            var results: [RestoredItem] = []
-            for (index, item) in items.enumerated() {
-                if shouldDrain() { throw CancellationError() }
-                try Task.checkCancellation()
-                let creationDate = item.creationDate ?? item.instances
-                    .compactMap(\.creationDateMs)
-                    .min()
-                    .map { Date(millisecondsSinceEpoch: $0) }
-                let group = RestoreGroup(creationDate: creationDate, instances: item.instances, isIncomplete: item.isIncomplete)
-                var restoredItem: RestoredItem?
-                do {
-                    if let asset = try await restoreGroup(
-                        group,
-                        itemIdentity: item.identity,
-                        itemPosition: index + 1,
-                        totalItems: items.count,
-                        profile: profile,
-                        password: password,
-                        clientBox: clientBox,
-                        shouldDrain: shouldDrain,
-                        onTransferState: onTransferState
-                    ) {
-                        let restored = RestoredItem(identity: item.identity, asset: asset)
-                        results.append(restored)
-                        restoredItem = restored
-                    }
-                } catch {
-                    guard let onItemFailed, Self.isItemLocalFailure(error) else { throw error }
-                    let failure = RestoreItemFailure(
-                        identity: item.identity,
-                        displayName: group.instances.first?.fileName ?? String(item.identity.hexString.prefix(12)),
-                        reason: error.localizedDescription
-                    )
-                    print("[RestoreService] item FAILED, requesting skip decision: \(failure.displayName), reason=\(failure.reason)")
-                    await onItemFailed(failure)
-                    throw CancellationError()
-                }
-                try await onItemCompleted(index + 1, items.count, restoredItem)
-            }
-            await clientBox.client.disconnectSafely()
-            return results
-        } catch {
-            await clientBox.client.disconnectSafely()
-            throw error
-        }
+        return storageClient
     }
 
-    private func restoreGroup(
+    private func downloadGroup(
         _ group: RestoreGroup,
         itemIdentity: Data,
         itemPosition: Int,
         totalItems: Int,
+        workerID: Int,
+        directory: URL,
         profile: ServerProfileRecord,
         password: String,
         clientBox: RestoreClientBox,
         shouldDrain: @escaping @Sendable () -> Bool,
         onTransferState: (@Sendable (BackupTransferState) async -> Void)?
-    ) async throws -> RestoredAsset? {
+    ) async throws -> PreparedRestoreGroup {
         for instance in group.instances where !Self.isSafeRestoreResource(instance) {
             throw RestoreIntegrityError.invalidManifestResource(fileName: instance.fileName)
         }
@@ -239,9 +315,8 @@ final class RestoreService: @unchecked Sendable {
         downloadedURLsByHash.reserveCapacity(group.instances.count)
         var downloaded: [(RemoteAssetResourceInstance, URL)] = []
         downloaded.reserveCapacity(group.instances.count)
-        // Own every group temp file: any pre-import failure/cancellation must not leak full-size originals.
-        var tempURLs: Set<URL> = []
-        defer { for url in tempURLs { try? FileManager.default.removeItem(at: url) } }
+        var succeeded = false
+        defer { if !succeeded { try? FileManager.default.removeItem(at: directory) } }
 
         for (resourceIndex, instance) in group.instances.enumerated() {
             try Task.checkCancellation()
@@ -253,9 +328,7 @@ final class RestoreService: @unchecked Sendable {
                 continue
             }
 
-            let tempURL = Self.makeTemporaryRestoreURL(fileName: instance.fileName)
-            try? FileManager.default.removeItem(at: tempURL)
-            tempURLs.insert(tempURL)
+            let tempURL = directory.appendingPathComponent(Self.makeTemporaryRestoreURL(fileName: instance.fileName).lastPathComponent)
 
             let remotePath = RemotePathBuilder.absolutePath(
                 basePath: profile.basePath,
@@ -271,6 +344,7 @@ final class RestoreService: @unchecked Sendable {
                 itemCreationDate: group.creationDate,
                 itemPosition: itemPosition,
                 totalItems: totalItems,
+                workerID: workerID,
                 resourcePosition: resourceIndex + 1,
                 totalResources: group.instances.count,
                 resource: instance,
@@ -293,6 +367,19 @@ final class RestoreService: @unchecked Sendable {
             downloaded.append((instance, tempURL))
         }
 
+        succeeded = true
+        let bytes = Set(downloaded.map(\.1)).reduce(Int64(0)) { total, url in
+            let size = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize).map(Int64.init) ?? 0
+            return RestoreDownloadPolicy.adding(total, size)
+        }
+        return PreparedRestoreGroup(group: group, downloaded: downloaded, directory: directory, byteCount: bytes)
+    }
+
+    private func importGroup(
+        _ group: RestoreGroup,
+        downloaded: [(RemoteAssetResourceInstance, URL)],
+        itemIdentity: Data
+    ) async throws -> RestoredAsset? {
         let acceptedDownloaded = Self.acceptedDownloadedResources(from: downloaded)
         do {
             try Task.checkCancellation()
@@ -351,6 +438,7 @@ final class RestoreService: @unchecked Sendable {
         itemCreationDate: Date?,
         itemPosition: Int,
         totalItems: Int,
+        workerID: Int,
         resourcePosition: Int,
         totalResources: Int,
         resource: RemoteAssetResourceInstance,
@@ -378,6 +466,7 @@ final class RestoreService: @unchecked Sendable {
                         itemCreationDate: itemCreationDate,
                         itemPosition: itemPosition,
                         totalItems: totalItems,
+                        workerID: workerID,
                         resourcePosition: resourcePosition,
                         totalResources: totalResources,
                         resource: resource,
@@ -386,6 +475,7 @@ final class RestoreService: @unchecked Sendable {
                 )
                 return .succeeded(())
             } catch {
+                if Task.isCancelled { return .failed(CancellationError()) }
                 // Reconnect only for a recoverable fault, before the driver backs off and retries; a terminal
                 // fault / ejected volume falls through to fail fast (isRetryable is false for them).
                 if AssetProcessor.isRecoverableNetworkFault(error, profile: profile) {
@@ -436,6 +526,7 @@ final class RestoreService: @unchecked Sendable {
         itemCreationDate: Date?,
         itemPosition: Int,
         totalItems: Int,
+        workerID: Int,
         resourcePosition: Int,
         totalResources: Int,
         resource: RemoteAssetResourceInstance,
@@ -458,7 +549,7 @@ final class RestoreService: @unchecked Sendable {
             let transferred = totalBytes.map { Int64((Double($0) * clamped).rounded()) }
             let state = BackupTransferState(
                 kind: .download,
-                workerID: 1,
+                workerID: workerID,
                 assetLocalIdentifier: itemIdentity.hexString,
                 assetDisplayName: itemDisplayName,
                 resourceDate: itemCreationDate,
@@ -507,9 +598,70 @@ final class RestoreService: @unchecked Sendable {
         }
     }
 
-    private final class RestoreClientBox {
-        var client: any RemoteStorageClientProtocol
-        init(_ client: any RemoteStorageClientProtocol) { self.client = client }
+    private final class RestoreClientBox: @unchecked Sendable {
+        // Each box is confined to one worker, which finishes before its slot is reused.
+        var client: any RemoteStorageClientProtocol {
+            didSet { _ = cancellationHandle?.install(client) }
+        }
+        let cancellationHandle: NetworkAttemptClientHandle?
+
+        init(_ client: any RemoteStorageClientProtocol, isShared: Bool) {
+            self.client = client
+            cancellationHandle = isShared ? nil : NetworkAttemptClientHandle()
+            _ = cancellationHandle?.install(client)
+        }
+    }
+
+    private struct PreparedRestoreGroup: Sendable {
+        let group: RestoreGroup
+        let downloaded: [(RemoteAssetResourceInstance, URL)]
+        let directory: URL
+        let byteCount: Int64
+
+        func removeFiles() { try? FileManager.default.removeItem(at: directory) }
+    }
+
+    private actor RestoreDownloadWorker {
+        private var clientBox: RestoreClientBox?
+
+        func prepare(
+            service: RestoreService,
+            item: RestoreItemDescriptor,
+            index: Int,
+            totalItems: Int,
+            workerID: Int,
+            profile: ServerProfileRecord,
+            password: String,
+            directory: URL,
+            shouldDrain: @escaping @Sendable () -> Bool,
+            onTransferState: (@Sendable (BackupTransferState) async -> Void)?
+        ) async throws -> PreparedRestoreGroup {
+            try Task.checkCancellation()
+            if clientBox == nil {
+                clientBox = RestoreClientBox(
+                    try await service.connect(profile: profile, password: password, shouldDrain: shouldDrain),
+                    isShared: profile.isBrowserLinkProfile
+                )
+            }
+            guard let clientBox else { throw CancellationError() }
+            let creationDate = item.creationDate ?? item.instances.compactMap(\.creationDateMs).min().map { Date(millisecondsSinceEpoch: $0) }
+            return try await withTaskCancellationHandler {
+                try Task.checkCancellation()
+                return try await service.downloadGroup(
+                    RestoreGroup(creationDate: creationDate, instances: item.instances, isIncomplete: item.isIncomplete),
+                    itemIdentity: item.identity, itemPosition: index + 1, totalItems: totalItems,
+                    workerID: workerID, directory: directory, profile: profile, password: password,
+                    clientBox: clientBox, shouldDrain: shouldDrain, onTransferState: onTransferState
+                )
+            } onCancel: {
+                clientBox.cancellationHandle?.abandon()
+            }
+        }
+
+        func disconnect() async {
+            await clientBox?.client.disconnectSafely()
+            clientBox = nil
+        }
     }
 
     private struct RestoreGroup: Sendable {
@@ -771,7 +923,7 @@ final class RestoreService: @unchecked Sendable {
               !fileExtension.isEmpty else {
             return fileURL
         }
-        let importURL = FileManager.default.temporaryDirectory.appendingPathComponent(
+        let importURL = fileURL.deletingLastPathComponent().appendingPathComponent(
             "restore_import_\(UUID().uuidString).\(fileExtension)",
             isDirectory: false
         )

@@ -22,6 +22,7 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
         Analytics.setAnalyticsCollectionEnabled(true)
         AppExitMetricsMonitor.shared.start()
         MediaDropFileStagingStore.cleanupStaleSessions()
+        RestoreStagingStore.cleanupStaleSessions()
         UNUserNotificationCenter.current().delegate = self
 
         ProStatus.migrateLegacyCacheIfNeeded()

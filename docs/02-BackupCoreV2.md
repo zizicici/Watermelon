@@ -202,7 +202,8 @@ SMB / WebDAV / S3 / SFTP / OneDrive / Dropbox / Google Drive / BrowserLink 走 `
 2. 某个 sync 月份 flush 完成后，worker 会调用 `onMonthUploaded(month)`
 3. 回调内部执行：
    - 标记该月上传已完成（`uploadDone`）
-   - 立刻 `syncRemoteDataAndWait()`（驱动 `BackupCoordinator` 重新拉取最新远端快照）
+   - 进入 `DownloadMonthGate` 的 FIFO 队列，一次只允许一个月份进入下载流程；入队顺序由上传完成顺序决定
+   - 获得许可后执行 `syncRemoteDataAndWait()`（驱动 `BackupCoordinator` 重新拉取最新远端快照）
    - 刷新该月相关本地索引
    - 取出该月 `remoteOnlyItems`
    - 交给 `DownloadWorkflowHelper.downloadItems(...)`
@@ -225,7 +226,18 @@ SMB / WebDAV / S3 / SFTP / OneDrive / Dropbox / Google Drive / BrowserLink 走 `
    - `writeHashIndex(...)`
    - 触发 `refreshLocalIndexAndNotify([assetID])`
 
-下载阶段的取消粒度仍是 item 级，因为 `RestoreService.restoreItems(...)` 在 item 循环开头检查 `Task.checkCancellation()`。
+纯下载和同步补下载统一使用月内预取流水线：
+
+1. `DownloadWorkflowHelper` 启用 2 个下载 worker；每个 worker 复用独立客户端，Browser Link 复用其共享客户端及内部下载限制。下载连接独立于上传连接池。
+2. `OrderedRestorePipeline` 最多保留 2 个下载中或待提交的资产，包括队首；按输入序号依次导入 Photos、检查实际资源、处理本地哈希索引，再触发完成回调。
+3. 每个资产先下载并校验全部资源；任务允许乱序完成，结果和单项错误按输入顺序交付。已有失败结果时停止继续预取。
+4. 预取预算目标为 256 MiB，完整资产一次预留额度；单项超出目标时独占处理。查询可用空间时额外预留两份最大资产的预计空间及 64 MiB，供导入和实际资源校验使用。清单大小只作为估计，下载完成后用实际大小更新预算；这不是下载过程中的硬字节上限。大小未知的资产不与其他资产同时预取。
+5. `RestoreStagingStore` 使用 `tmp/Restore/<运行 UUID>/<资产序号>/`。提交后删除该项，失败或取消时等待所有下载返回后清理整个运行目录并断开连接；启动时回收前次运行目录。
+6. 直接调用 `RestoreService` 默认保持单 worker，浏览器下载入口保持此默认；首页纯下载和同步补下载显式启用上述策略。
+
+清单大小不能直接作为空间不足的硬失败依据：队列为空且估计无法通过容量检查时，使用独立、可取消且限时的连接查询远端实际大小，再判断容量。查询失败或大小未知时仅下载当前资产，按实际落盘大小检查剩余导入空间（两份实际资产及 64 MiB）；这条回退路径不预取其他资产。Browser Link 使用共享连接，直接采用单项回退。SHA 校验仍是有哈希资源的完整性依据，避免旧清单大小错误阻断原本可恢复的文件。
+
+月份按既有调度依次进入下载，月内保留输入顺序；不要求同步月份全局按拍摄时间排序。月份只有在导入和索引收尾完成后才进入完成态。
 
 ## 10. 进度与 UI 映射
 
@@ -258,11 +270,12 @@ SMB / WebDAV / S3 / SFTP / OneDrive / Dropbox / Google Drive / BrowserLink 走 `
 1. 上传阶段：
    - `BackupSessionController` 把 pause 写入 `ExecutionTerminationControl`
    - preparation 在下一个安全点退出；worker 不再领取新 asset，但会完成已经开始的 asset、flush manifest，再退出
-   - sync 月份的 inline download 同样完成当前 remote asset，再停止下一条
+   - sync 月份的 inline download 完成当前队首 remote asset，取消后续预取；排队等待下载的月份退出队列。整轮上传失败时，这些尚未补下载的月份一并标记失败，已完成月份保持完成态
    - 已完成上传但未完成下载的 sync 月份会在 paused 终态恢复 continuation 之前重新标记待恢复 asset IDs
 2. 下载阶段：
    - Home 的下载阶段拥有独立的 `ExecutionTerminationControl`
-   - 不取消下载 task；`RestoreService` 完成当前 remote asset（含其全部 resource、导入和 hash-index 写回）后，在下一条 asset 前退出
+   - 不取消整个下载 task；`RestoreService` 完成当前队首 remote asset（含其全部 resource、导入和 hash-index 写回），取消后续预取并等待其退出，再清理临时文件；恢复时重新下载未提交项
+   - 预取取消会中止对应 worker 的独占客户端，重连后也跟踪新客户端，避免 SMB / SFTP 的底层请求阻塞收尾；SMB 进度回调读取线程安全取消标记。Browser Link 共享客户端只取消单次传输
    - 如果当前 asset 已因网络错误失去前进进度，drain 会停止后续 backoff / reconnect，而不是为一个已失败的 attempt 再等待完整恢复窗口
    - Home 会结束正在等待的 remote-index sync generation；后续安全点仍以 termination control 决定 paused / stopped，不把 sync waiter cancellation 当成硬取消
    - verification-plan 的连接、maintenance lease 获取和逐月 verify 也读取同一个 control，在各自安全点释放连接/lease 后退出

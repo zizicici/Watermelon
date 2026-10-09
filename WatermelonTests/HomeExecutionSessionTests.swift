@@ -383,6 +383,51 @@ final class HomeExecutionSessionTests: XCTestCase {
         )
     }
 
+    func testUploadFailureIncludesQueuedComplementAndPreservesCompletedMonth() {
+        let failures: [BackupSessionAsyncBridge.UploadResult] = [.failed("write lease lost"), .startFailed]
+        for result in failures {
+            var session = HomeExecutionSession()
+            let months = (1...4).map { LibraryMonthKey(year: 2026, month: $0) }
+            let active = months[0], queued = months[1], uploading = months[2], completed = months[3]
+            session.enter(backup: [], download: [], complement: months, localAssetIDs: { _ in ["asset"] })
+            for month in months { markUploading(&session, month) }
+            for month in [active, queued, completed] { session.completeComplementMonthUpload(month) }
+            session.beginDownloadMonth(active)
+            session.beginDownloadMonth(completed)
+            session.completeDownloadMonth(completed)
+
+            guard case .failed(let alert) = session.handleUploadResult(result) else {
+                return XCTFail("expected failed execution")
+            }
+            for month in [active, queued, uploading] {
+                XCTAssertEqual(session.monthPlans[month]?.phase, .failed)
+                XCTAssertEqual(session.monthPlans[month]?.failureMessage, alert.message)
+                XCTAssertEqual(session.monthPlans[month]?.isTerminal, true)
+            }
+            XCTAssertEqual(session.monthPlans[completed]?.phase, .completed)
+            XCTAssertNil(session.monthPlans[completed]?.failureMessage)
+            XCTAssertTrue(session.remainingDownloadMonths().isEmpty)
+        }
+    }
+
+    func testQueuedUploadedComplementRemainsPendingAcrossPauseAndResume() {
+        var session = HomeExecutionSession()
+        let month = LibraryMonthKey(year: 2026, month: 1)
+        session.enter(backup: [], download: [], complement: [month], localAssetIDs: { _ in ["asset"] })
+        markUploading(&session, month)
+        session.completeComplementMonthUpload(month)
+        XCTAssertEqual(session.monthPlans[month]?.phase, .uploadDone)
+        XCTAssertEqual(session.pause(), .upload)
+        XCTAssertEqual(session.assetIDsAwaitingInlineComplementResume(), ["asset"])
+        XCTAssertEqual(session.remainingDownloadMonths(), [month])
+        XCTAssertFalse(session.finishIfAllMonthsTerminal())
+        _ = session.resume()
+        session.beginDownloadMonth(month)
+        XCTAssertEqual(session.monthPlans[month]?.phase, .downloading)
+        session.completeDownloadMonth(month)
+        XCTAssertEqual(session.monthPlans[month]?.phase, .completed)
+    }
+
     // Same race, but the read-back-failed complement is the only download-bearing month: failing it closed empties
     // remainingDownloadMonths, so the run finishes failed (nothing left to pause into) rather than masked completed.
     func testPauseRacingComplementReadBackFailure_onlyMonth_finishesFailed() {

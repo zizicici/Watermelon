@@ -389,8 +389,6 @@ struct HomeExecutionSession {
     private mutating func applyUploadTargetsFailed(reason: String) {
         let uploadTargets = Set(backupMonths).union(complementMonths)
         for month in uploadTargets {
-            let phase = monthPlans[month]?.phase
-            guard phase != .uploadDone && phase != .completed && phase != .partiallyFailed else { continue }
             monthPlans[month]?.apply(.failed(reason: reason))
         }
     }

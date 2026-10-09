@@ -84,6 +84,7 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol, RemoteLeasedName
     private var onUploadAfterWrite: (@Sendable () async -> Void)?
     private var onMove: (@Sendable (String, String) async -> Void)?
     private var onDownloadAttempt: (@Sendable (String) async -> Void)?
+    private var onMetadata: (@Sendable (String) async -> Void)?
     // Fires after a download has served its bytes (so the current read sees old state); a test can mutate
     // the lock here to make a later confirmation read observe a changed token or freshened mtime.
     private var onDownload: (@Sendable (String) async -> Void)?
@@ -127,6 +128,7 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol, RemoteLeasedName
     nonisolated let supportsModificationDate: Bool
     nonisolated let supportsLegacyV1MigrationValue: Bool
     nonisolated private let allowsUnattendedOrdinaryWriteConfidenceValue: Bool
+    nonisolated private let onAbandon: (@Sendable () -> Void)?
 
     private let trustsLeaseConfidenceValue: Bool
 
@@ -135,14 +137,18 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol, RemoteLeasedName
         supportsModificationDate: Bool = true,
         trustsLeaseConfidenceForDestructiveWrite: Bool = false,
         supportsLegacyV1Migration: Bool = true,
-        allowsUnattendedOrdinaryWriteConfidence: Bool = false
+        allowsUnattendedOrdinaryWriteConfidence: Bool = false,
+        onAbandon: (@Sendable () -> Void)? = nil
     ) {
         self.moveMayNotBeIndependentValue = moveMayNotBeIndependent
         self.supportsModificationDate = supportsModificationDate
         supportsLegacyV1MigrationValue = supportsLegacyV1Migration
         allowsUnattendedOrdinaryWriteConfidenceValue = allowsUnattendedOrdinaryWriteConfidence
         trustsLeaseConfidenceValue = trustsLeaseConfidenceForDestructiveWrite
+        self.onAbandon = onAbandon
     }
+
+    nonisolated func cancelActiveOperationsForAbandonment() { onAbandon?() }
 
     nonisolated func trustsLeaseConfidenceForDestructiveWrite() -> Bool { trustsLeaseConfidenceValue }
     nonisolated func allowsUnattendedOrdinaryWriteConfidence() -> Bool {
@@ -253,6 +259,8 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol, RemoteLeasedName
     func setOnDownloadAttempt(_ hook: (@Sendable (String) async -> Void)?) {
         onDownloadAttempt = hook
     }
+
+    func setOnMetadata(_ hook: (@Sendable (String) async -> Void)?) { onMetadata = hook }
 
     func setRejectDeleteAfterDisconnect(_ value: Bool) {
         rejectDeleteAfterDisconnect = value
@@ -530,6 +538,7 @@ actor InMemoryRemoteStorageClient: RemoteStorageClientProtocol, RemoteLeasedName
         let key = normalize(path)
         metadataAttemptPaths.append(path)
         record("metadata", path)
+        if let onMetadata { await onMetadata(path) }
         if let index = metadataFailureSuffixes.firstIndex(where: { key.hasSuffix($0.suffix) }) {
             throw metadataFailureSuffixes.remove(at: index).error
         }

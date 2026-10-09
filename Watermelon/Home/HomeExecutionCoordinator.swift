@@ -338,6 +338,7 @@ final class HomeExecutionCoordinator {
     private var backupSessionController: BackupSessionController?
     private var backupBridge: BackupSessionAsyncBridge?
     private var downloadHelper: DownloadWorkflowHelper?
+    private let downloadMonthGate = DownloadMonthGate()
     private var executionSettingsSnapshot: ExecutionSettingsSnapshot?
     private var currentStatusText = String(localized: "home.execution.notStarted")
     private var transferTracker = HomeExecutionTransferTracker()
@@ -930,6 +931,13 @@ final class HomeExecutionCoordinator {
         usesExistingTransferPlan: Bool = false,
         verifyMonth: ((LibraryMonthKey) async throws -> Void)? = nil
     ) async -> Bool {
+        do {
+            try await downloadMonthGate.acquire(shouldDrain: { terminationControl.shouldDrain })
+        } catch {
+            return false
+        }
+        defer { downloadMonthGate.release() }
+        if Task.isCancelled || terminationControl.shouldDrain { return false }
         session.beginDownloadMonth(month)
         appendInfoLog(String(format: String(localized: "home.execution.log.startDownloadMonth"), phaseLabel, month.displayText))
         let complementLabelOverride: String? = session.complementMonths.contains(month)
@@ -1191,6 +1199,19 @@ final class HomeExecutionCoordinator {
 
         let phaseLabel = session.phaseLabel(for: month)
         session.completeComplementMonthUpload(month)
+        notifyStateChanged()
+        do {
+            try await downloadMonthGate.acquire(shouldDrain: { uploadContext.terminationControl?.shouldDrain == true })
+        } catch {
+            markComplementMonthPendingForResume(month)
+            return .cancelled
+        }
+        defer { downloadMonthGate.release() }
+        guard session.monthPlans[month]?.isTerminal != true else { return .cancelled }
+        guard !Task.isCancelled, uploadContext.terminationControl?.shouldDrain != true else {
+            markComplementMonthPendingForResume(month)
+            return .cancelled
+        }
         session.beginDownloadMonth(month)
         appendInfoLog(String(format: String(localized: "home.execution.log.uploadDoneStartPhase"), phaseLabel, month.displayText))
         let complementLabel = String(localized: "home.execution.complementing")

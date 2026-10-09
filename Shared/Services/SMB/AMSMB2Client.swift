@@ -4,7 +4,7 @@ import Foundation
 import AMSMB2
 #endif
 
-private final class SMBUploadCancellationState: @unchecked Sendable {
+private final class SMBTransferCancellationState: @unchecked Sendable {
     private let lock = NSLock()
     private var cancelled = false
 
@@ -219,7 +219,7 @@ final class AMSMB2Client: RemoteStorageClientProtocol, @unchecked Sendable {
         }
         let expectedByteCount = Self.fileSizeInBytes(for: localURL)
         let normalizedRemotePath = try SMBPathCanonicalizer.canonicalRawPath(remotePath)
-        let cancellationState = SMBUploadCancellationState()
+        let cancellationState = SMBTransferCancellationState()
         do {
             try await withTaskCancellationHandler {
                 try await manager.uploadItem(
@@ -334,27 +334,43 @@ final class AMSMB2Client: RemoteStorageClientProtocol, @unchecked Sendable {
 
     func download(remotePath: String, localURL: URL, onProgress: ((Double) -> Void)?) async throws {
         #if canImport(AMSMB2)
-        try await manager.downloadItem(
-            atPath: try SMBPathCanonicalizer.canonicalRawPath(remotePath),
-            to: localURL,
-            progress: { receivedBytes, expectedBytes in
-                if expectedBytes > 0 {
-                    let progress = min(max(Double(receivedBytes) / Double(expectedBytes), 0), 1)
-                    onProgress?(progress)
+        let path = try SMBPathCanonicalizer.canonicalRawPath(remotePath)
+        try await Self.performCancellableDownload(localURL: localURL, onProgress: onProgress) { progress in
+            try await manager.downloadItem(atPath: path, to: localURL, progress: progress)
+        }
+        #else
+        throw RemoteStorageClientError.unavailable
+        #endif
+    }
+
+    static func performCancellableDownload(
+        localURL: URL,
+        onProgress: ((Double) -> Void)?,
+        operation: (_ progress: @escaping @Sendable (Int64, Int64) -> Bool) async throws -> Void
+    ) async throws {
+        try Task.checkCancellation()
+        let cancellationState = SMBTransferCancellationState()
+        do {
+            try await withTaskCancellationHandler {
+                try Task.checkCancellation()
+                try await operation { receivedBytes, expectedBytes in
+                    // AMSMB2 invokes progress outside the Swift task.
+                    guard !cancellationState.isCancelled else { return false }
+                    if expectedBytes > 0 {
+                        onProgress?(min(max(Double(receivedBytes) / Double(expectedBytes), 0), 1))
+                    }
+                    return !cancellationState.isCancelled
                 }
-                return !Task.isCancelled
+                try Task.checkCancellation()
+            } onCancel: {
+                cancellationState.cancel()
             }
-        )
-        // A cancelled transfer stops mid-stream, leaving a truncated file that must never be treated as a
-        // complete download (e.g. cached as a valid original). Remove it and surface the cancellation.
-        if Task.isCancelled {
+        } catch {
+            guard cancellationState.isCancelled || Task.isCancelled else { throw error }
             try? FileManager.default.removeItem(at: localURL)
             throw CancellationError()
         }
         onProgress?(1.0)
-        #else
-        throw RemoteStorageClientError.unavailable
-        #endif
     }
 
     func exists(path: String) async throws -> Bool {

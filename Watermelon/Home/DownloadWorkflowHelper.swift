@@ -5,6 +5,7 @@ protocol RestoreItemsServing: Sendable {
         items: [RestoreService.RestoreItemDescriptor],
         profile: ServerProfileRecord,
         password: String,
+        downloadPolicy: RestoreDownloadPolicy,
         shouldDrain: @escaping @Sendable () -> Bool,
         onTransferState: (@Sendable (BackupTransferState) async -> Void)?,
         onItemFailed: (@Sendable (RestoreItemFailure) async -> Void)?,
@@ -81,6 +82,7 @@ final class DownloadWorkflowHelper {
                 items: descriptors,
                 profile: context.profile,
                 password: context.password,
+                downloadPolicy: RestoreDownloadPolicy(),
                 shouldDrain: shouldDrain,
                 onTransferState: { state in
                     await onTransferState(state)
@@ -114,10 +116,7 @@ final class DownloadWorkflowHelper {
         let toRestore = incompletePolicy == .createNewAsset ? remoteItems : remoteItems.filter { !$0.isIncomplete }
         var totalBytes: Int64 = 0
         for item in toRestore {
-            var seenHashes = Set<Data>()
-            for instance in item.instances where seenHashes.insert(instance.resourceHash).inserted {
-                totalBytes += max(instance.fileSize, 0)
-            }
+            totalBytes = RestoreDownloadPolicy.adding(totalBytes, RestoreDownloadPolicy.estimatedBytes(for: item.instances))
         }
         return totalBytes > 0 ? totalBytes : nil
     }

@@ -147,6 +147,8 @@
 
 ### `HomeExecutionCoordinator`
 
+`DownloadMonthGate` 串行化纯下载月份与同步月份的补下载，排队期间响应暂停和取消。`DownloadWorkflowHelper` 为两条首页路径启用 2 worker 的 `OrderedRestorePipeline`：资产并发预取、按输入顺序导入与索引收尾，临时资源由 `RestoreStagingStore` 按运行和资产管理。上传 worker 仍等待所属月份完成下载后才报告 completed。
+
 职责：
 
 1. 建立一次执行会话 `HomeExecutionSession`
