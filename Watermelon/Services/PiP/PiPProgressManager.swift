@@ -467,15 +467,20 @@ final class PiPProgressManager: NSObject {
             rect: CGRect(x: padding, y: 239, width: contentWidth, height: 8)
         )
 
-        drawCentered(
-            decisionPending ? String(localized: "pip.decision.title") : metricText(),
-            baseFontSize: 24,
-            weight: decisionPending ? .semibold : .regular,
-            monospacedDigits: false,
-            color: palette.secondaryText,
-            rect: CGRect(x: padding, y: 276, width: contentWidth, height: 32),
-            minimumFontSize: 16
-        )
+        let metricsRect = CGRect(x: padding, y: 276, width: contentWidth, height: 32)
+        if decisionPending || isFinished || isPaused {
+            drawCentered(
+                decisionPending ? String(localized: "pip.decision.title") : currentElapsedText,
+                baseFontSize: 24,
+                weight: decisionPending ? .semibold : .regular,
+                monospacedDigits: false,
+                color: palette.secondaryText,
+                rect: metricsRect,
+                minimumFontSize: 16
+            )
+        } else {
+            drawTransferMetrics(color: palette.secondaryText, rect: metricsRect)
+        }
     }
 
     private func progressPresentation() -> (text: String, fontSize: CGFloat, monospacedDigits: Bool) {
@@ -616,12 +621,36 @@ final class PiPProgressManager: NSObject {
             : UIFont.systemFont(ofSize: minimumSize, weight: weight)
     }
 
-    private func metricText() -> String {
-        if isFinished || isPaused {
-            return currentElapsedText
-        }
+    private func drawTransferMetrics(color: UIColor, rect: CGRect) {
         let metrics = activeMetricComponents()
-        return ListFormatter.localizedString(byJoining: [metrics.speed, metrics.remaining])
+        let texts = [metrics.speed, metrics.remaining]
+        let spacing: CGFloat = 24
+        let availableWidth = rect.width - spacing
+        var fontSize: CGFloat = 24
+        var widths: [CGFloat] = []
+        while true {
+            let font = UIFont.systemFont(ofSize: fontSize)
+            widths = texts.map { ceil(($0 as NSString).size(withAttributes: [.font: font]).width) }
+            if widths.reduce(0, +) <= availableWidth || fontSize <= 16 { break }
+            fontSize -= 1
+        }
+        let textWidth = widths.reduce(0, +)
+        if textWidth > availableWidth {
+            widths = widths.map { $0 * availableWidth / textWidth }
+        }
+        var originX = rect.midX - (widths.reduce(0, +) + spacing) / 2
+        for (text, width) in zip(texts, widths) {
+            drawCentered(
+                text,
+                baseFontSize: fontSize,
+                weight: .regular,
+                monospacedDigits: false,
+                color: color,
+                rect: CGRect(x: originX, y: rect.minY, width: width, height: rect.height),
+                minimumFontSize: fontSize
+            )
+            originX += width + spacing
+        }
     }
 
     private func activeMetricComponents() -> (speed: String, remaining: String) {
