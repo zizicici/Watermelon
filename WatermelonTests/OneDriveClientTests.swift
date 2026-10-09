@@ -1734,6 +1734,38 @@ final class OneDriveClientTests: XCTestCase {
         XCTAssertEqual(recorder.requests.count, 1)
     }
 
+    func testOwnershipStopAfterBackupLeavesRecoverableScratch() async throws {
+        let recorder = OneDriveRequestRecorder()
+        let moved = OneDriveCounter()
+        OneDriveMockURLProtocol.handler = { request in
+            recorder.append(request)
+            let path = request.url?.path ?? ""
+            if path.hasSuffix("/items/root:/month.sqlite.tmp") {
+                return .json(Self.item(id: "temp-id", name: "month.sqlite.tmp", folder: false))
+            }
+            if path.hasSuffix("/items/root:/month.sqlite") {
+                return .json(Self.item(id: "final-old-id", name: "month.sqlite", folder: false))
+            }
+            if path.hasSuffix("/items/root") { return .json(Self.item(id: "root", name: "Watermelon", folder: true)) }
+            if path.hasSuffix("/items/final-old-id"), request.httpMethod == "PATCH" {
+                _ = moved.increment()
+                return .json(Self.item(id: "backup-id", name: "month.sqlite.bak", folder: false))
+            }
+            return .status(500)
+        }
+        do {
+            _ = try await makeClient().publishUploadedManifest(tempPath: "/month.sqlite.tmp", finalPath: "/month.sqlite",
+                backupPath: "/month.sqlite.bak", ignoreCancellation: false, assertOwnership: {
+                    if moved.value > 0 { throw CancellationError() }
+                })
+            XCTFail("The post-backup ownership check must stop this publish")
+        } catch is CancellationError { }
+        XCTAssertEqual(moved.value, 1)
+        let patches = recorder.requests.filter { $0.httpMethod == "PATCH" }
+        XCTAssertEqual(patches.count, 1, "Actual OneDrive publish stops with only the canonical-to-backup move applied")
+        XCTAssertTrue(patches.first?.url?.path.hasSuffix("/items/final-old-id") == true)
+    }
+
     // Scratch repair downloads every candidate for a month; OneDrive's publish PATCH-moves the temp onto the
     // canonical, so the residue it leaves can never be reclaimed and the validation would delete nothing.
     func testClientOptsOutOfMonthScratchRepair() {

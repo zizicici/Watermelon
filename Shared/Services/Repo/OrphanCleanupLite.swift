@@ -6,6 +6,7 @@ struct OrphanCleanupLite {
     enum Mode: Sendable {
         case foreground
         case background
+        case upgrade
     }
 
     private let client: any RemoteStorageClientProtocol
@@ -36,11 +37,11 @@ struct OrphanCleanupLite {
     @discardableResult
     func run(mode: Mode) async -> [String] {
         var deleted: [String] = []
-        if mode == .foreground {
+        if mode == .foreground || mode == .upgrade {
             deleted += await cleanVersionScratch()
             deleted += await cleanMoveProbeScratch()
         }
-        deleted += await cleanMonthsScratch()
+        deleted += await cleanMonthsScratch(requiresRecovery: mode == .upgrade)
         deleted += await cleanLegacyV1Manifests()
         return deleted
     }
@@ -50,9 +51,9 @@ struct OrphanCleanupLite {
     // Repair-first: a crash can leave a month's only surviving manifest in scratch (an unflushed `.tmp`
     // upload, or a `.bak` backed up mid-rename). Restore a sound candidate to its canonical month before
     // deleting, so cleanup never destroys the sole recoverable copy.
-    private func cleanMonthsScratch() async -> [String] {
+    private func cleanMonthsScratch(requiresRecovery: Bool) async -> [String] {
         let entries = (await listMonthsChildren()).filter { !$0.isDirectory }
-        guard client.repairsMonthScratch() else {
+        guard requiresRecovery || client.repairsMonthScratch() else {
             return await reclaimMonthsScratchWithoutRepair(entries)
         }
 
@@ -89,7 +90,8 @@ struct OrphanCleanupLite {
         }
         for (month, scratch) in scratchByMonth {
             deleted += await cleanMonthScratch(
-                month: month, scratch: scratch, canonicalEntry: canonicalMonths[month]
+                month: month, scratch: scratch, canonicalEntry: canonicalMonths[month],
+                preserveUnrecoverableMonth: requiresRecovery
             )
         }
         return deleted
@@ -142,7 +144,8 @@ struct OrphanCleanupLite {
     private func cleanMonthScratch(
         month: LibraryMonthKey,
         scratch: [RemoteStorageEntry],
-        canonicalEntry: RemoteStorageEntry?
+        canonicalEntry: RemoteStorageEntry?,
+        preserveUnrecoverableMonth: Bool
     ) async -> [String] {
         let canonicalPath = RepoLayoutLite.monthPath(basePath: basePath, month: month)
         if let canonicalEntry {
@@ -153,7 +156,8 @@ struct OrphanCleanupLite {
                 return await repairMonthFromScratch(
                     scratch,
                     canonicalPath: canonicalPath,
-                    shouldReplaceInvalidCanonical: true
+                    shouldReplaceInvalidCanonical: true,
+                    preserveUnrecoverableMonth: preserveUnrecoverableMonth
                 )
             case .inconclusive:
                 return []
@@ -163,14 +167,16 @@ struct OrphanCleanupLite {
         return await repairMonthFromScratch(
             scratch,
             canonicalPath: canonicalPath,
-            shouldReplaceInvalidCanonical: false
+            shouldReplaceInvalidCanonical: false,
+            preserveUnrecoverableMonth: preserveUnrecoverableMonth
         )
     }
 
     private func repairMonthFromScratch(
         _ scratch: [RemoteStorageEntry],
         canonicalPath: String,
-        shouldReplaceInvalidCanonical: Bool
+        shouldReplaceInvalidCanonical: Bool,
+        preserveUnrecoverableMonth: Bool
     ) async -> [String] {
         var valid: [RemoteStorageEntry] = []
         var invalid: [RemoteStorageEntry] = []
@@ -204,8 +210,8 @@ struct OrphanCleanupLite {
             return deleted
         }
 
-        // Ambiguous sound candidates → leave all. No sound candidate (only proven junk) → drop the junk.
-        guard valid.isEmpty else { return [] }
+        // Retain the month's last evidence so an unrecoverable month cannot disappear from upgrade checks.
+        guard valid.isEmpty, !preserveUnrecoverableMonth || shouldReplaceInvalidCanonical else { return [] }
         var deleted: [String] = []
         for entry in invalid {
             if await deleteWhitelisted(entry.path) { deleted.append(entry.path) }

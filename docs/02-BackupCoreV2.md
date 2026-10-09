@@ -299,6 +299,8 @@ SMB / WebDAV / S3 / SFTP / OneDrive / Dropbox / Google Drive / BrowserLink 走 `
 
 `MonthManifestStore` 实现拆为三段（均位于 `Shared/Services/Backup/`）：核心入口在 `MonthManifestStore.swift`，初始化 / seed 流程在 `+Loading.swift`，schema / 迁移在 `+Schema.swift`（`month_manifest_v1_initial`）。
 
+格式升级使用 `OrphanCleanupLite.Mode.upgrade`：历史月份可能没有可重传的本地原件，因此包括 OneDrive 在内都先校验和恢复月份清单。正式清单缺失且恢复失败时保留 scratch，由升级的月份完整性检查阻止提交完成版本。OneDrive 日常备份仍使用原有轻量清理策略，不增加逐份下载 scratch 的开销。
+
 ## 13. 远端维护（用户主动触发）
 
 `RemoteMaintenanceController`（`Watermelon/Services/Backup/`）统一驱动远端验证与残留文件维护：

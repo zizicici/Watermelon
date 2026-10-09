@@ -249,4 +249,171 @@ final class AssetFingerprintRepoUpgradeTests: XCTestCase {
         let uploads = await client.uploadedPaths
         XCTAssertFalse(uploads.dropFirst(before).contains { $0.contains("/months/") })
     }
+
+    private func interruptedOneDriveUpgrade() async throws -> (
+        backing: InMemoryRemoteStorageClient, client: InterruptedOneDriveUpgradeClient,
+        fingerprint: Data, writerID: String, scratch: [String: Data]
+    ) {
+        let backing = InMemoryRemoteStorageClient()
+        let fingerprint = try await seed(backing)
+        let client = InterruptedOneDriveUpgradeClient(backing: backing)
+        let writerID = UUID().uuidString.lowercased()
+        do {
+            let prepared = try await RemoteLiteRepoGateway.prepareForegroundWrite(
+                client: client, lockClient: backing, basePath: base, writerID: writerID)
+            await prepared.session.stopAndRelease()
+            XCTFail("The first publish must stop after moving the canonical to backup")
+        } catch is CancellationError { }
+        let canonical = await backing.fileData(path: monthPath(1))
+        XCTAssertNil(canonical)
+        let entries = try await backing.list(path: RepoLayoutLite.monthsDirectoryPath(basePath: base))
+        var scratch: [String: Data] = [:]
+        for entry in entries {
+            let data = await backing.fileData(path: entry.path)
+            scratch[entry.path] = try XCTUnwrap(data)
+        }
+        XCTAssertEqual(scratch.keys.filter { $0.hasSuffix(".bak") }.count, 1)
+        XCTAssertEqual(scratch.keys.filter { $0.hasSuffix(".tmp") }.count, 1)
+        return (backing, client, fingerprint, writerID, scratch)
+    }
+
+    func testInterruptedOneDriveUpgradeRecoversMonthAndPreservesResourceBytes() async throws {
+        let state = try await interruptedOneDriveUpgrade()
+        var originalFiles: [String: Data] = [:]
+        for name in ["original.jpg", "edited.jpg", "edit-0.AAE"] {
+            let data = await state.backing.fileData(path: base + "/2026/01/" + name)
+            originalFiles[name] = try XCTUnwrap(data)
+        }
+        let prepared = try await RemoteLiteRepoGateway.prepareForegroundWrite(
+            client: state.client, lockClient: state.backing, basePath: base, writerID: state.writerID)
+        await prepared.session.stopAndRelease()
+        let store = try await snapshot(state.backing)
+        XCTAssertEqual(Set(store.assetsByFingerprint.keys), [state.fingerprint])
+        XCTAssertEqual(store.assetLinksByFingerprint[state.fingerprint]?.count, 3)
+        XCTAssertEqual(store.itemsByFileName.count, 3)
+        XCTAssertFalse(store.isAssetIncomplete(state.fingerprint))
+        for (name, original) in originalFiles {
+            let after = await state.backing.fileData(path: base + "/2026/01/" + name)
+            XCTAssertEqual(after, original)
+        }
+        let decision = try await RepoFormatRouter(client: state.client, basePath: base).classify()
+        XCTAssertEqual(decision, .current)
+        let copies = await state.backing.copiedPaths
+        XCTAssertTrue(copies.contains { $0.to == monthPath(1) })
+    }
+
+    func testOneDriveUpgradeKeepsRecoveryFilesWhenTheirDownloadFails() async throws {
+        let state = try await interruptedOneDriveUpgrade()
+        await state.client.setRecoveryDownloadError(RemoteErrorFixtures.retryable)
+        do {
+            let prepared = try await RemoteLiteRepoGateway.prepareForegroundWrite(
+                client: state.client, lockClient: state.backing, basePath: base, writerID: state.writerID)
+            await prepared.session.stopAndRelease()
+            XCTFail("Unverified recovery files must block the completed upgrade")
+        } catch { }
+        for (path, expected) in state.scratch {
+            let actual = await state.backing.fileData(path: path)
+            XCTAssertEqual(actual, expected)
+        }
+        let canonical = await state.backing.fileData(path: monthPath(1))
+        XCTAssertNil(canonical)
+        let pending = await state.backing.fileData(path: versionPath)
+        XCTAssertEqual(try VersionManifestLite.decode(XCTUnwrap(pending)).upgradePending, true)
+        await state.client.setRecoveryDownloadError(nil)
+        let retry = try await RemoteLiteRepoGateway.prepareForegroundWrite(
+            client: state.client, lockClient: state.backing, basePath: base, writerID: state.writerID)
+        await retry.session.stopAndRelease()
+        let store = try await snapshot(state.backing)
+        XCTAssertNotNil(store.assetsByFingerprint[state.fingerprint])
+    }
+
+    func testOneDriveUpgradeStopsWhenRecoveryCopyFails() async throws {
+        for error in [RemoteErrorFixtures.retryable, LiteRepoError.ownershipLost, CancellationError()] {
+            let state = try await interruptedOneDriveUpgrade()
+            await state.client.setRecoveryCopyError(error)
+            do {
+                let prepared = try await RemoteLiteRepoGateway.prepareForegroundWrite(
+                    client: state.client, lockClient: state.backing, basePath: base, writerID: state.writerID)
+                await prepared.session.stopAndRelease()
+                XCTFail("A failed recovery must not complete the upgrade")
+            } catch { }
+            for (path, expected) in state.scratch {
+                let actual = await state.backing.fileData(path: path)
+                XCTAssertEqual(actual, expected)
+            }
+            let canonical = await state.backing.fileData(path: monthPath(1))
+            XCTAssertNil(canonical)
+            let pending = await state.backing.fileData(path: versionPath)
+            XCTAssertEqual(try VersionManifestLite.decode(XCTUnwrap(pending)).upgradePending, true)
+        }
+    }
+
+    func testUnrecoverableOneDriveMonthCannotDisappearFromUpgradeChecks() async throws {
+        let state = try await interruptedOneDriveUpgrade()
+        let corrupt = Data("incomplete sqlite".utf8)
+        for path in state.scratch.keys { await state.backing.seedFile(path: path, data: corrupt) }
+        do {
+            let prepared = try await RemoteLiteRepoGateway.prepareForegroundWrite(
+                client: state.client, lockClient: state.backing, basePath: base, writerID: state.writerID)
+            await prepared.session.stopAndRelease()
+            XCTFail("An unrecoverable historical month cannot be omitted from the upgrade")
+        } catch { }
+        for path in state.scratch.keys {
+            let actual = await state.backing.fileData(path: path)
+            XCTAssertEqual(actual, corrupt)
+        }
+        let pending = await state.backing.fileData(path: versionPath)
+        XCTAssertEqual(try VersionManifestLite.decode(XCTUnwrap(pending)).upgradePending, true)
+        let decision = try await RepoFormatRouter(client: state.client, basePath: base).classify()
+        XCTAssertEqual(decision, .fingerprintUpgrade)
+    }
+}
+
+private actor InterruptedOneDriveUpgradeClient: RemoteStorageClientProtocol, OneDriveManifestItemIDClient {
+    let backing: InMemoryRemoteStorageClient
+    private var stopAfterBackup = true
+    private var recoveryDownloadError: Error?
+    private var recoveryCopyError: Error?
+    func setRecoveryDownloadError(_ error: Error?) { recoveryDownloadError = error }
+    func setRecoveryCopyError(_ error: Error?) { recoveryCopyError = error }
+    init(backing: InMemoryRemoteStorageClient) { self.backing = backing }
+    nonisolated func repairsMonthScratch() -> Bool { false }
+    func connect() async throws { try await backing.connect() }
+    func disconnect() async { await backing.disconnect() }
+    func storageCapacity() async throws -> RemoteStorageCapacity? { nil }
+    func list(path: String) async throws -> [RemoteStorageEntry] { try await backing.list(path: path) }
+    func metadata(path: String) async throws -> RemoteStorageEntry? { try await backing.metadata(path: path) }
+    func upload(localURL: URL, remotePath: String, respectTaskCancellation: Bool, onProgress: ((Double) -> Void)?) async throws {
+        try await backing.upload(localURL: localURL, remotePath: remotePath, respectTaskCancellation: respectTaskCancellation, onProgress: onProgress)
+    }
+    func setModificationDate(_ date: Date, forPath path: String) async throws { try await backing.setModificationDate(date, forPath: path) }
+    func download(remotePath: String, localURL: URL) async throws {
+        if let recoveryDownloadError, remotePath.contains("/months/"), remotePath.hasSuffix(".tmp") || remotePath.hasSuffix(".bak") {
+            throw recoveryDownloadError
+        }
+        try await backing.download(remotePath: remotePath, localURL: localURL)
+    }
+    func exists(path: String) async throws -> Bool { try await backing.exists(path: path) }
+    func delete(path: String) async throws { try await backing.delete(path: path) }
+    func createDirectory(path: String) async throws { try await backing.createDirectory(path: path) }
+    func move(from sourcePath: String, to destinationPath: String) async throws { try await backing.move(from: sourcePath, to: destinationPath) }
+    func copy(from sourcePath: String, to destinationPath: String) async throws {
+        if let recoveryCopyError { throw recoveryCopyError }
+        try await backing.copy(from: sourcePath, to: destinationPath)
+    }
+    func publishUploadedManifest(tempPath: String, finalPath: String, backupPath: String, ignoreCancellation: Bool,
+        assertOwnership: nonisolated(nonsending) @escaping @Sendable () async throws -> Void) async throws -> OneDriveManifestPublishOutcome {
+        try await assertOwnership()
+        let hasFinal = try await backing.exists(path: finalPath)
+        if hasFinal {
+            try await backing.move(from: finalPath, to: backupPath)
+            if stopAfterBackup { stopAfterBackup = false; throw CancellationError() }
+        }
+        try await assertOwnership()
+        try await backing.move(from: tempPath, to: finalPath)
+        return .init(finalFile: .init(itemID: finalPath), backupFile: hasFinal ? .init(itemID: backupPath) : nil)
+    }
+    func downloadKnownFileForReadBackVerification(_ file: OneDriveKnownFile, localURL: URL) async throws { try await backing.download(remotePath: file.itemID, localURL: localURL) }
+    func deleteKnownPresentFile(_ file: OneDriveKnownFile) async throws { try await backing.delete(path: file.itemID) }
+    func deleteKnownPresentFile(path: String) async throws { try await backing.delete(path: path) }
 }

@@ -385,8 +385,9 @@ enum LiteRepoTransitionEngine {
     ) async throws -> WritePlan<Session> {
         do {
             let ownership = RepoWriteGuard.ownershipGates(session)!
-            await runForegroundCleanup(client: client, basePath: basePath, assertOwnership: ownership,
-                monthsListing: monthsListing, repoDirectoryEntries: nil)
+            // Historical months may have no local originals available to rebuild after cleanup.
+            await OrphanCleanupLite(client: client, basePath: basePath, assertOwnership: ownership,
+                monthsListing: monthsListing, pruneLegacyV1Manifests: true).run(mode: .upgrade)
             try await AssetFingerprintRepoUpgrade(client: client, basePath: basePath,
                 assertOwnership: ownership, monthsListing: monthsListing, onProgress: onMigrationProgress)
                 .run(createdAt: isoTimestamp(now), createdBy: writerID ?? "")
