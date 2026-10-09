@@ -1137,18 +1137,10 @@ final class HomeExecutionCoordinator {
         from result: LocalHashIndexBuildResult,
         iCloudPhotoBackupMode: ICloudPhotoBackupMode
     ) -> String {
-        var parts: [String] = []
-        if !result.unavailableAssetIDs.isEmpty {
-            parts.append(String.localizedStringWithFormat(String(localized: "home.execution.log.unavailableItems"), result.unavailableAssetIDs.count))
-        }
-        if !result.failedAssetIDs.isEmpty {
-            parts.append(String.localizedStringWithFormat(String(localized: "home.execution.log.failedItems"), result.failedAssetIDs.count))
-        }
-        let detail = parts.joined(separator: ", ")
-        if !result.unavailableAssetIDs.isEmpty, iCloudPhotoBackupMode == .disable {
-            return String(format: String(localized: "home.execution.log.indexIncompleteICloud"), detail)
-        }
-        return String(format: String(localized: "home.execution.log.indexIncomplete"), detail)
+        LocalIndexIncompleteError(
+            result: result,
+            iCloudPhotoBackupMode: iCloudPhotoBackupMode
+        ).localizedDescription
     }
 
     private func mergedLocalIndexBuildResult(

@@ -334,6 +334,9 @@ struct RepoFormatRouter: Sendable {
             if entry.isDirectory, entry.name == RepoLayoutLite.locksDirectoryName {
                 continue
             }
+            if entry.isDirectory, entry.name == RemoteThumbnailPaths.repoChildDirectoryName {
+                continue
+            }
             if !entry.isDirectory, entry.name == RepoLayoutLite.versionFileName {
                 state.hasVersionFile = true
                 continue

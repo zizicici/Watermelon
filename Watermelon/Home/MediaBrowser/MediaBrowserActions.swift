@@ -41,6 +41,9 @@ final class MediaBrowserActionRunner {
         let restoreService: RestoreService
         let photoLibraryService: PhotoLibraryService
         let hashIndexRepository: ContentHashIndexRepository
+        let localHashIndexBuildService: any LocalHashIndexBuilding
+        let localIndexChangePublisher: LocalIndexChangePublisher
+        let allAccessibleAssetIDs: () async -> Set<String>
         // Single source of truth for local/remote/both — invalidated after a library change, queried for
         // upload success. Shared with every source so a mutation is reflected everywhere on the next reload.
         let presenceIndex: LibraryPresenceIndex
@@ -246,6 +249,7 @@ final class MediaBrowserActionRunner {
                 self.presentError(String(localized: "mediaBrowser.action.notConnected"), on: presenter)
                 return
             }
+            guard await self.prepareDownloadIndex(on: presenter) else { return }
             let currentLocal = await self.currentLocalIdentifiers(for: [fingerprint])
             guard self.sessionStillMatches(profile, generation: sessionGeneration) else {
                 self.presentError(String(localized: "mediaBrowser.action.notConnected"), on: presenter)
@@ -301,6 +305,31 @@ final class MediaBrowserActionRunner {
                 actionLog.error("download: restore failed for \(fingerprint.hexString, privacy: .public): \(String(describing: error), privacy: .public)")
                 self.presentError(String(localized: "mediaBrowser.action.error"), on: presenter)
             }
+        }
+    }
+
+    private func prepareDownloadIndex(on presenter: UIViewController) async -> Bool {
+        let hud = HUD.show(String(localized: "home.execution.log.indexStatus"), on: presenter)
+        defer { hud.dismiss() }
+        do {
+            let assetIDs = await env.allAccessibleAssetIDs()
+            try await LocalDownloadIndexPreflight.run(
+                assetIDs: assetIDs,
+                buildService: env.localHashIndexBuildService,
+                iCloudPhotoBackupMode: env.iCloudPhotoBackupMode(),
+                onReady: { assetIDs in
+                    guard !assetIDs.isEmpty else { return }
+                    self.env.localIndexChangePublisher.publish(.touched(assetIDs: assetIDs))
+                    self.env.presenceIndex.invalidate()
+                }
+            )
+            return true
+        } catch is CancellationError {
+            return false
+        } catch {
+            hud.dismiss()
+            presentError(UserFacingErrorLocalizer.message(for: error, profile: env.appSession.activeProfile), on: presenter)
+            return false
         }
     }
 
@@ -1071,6 +1100,7 @@ final class MediaBrowserActionRunner {
                 self.presentError(String(localized: "mediaBrowser.action.notConnected"), on: presenter)
                 return
             }
+            guard await self.prepareDownloadIndex(on: presenter) else { return }
             let currentLocal = await self.currentLocalIdentifiers(
                 for: toRestore.lazy.map { $0.fingerprint }
             )

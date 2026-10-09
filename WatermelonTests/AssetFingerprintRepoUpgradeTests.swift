@@ -98,6 +98,84 @@ final class AssetFingerprintRepoUpgradeTests: XCTestCase {
         XCTAssertEqual(store.assetLinksByFingerprint[expected]?.count, 3)
     }
 
+    func testFormat2WithAppOwnedThumbnailsUpgradesThroughGateway() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let expected = try await seed(client)
+        let thumbnailPath = RemoteThumbnailPaths.absolutePath(basePath: base, fingerprintHex: expected.hexString)
+        await client.seedDirectory(RemoteThumbnailPaths.rootAbsolutePath(basePath: base))
+        await client.seedFile(path: thumbnailPath, data: Data("thumbnail".utf8))
+        let decision = try await RepoFormatRouter(client: client, basePath: base).classify()
+        XCTAssertEqual(decision, .fingerprintUpgrade)
+        let prepared = try await RemoteLiteRepoGateway.prepareForegroundWrite(
+            client: client, lockClient: client, basePath: base, writerID: UUID().uuidString.lowercased()
+        )
+        await prepared.session.stopAndRelease()
+        let store = try await snapshot(client)
+        XCTAssertNotNil(store.assetsByFingerprint[expected])
+        let thumbnail = await client.fileData(path: thumbnailPath)
+        XCTAssertEqual(thumbnail, Data("thumbnail".utf8))
+    }
+
+    func testFormat2StillRejectsForeignDirectoryAndThumbnailFile() async throws {
+        for name in ["foreign", RemoteThumbnailPaths.repoChildDirectoryName] {
+            let client = InMemoryRemoteStorageClient()
+            _ = try await seed(client)
+            let path = RepoLayoutLite.repoDirectoryPath(basePath: base) + "/" + name
+            if name == "foreign" { await client.seedDirectory(path) }
+            else { await client.seedFile(path: path) }
+            let decision = try await RepoFormatRouter(client: client, basePath: base).classify()
+            XCTAssertEqual(decision, .damaged)
+        }
+    }
+
+    func testMissingAdjustmentKeepsPartialMediaAndAllowsOtherMonthsToUpgrade() async throws {
+        let client = InMemoryRemoteStorageClient()
+        _ = try await seed(client)
+        let second = try await seed(client, month: 2)
+        let oldResult = try await MonthManifestStore.loadManifestDirect(
+            client: client, basePath: base, year: 2026, month: 1, layout: .v1,
+            manifestAbsolutePath: monthPath(1), pushSchemaUpgrade: false, surfaceDownloadFailure: true
+        )
+        let oldStore = try XCTUnwrap(oldResult)
+        let oldFingerprint = try XCTUnwrap(oldStore.assetsByFingerprint.keys.first)
+        try await client.delete(path: base + "/2026/01/edit-0.AAE")
+        let prepared = try await RemoteLiteRepoGateway.prepareForegroundWrite(
+            client: client, lockClient: client, basePath: base, writerID: UUID().uuidString.lowercased()
+        )
+        await prepared.session.stopAndRelease()
+        let firstStore = try await snapshot(client)
+        XCTAssertEqual(Set(firstStore.assetsByFingerprint.keys), [oldFingerprint])
+        XCTAssertEqual(Set(firstStore.itemsByFileName.keys), ["original.jpg", "edited.jpg"])
+        let links = try XCTUnwrap(firstStore.assetLinksByFingerprint[oldFingerprint])
+        XCTAssertEqual(Set(links.map(\.role)), [1, 5, 7])
+        XCTAssertEqual(Set(links.filter { firstStore.itemsByHash[$0.resourceHash] != nil }.map(\.role)), [1, 5])
+        XCTAssertTrue(MonthManifestStore.isAssetIncomplete(links: links,
+            isResourceAvailable: { firstStore.itemsByHash[$0] != nil }, assetFingerprint: oldFingerprint))
+        let secondStore = try await snapshot(client, month: 2)
+        XCTAssertNotNil(secondStore.assetsByFingerprint[second])
+        let decision = try await RepoFormatRouter(client: client, basePath: base).classify()
+        XCTAssertEqual(decision, .current)
+    }
+
+    func testAdjustmentDownloadFaultsDoNotRemoveResourcesOrFinishUpgrade() async throws {
+        for error in [RemoteErrorFixtures.retryable, RemoteErrorFixtures.terminal, RemoteErrorFixtures.cancelled] {
+            let client = InMemoryRemoteStorageClient()
+            _ = try await seed(client)
+            let path = base + "/2026/01/edit-0.AAE"
+            let originalManifest = await client.fileData(path: monthPath(1))
+            await client.setOnDownloadAttempt { attempted in
+                if attempted == path { await client.enqueueDownloadError(error) }
+            }
+            do { try await upgrade(client); XCTFail("Download faults must block the upgrade") } catch { }
+            let bytes = await client.fileData(path: versionPath)
+            XCTAssertEqual(try VersionManifestLite.decode(XCTUnwrap(bytes)).upgradePending, true)
+            let manifestAfter = await client.fileData(path: monthPath(1))
+            XCTAssertEqual(manifestAfter, originalManifest)
+            let adjustmentAfter = await client.fileData(path: path)
+            XCTAssertNotNil(adjustmentAfter)
+        }
+    }
+
     func testFailureKeepsPendingBoundaryAndReconnectionReusesConvertedMonth() async throws {
         let client = InMemoryRemoteStorageClient()
         let first = try await seed(client)

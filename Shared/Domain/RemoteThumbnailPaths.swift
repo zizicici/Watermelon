@@ -5,7 +5,8 @@ import Foundation
 // byte so no directory grows unbounded and the same image never duplicates across months. Lives under
 // `.watermelon/` so OrphanCleanupLite (which only touches `months/*.tmp` + `locks/`) leaves it alone.
 nonisolated enum RemoteThumbnailPaths {
-    static let directoryName = ".watermelon/thumbs"
+    static let repoChildDirectoryName = "thumbs"
+    static let directoryName = "\(RepoLayoutLite.repoDirectoryName)/\(repoChildDirectoryName)"
 
     static func shard(forFingerprintHex fingerprintHex: String) -> String {
         let prefix = fingerprintHex.prefix(2)

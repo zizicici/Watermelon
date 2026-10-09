@@ -189,6 +189,16 @@ final class ContentHashIndexRepository: @unchecked Sendable {
         )
     }
 
+    func fetchInvalidatedFingerprintAssetIDs() throws -> Set<String> {
+        try databaseManager.read { db in
+            Set(try String.fetchAll(db, sql: """
+                SELECT assetLocalIdentifier FROM local_assets
+                WHERE assetFingerprint IS NULL
+                  AND assetLocalIdentifier IN (SELECT assetLocalIdentifier FROM local_asset_resources)
+                """))
+        }
+    }
+
     func fetchAssetFingerprintRecords() throws -> [String: LocalAssetFingerprintRecord] {
         try databaseManager.read { db in
             let rows = try Row.fetchAll(

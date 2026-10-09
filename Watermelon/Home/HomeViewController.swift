@@ -1495,6 +1495,11 @@ final class HomeViewController: UIViewController {
             restoreService: dependencies.restoreService,
             photoLibraryService: dependencies.photoLibraryService,
             hashIndexRepository: dependencies.hashIndexRepository,
+            localHashIndexBuildService: dependencies.localHashIndexBuildService,
+            localIndexChangePublisher: dependencies.localIndexChangePublisher,
+            allAccessibleAssetIDs: { [dataManager = store.dataManager] in
+                await dataManager.allAccessibleAssetIDs()
+            },
             presenceIndex: presenceIndex,
             appRuntimeFlags: dependencies.appRuntimeFlags,
             // Upload/download/delete are disallowed while a backup/download/maintenance task is running.

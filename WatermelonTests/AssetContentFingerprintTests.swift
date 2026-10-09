@@ -113,9 +113,17 @@ final class AssetContentFingerprintTests: XCTestCase {
         database = nil
         database = try DatabaseManager(databaseURL: directory.appendingPathComponent("index.sqlite"))
         repository = ContentHashIndexRepository(databaseManager: database)
+        try repository.upsertAssetSizes([.init(assetLocalIdentifier: "size-only", totalFileSizeBytes: 100, modificationDateMs: 1_000)])
         let records = try repository.fetchAssetFingerprintRecords()
         XCTAssertNil(records["edited"])
         XCTAssertEqual(records["ordinary"]?.fingerprint, rawFingerprint(ordinaryResources))
+        let invalidated = try repository.fetchInvalidatedFingerprintAssetIDs()
+        XCTAssertEqual(invalidated, ["edited"])
+        XCTAssertEqual(HomeDataProcessingWorker.fingerprintValidationAssetIDs(
+            snapshots: [TestFixtures.snapshot(id: "edited"), TestFixtures.snapshot(id: "ordinary"),
+                        TestFixtures.snapshot(id: "never-indexed"), TestFixtures.snapshot(id: "size-only")],
+            records: records, invalidatedAssetIDs: invalidated
+        ), ["edited"])
         try database.read { db in
             XCTAssertFalse(try db.tableExists("restore_origins"))
             XCTAssertFalse(try db.tableExists("asset_content_identities"))
@@ -123,12 +131,13 @@ final class AssetContentFingerprintTests: XCTestCase {
             let migrations = try String.fetchAll(db, sql: "SELECT identifier FROM grdb_migrations ORDER BY identifier")
             XCTAssertEqual(migrations.count, 7)
             XCTAssertEqual(migrations.last, "v7_background_backup_node_settings")
-            XCTAssertEqual(try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM local_assets"), 2)
+            XCTAssertEqual(try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM local_assets"), 3)
             XCTAssertEqual(try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM local_asset_resources"), editedResources.count + ordinaryResources.count)
             XCTAssertEqual(try String.fetchOne(db, sql: "PRAGMA integrity_check"), "ok")
         }
         try index(editedResources, id: "edited")
         let reopened = ContentHashIndexRepository(databaseManager: try DatabaseManager(databaseURL: directory.appendingPathComponent("index.sqlite")))
+        XCTAssertTrue(try reopened.fetchInvalidatedFingerprintAssetIDs().isEmpty)
         XCTAssertEqual(try reopened.fetchAssetFingerprintRecords()["edited"]?.fingerprint, rawFingerprint(editedResources))
     }
 

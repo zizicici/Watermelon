@@ -176,6 +176,31 @@ final class MonthManifestStore {
         var assets: [Data: RemoteManifestAsset] = [:]
         var links: [Data: [RemoteAssetResourceLink]] = [:]
         var adjustments: [Data: Data] = [:]
+        var missingHashes = Set<Data>()
+        for asset in assetsByFingerprint.values {
+            let originalLinks = assetLinksByFingerprint[asset.assetFingerprint] ?? []
+            guard !Self.isAssetIncomplete(links: originalLinks, isResourceAvailable: { itemsByHash[$0] != nil }, assetFingerprint: asset.assetFingerprint),
+                  originalLinks.contains(where: { $0.role == ResourceTypeCode.adjustmentData && $0.fingerprintHash == nil }) else { continue }
+            for link in originalLinks where link.role == ResourceTypeCode.adjustmentData && adjustments[link.resourceHash] == nil && !missingHashes.contains(link.resourceHash) {
+                try Task.checkCancellation()
+                guard let name = itemsByHash[link.resourceHash], let resource = itemsByFileName[name],
+                      RemotePathBuilder.isSafePathComponent(name) else { throw CocoaError(.fileReadCorruptFile) }
+                let url = FileManager.default.temporaryDirectory.appendingPathComponent("fingerprint-upgrade-\(UUID().uuidString)")
+                defer { try? FileManager.default.removeItem(at: url) }
+                do {
+                    try await client.download(remotePath: RemotePathBuilder.absolutePath(basePath: monthAbsolutePath, remoteRelativePath: name),
+                        localURL: url, expectedSize: resource.fileSize > 0 ? resource.fileSize : nil, onProgress: nil)
+                } catch {
+                    guard RemoteFaultLite.classify(error) == .notFound else { throw error }
+                    missingHashes.insert(link.resourceHash)
+                    continue
+                }
+                adjustments[link.resourceHash] = try Data(contentsOf: url)
+            }
+        }
+        if !missingHashes.isEmpty {
+            _ = try reconcileMonth(missingHashes: missingHashes)
+        }
         let ordered = assetsByFingerprint.values.sorted {
             if $0.backedUpAtMs != $1.backedUpAtMs { return $0.backedUpAtMs > $1.backedUpAtMs }
             return $0.assetFingerprint.lexicographicallyPrecedes($1.assetFingerprint)
@@ -187,17 +212,6 @@ final class MonthManifestStore {
                 assets[asset.assetFingerprint] = asset
                 links[asset.assetFingerprint] = originalLinks
                 continue
-            }
-            if originalLinks.contains(where: { $0.role == ResourceTypeCode.adjustmentData && $0.fingerprintHash == nil }) {
-                for link in originalLinks where link.role == ResourceTypeCode.adjustmentData && adjustments[link.resourceHash] == nil {
-                    guard let name = itemsByHash[link.resourceHash], let resource = itemsByFileName[name],
-                          RemotePathBuilder.isSafePathComponent(name) else { throw CocoaError(.fileReadCorruptFile) }
-                    let url = FileManager.default.temporaryDirectory.appendingPathComponent("fingerprint-upgrade-\(UUID().uuidString)")
-                    defer { try? FileManager.default.removeItem(at: url) }
-                    try await client.download(remotePath: RemotePathBuilder.absolutePath(basePath: monthAbsolutePath, remoteRelativePath: name),
-                        localURL: url, expectedSize: resource.fileSize > 0 ? resource.fileSize : nil, onProgress: nil)
-                    adjustments[link.resourceHash] = try Data(contentsOf: url)
-                }
             }
             let hashes: [AssetContentFingerprint.Resource]
             if originalLinks.allSatisfy({ $0.role != ResourceTypeCode.adjustmentData || $0.fingerprintHash != nil }) {

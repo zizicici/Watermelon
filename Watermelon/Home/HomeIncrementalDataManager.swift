@@ -46,6 +46,10 @@ final class HomeIncrementalDataManager: NSObject, PHPhotoLibraryChangeObserver {
         cachedMonthGroupingTimeZone
     }
 
+    func allAccessibleAssetIDs() async -> Set<String> {
+        await processingWorker.allAccessibleAssetIDs()
+    }
+
     func browserLocalSeed(expectedScope: HomeLocalLibraryScope) async -> HomeBrowserLocalSeed? {
         await processingWorker.browserLocalSeed(expectedScope: expectedScope)
     }

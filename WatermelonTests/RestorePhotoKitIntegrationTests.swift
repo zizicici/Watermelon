@@ -184,11 +184,25 @@ final class RestorePhotoKitIntegrationTests: XCTestCase {
         let sourceFingerprint = try fingerprint(instances, adjustmentData: sourceAdjustmentData)
         let complete = expectedFingerprint == sourceFingerprint
         XCTAssertEqual(item.asset.isCompleteRestore, complete, fixture.id)
+        let hasAdjustment = tokens.contains { $0.role == ResourceTypeCode.adjustmentData }
+        try database.write { db in
+            try db.execute(sql: "DELETE FROM sync_state WHERE stateKey = 'local_asset_fingerprint_version'")
+        }
         let restartedRepository = ContentHashIndexRepository(databaseManager: try DatabaseManager(databaseURL: dbDirectory.appendingPathComponent("index.sqlite")))
-        try restartedRepository.clearLocalHashIndex()
+        if hasAdjustment {
+            XCTAssertEqual(try restartedRepository.fetchInvalidatedFingerprintAssetIDs(), ids)
+            let validationWorker = HomeDataProcessingWorker(photoLibraryService: PhotoLibraryService(),
+                contentHashIndexRepository: restartedRepository, remoteMonthSnapshot: { _ in nil })
+            let loaded = await validationWorker.loadLocalIndex(forceReload: true, scope: .device(.all))
+            XCTAssertTrue(loaded.fingerprintValidationAssetIDs.isSuperset(of: ids))
+        } else {
+            try restartedRepository.clearLocalHashIndex()
+        }
         let builder = LocalHashIndexBuildService(photoLibraryService: PhotoLibraryService(), repository: restartedRepository)
-        let rebuilt = try await builder.buildIndex(for: ids, workerCount: 1)
-        XCTAssertEqual(rebuilt.readyAssetIDs, ids)
+        try await LocalDownloadIndexPreflight.run(
+            assetIDs: ids, buildService: builder, iCloudPhotoBackupMode: .disable,
+            onReady: { XCTAssertEqual($0, ids) }
+        )
         XCTAssertEqual(try restartedRepository.fetchAssetHashCaches(assetIDs: ids)[item.asset.localIdentifier]?.assetFingerprint, importedFingerprint)
         let month = LibraryMonthKey.from(date: asset.creationDate, calendar: LibraryMonthKey.currentPreferenceMonthCalendar())
         let remoteResources = instances.map { RemoteManifestResource(year: month.year, month: month.month,

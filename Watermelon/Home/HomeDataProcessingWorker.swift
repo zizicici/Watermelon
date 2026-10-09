@@ -75,6 +75,14 @@ final class HomeDataProcessingWorker: @unchecked Sendable {
         }
     }
 
+    func allAccessibleAssetIDs() async -> Set<String> {
+        await withCheckedContinuation { continuation in
+            processingQueue.async {
+                continuation.resume(returning: self.photoLibraryService.collectAssetIDs(query: .library(.all)))
+            }
+        }
+    }
+
     func browserLocalSeed(expectedScope: HomeLocalLibraryScope) async -> HomeBrowserLocalSeed? {
         await withCheckedContinuation { continuation in
             processingQueue.async {
@@ -125,10 +133,15 @@ final class HomeDataProcessingWorker: @unchecked Sendable {
 
     static func fingerprintValidationAssetIDs(
         snapshots: some Sequence<LibraryAssetSnapshot>,
-        records: [String: LocalAssetFingerprintRecord]
+        records: [String: LocalAssetFingerprintRecord],
+        invalidatedAssetIDs: Set<String> = []
     ) -> Set<String> {
         var result = Set<String>()
         for snapshot in snapshots {
+            if invalidatedAssetIDs.contains(snapshot.localIdentifier) {
+                result.insert(snapshot.localIdentifier)
+                continue
+            }
             guard let modificationDate = snapshot.modificationDate,
                   let record = records[snapshot.localIdentifier],
                   modificationDate > record.updatedAt else { continue }
@@ -210,7 +223,8 @@ final class HomeDataProcessingWorker: @unchecked Sendable {
                 self.loadedScope = scope
                 let validationAssetIDs = Self.fingerprintValidationAssetIDs(
                     snapshots: snapshotsPerCollection.joined(),
-                    records: fingerprintByAsset
+                    records: fingerprintByAsset,
+                    invalidatedAssetIDs: (try? self.contentHashIndexRepository.fetchInvalidatedFingerprintAssetIDs()) ?? []
                 )
                 dataLog.info("[HomeData] loadLocalIndex: fetch+snapshots=\(String(format: "%.3f", t1 - t0))s, dbFingerprints=\(String(format: "%.3f", t2 - t1))s, reload=\(String(format: "%.3f", t3 - t2))s")
                 continuation.resume(returning: (
@@ -427,7 +441,8 @@ final class HomeDataProcessingWorker: @unchecked Sendable {
             )) ?? [:]
             let validationAssetIDs = Self.fingerprintValidationAssetIDs(
                 snapshots: candidateSnapshotsByID.values,
-                records: records
+                records: records,
+                invalidatedAssetIDs: (try? self.contentHashIndexRepository.fetchInvalidatedFingerprintAssetIDs()) ?? []
             )
             guard !changedMonths.isEmpty || !validationAssetIDs.isEmpty else { return }
 
