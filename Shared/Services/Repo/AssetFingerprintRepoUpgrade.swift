@@ -1,4 +1,5 @@
 import Foundation
+import ImageIO
 
 struct AssetFingerprintRepoUpgrade: Sendable {
     let client: any RemoteStorageClientProtocol
@@ -23,6 +24,7 @@ struct AssetFingerprintRepoUpgrade: Sendable {
         try await retireLegacyVersionScratch()
 
         let months = try await discoverMonths()
+        var thumbnailEntriesByDirectory: [String: Set<String>] = [:]
         await onProgress?(.init(phase: .copying, current: 0, total: months.count))
         for (index, month) in months.enumerated() {
             try Task.checkCancellation()
@@ -32,6 +34,7 @@ struct AssetFingerprintRepoUpgrade: Sendable {
                 layout: .lite, pushSchemaUpgrade: false, assertOwnership: assertOwnership,
                 liteMonthsListing: monthsListing, surfaceDownloadFailure: true
             ) else { throw LiteRepoError.repoDamaged }
+            try await migrateThumbnails(for: store, entriesByDirectory: &thumbnailEntriesByDirectory)
             try await store.flushToRemote()
             await onProgress?(.init(phase: .copying, current: index + 1, total: months.count))
         }
@@ -45,6 +48,81 @@ struct AssetFingerprintRepoUpgrade: Sendable {
             try await assertOwnership.assertDestructive()
             try await client.delete(path: recoveryPath)
         } catch { }
+    }
+
+    private func migrateThumbnails(for store: MonthManifestStore, entriesByDirectory: inout [String: Set<String>]) async throws {
+        let changes = store.rekeyedAssetFingerprints
+        guard !changes.isEmpty else { return }
+        let root = RemoteThumbnailPaths.rootAbsolutePath(basePath: basePath)
+        let shards = try await thumbnailEntries(at: root, cache: &entriesByDirectory)
+        guard !shards.isEmpty else { return }
+        for change in changes {
+            try Task.checkCancellation()
+            let oldHex = change.previous.hexString
+            guard shards.contains(RemoteThumbnailPaths.shard(forFingerprintHex: oldHex)) else { continue }
+            let oldShard = RemoteThumbnailPaths.shardDirectoryAbsolutePath(basePath: basePath, fingerprintHex: oldHex)
+            let files = try await thumbnailEntries(at: oldShard, cache: &entriesByDirectory)
+            guard files.contains(oldHex + ".jpg") else { continue }
+            let destination = RemoteThumbnailPaths.absolutePath(basePath: basePath, fingerprintHex: change.current.hexString)
+            if try await thumbnailData(at: destination) != nil { continue }
+            let source = RemoteThumbnailPaths.absolutePath(basePath: basePath, fingerprintHex: change.previous.hexString)
+            guard let data = try await thumbnailData(at: source) else { continue }
+            let shard = RemoteThumbnailPaths.shardDirectoryAbsolutePath(basePath: basePath, fingerprintHex: change.current.hexString)
+            let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+            defer { try? FileManager.default.removeItem(at: url) }
+            try data.write(to: url)
+            try await assertOwnership.assertWrite()
+            try await client.createDirectory(path: shard)
+            do {
+                try await uploadThumbnail(at: url, to: destination, mode: .createIfAbsent)
+            } catch {
+                guard SMBErrorClassifier.isNameCollision(error) else { throw error }
+                if try await thumbnailData(at: destination) != nil { continue }
+                try await assertOwnership.assertDestructive()
+                try await uploadThumbnail(at: url, to: destination, mode: .replace)
+            }
+            guard try await thumbnailData(at: destination) == data else {
+                throw CocoaError(.fileReadCorruptFile)
+            }
+        }
+    }
+
+    private func thumbnailEntries(at path: String, cache: inout [String: Set<String>]) async throws -> Set<String> {
+        if let entries = cache[path] { return entries }
+        let entries: Set<String>
+        do { entries = Set(try await client.list(path: path).map(\.name)) }
+        catch {
+            if RemoteFaultLite.classify(error) != .notFound { throw error }
+            entries = []
+        }
+        cache[path] = entries
+        return entries
+    }
+
+    private func thumbnailData(at path: String) async throws -> Data? {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: url) }
+        do { try await client.download(remotePath: path, localURL: url) }
+        catch {
+            if RemoteFaultLite.classify(error) == .notFound { return nil }
+            throw error
+        }
+        let data = try Data(contentsOf: url)
+        guard data.starts(with: [0xFF, 0xD8]), data.suffix(2) == Data([0xFF, 0xD9]),
+              let source = CGImageSourceCreateWithData(data as CFData, nil),
+              CGImageSourceCreateImageAtIndex(source, 0, nil) != nil else { return nil }
+        return data
+    }
+
+    private func uploadThumbnail(at url: URL, to destination: String, mode: RemoteUploadMode) async throws {
+        try Task.checkCancellation()
+        try await assertOwnership.assertWrite()
+        let client = client
+        // Independent, cancellation-shielded writes preserve the old thumbnail on every backend.
+        try await Task.detached {
+            try await client.upload(localURL: url, remotePath: destination, mode: mode,
+                respectTaskCancellation: false, onProgress: nil)
+        }.value
     }
 
     private func discoverMonths() async throws -> [LibraryMonthKey] {

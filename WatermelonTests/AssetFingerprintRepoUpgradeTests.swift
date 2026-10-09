@@ -1,4 +1,5 @@
 import GRDB
+import UIKit
 import XCTest
 @testable import Watermelon
 
@@ -18,7 +19,7 @@ final class AssetFingerprintRepoUpgradeTests: XCTestCase {
         return fixture.fingerprint
     }
 
-    private func makeMonth(_ month: Int, duplicates: Bool) throws -> (bytes: Data, fingerprint: Data, files: [String: Data]) {
+    private func makeMonth(_ month: Int, duplicates: Bool) throws -> (bytes: Data, fingerprint: Data, files: [String: Data], legacyFingerprints: [Data]) {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         let queue = try MonthManifestStore.makeManifestQueue(path: url.path)
         try MonthManifestStore.migrate(queue)
@@ -27,12 +28,14 @@ final class AssetFingerprintRepoUpgradeTests: XCTestCase {
             localManifestURL: url, dbQueue: queue, remoteFilesByName: [:], dirty: false, layout: .v1)
         var files: [String: Data] = [:]
         var expected = Data()
+        var legacyFingerprints: [Data] = []
         for copy in 0..<(duplicates ? 2 : 1) {
             let adjustment = ContentIdentityFixtures.adjustment(timestamp: Double(copy + 1))
             let inputs: [(Int, String, Data)] = [(1, "original.jpg", Data("original".utf8)),
                 (5, "edited.jpg", Data("edited".utf8)), (7, "edit-\(copy).AAE", adjustment)]
             let resources = inputs.map { AssetContentFingerprint.Resource(role: $0.0, slot: 0, hash: ContentIdentityFixtures.hash($0.2)) }
             let raw = BackupAssetResourcePlanner.legacyAssetFingerprint(resourceRoleSlotHashes: resources.map { ($0.role, $0.slot, $0.hash) })
+            legacyFingerprints.append(raw)
             expected = AssetContentFingerprint.fingerprint(resources: resources)
             for (role, name, data) in inputs {
                 files[name] = data
@@ -44,7 +47,23 @@ final class AssetFingerprintRepoUpgradeTests: XCTestCase {
                 backedUpAtMs: Int64(200 + copy), resourceCount: 3, totalFileSizeBytes: inputs.reduce(0) { $0 + Int64($1.2.count) }),
                 links: resources.map { .init(year: 2026, month: month, assetFingerprint: raw, resourceHash: $0.hash, role: $0.role, slot: 0) })
         }
-        return (try Data(contentsOf: url), expected, files)
+        return (try Data(contentsOf: url), expected, files, legacyFingerprints)
+    }
+
+    private func thumbnail(_ color: UIColor = .red) -> Data {
+        UIGraphicsImageRenderer(size: CGSize(width: 4, height: 4)).jpegData(withCompressionQuality: 0.8) { context in
+            color.setFill()
+            context.fill(CGRect(x: 0, y: 0, width: 4, height: 4))
+        }
+    }
+
+    private func seedLegacyThumbnail(_ client: InMemoryRemoteStorageClient, copy: Int = 0) async throws -> (path: String, data: Data) {
+        let legacy = try makeMonth(1, duplicates: true).legacyFingerprints[copy]
+        let path = RemoteThumbnailPaths.absolutePath(basePath: base, fingerprintHex: legacy.hexString)
+        let data = thumbnail()
+        await client.seedDirectory(RemoteThumbnailPaths.rootAbsolutePath(basePath: base))
+        await client.seedFile(path: path, data: data)
+        return (path, data)
     }
 
     private func upgrade(_ client: InMemoryRemoteStorageClient, ownership: RepoOwnershipGates = .uniform({})) async throws {
@@ -101,8 +120,8 @@ final class AssetFingerprintRepoUpgradeTests: XCTestCase {
         let client = InMemoryRemoteStorageClient()
         let expected = try await seed(client)
         let thumbnailPath = RemoteThumbnailPaths.absolutePath(basePath: base, fingerprintHex: expected.hexString)
-        await client.seedDirectory(RemoteThumbnailPaths.rootAbsolutePath(basePath: base))
-        await client.seedFile(path: thumbnailPath, data: Data("thumbnail".utf8))
+        let legacy = try await seedLegacyThumbnail(client)
+        XCTAssertNotEqual(legacy.path, thumbnailPath)
         let decision = try await RepoFormatRouter(client: client, basePath: base).classify()
         XCTAssertEqual(decision, .fingerprintUpgrade)
         let prepared = try await RemoteLiteRepoGateway.prepareForegroundWrite(
@@ -112,7 +131,125 @@ final class AssetFingerprintRepoUpgradeTests: XCTestCase {
         let store = try await snapshot(client)
         XCTAssertNotNil(store.assetsByFingerprint[expected])
         let thumbnail = await client.fileData(path: thumbnailPath)
-        XCTAssertEqual(thumbnail, Data("thumbnail".utf8))
+        XCTAssertEqual(thumbnail, legacy.data)
+        let original = await client.fileData(path: legacy.path)
+        XCTAssertEqual(original, legacy.data)
+        let preview = try await RemoteThumbnailService.readSidecar(remotePath: thumbnailPath, client: client)
+        XCTAssertEqual(preview.data, legacy.data)
+    }
+
+    func testUpgradeWithoutLegacyThumbnailDoesNotCreateOne() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let expected = try await seed(client)
+        await client.seedDirectory(RemoteThumbnailPaths.rootAbsolutePath(basePath: base))
+        try await upgrade(client)
+        let path = RemoteThumbnailPaths.absolutePath(basePath: base, fingerprintHex: expected.hexString)
+        let data = await client.fileData(path: path)
+        XCTAssertNil(data)
+        let uploads = await client.uploadedPaths
+        XCTAssertFalse(uploads.contains { $0.hasSuffix(".jpg") })
+    }
+
+    func testThumbnailMigrationListsImplicitDirectoriesWithoutDirectoryObjects() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let expected = try await seed(client)
+        let legacyFingerprint = try makeMonth(1, duplicates: false).legacyFingerprints[0]
+        let oldPath = RemoteThumbnailPaths.absolutePath(basePath: base, fingerprintHex: legacyFingerprint.hexString)
+        let data = thumbnail()
+        await client.seedFile(path: oldPath, data: data)
+        let hasRootObject = try await client.exists(path: RemoteThumbnailPaths.rootAbsolutePath(basePath: base))
+        XCTAssertFalse(hasRootObject)
+
+        try await upgrade(client)
+
+        let newPath = RemoteThumbnailPaths.absolutePath(basePath: base, fingerprintHex: expected.hexString)
+        let migrated = await client.fileData(path: newPath)
+        XCTAssertEqual(migrated, data)
+        let original = await client.fileData(path: oldPath)
+        XCTAssertEqual(original, data)
+    }
+
+    func testUpgradePreservesExistingNewThumbnail() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let expected = try await seed(client)
+        let legacy = try await seedLegacyThumbnail(client)
+        let path = RemoteThumbnailPaths.absolutePath(basePath: base, fingerprintHex: expected.hexString)
+        let existing = thumbnail(.blue)
+        await client.seedFile(path: path, data: existing)
+        try await upgrade(client)
+        let data = await client.fileData(path: path)
+        XCTAssertEqual(data, existing)
+        let oldData = await client.fileData(path: legacy.path)
+        XCTAssertEqual(oldData, legacy.data)
+        let uploads = await client.uploadedPaths
+        XCTAssertFalse(uploads.contains(path))
+    }
+
+    func testMergedAssetsCanUseThumbnailFromDiscardedLegacyFingerprint() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let expected = try await seed(client, duplicates: true)
+        let legacy = try await seedLegacyThumbnail(client, copy: 0)
+        try await upgrade(client)
+        let path = RemoteThumbnailPaths.absolutePath(basePath: base, fingerprintHex: expected.hexString)
+        let data = await client.fileData(path: path)
+        XCTAssertEqual(data, legacy.data)
+        let store = try await snapshot(client)
+        XCTAssertEqual(store.assetsByFingerprint[expected]?.backedUpAtMs, 201)
+    }
+
+    func testThumbnailMigrationUsesIndependentUploadsOnAliasingBackend() async throws {
+        let client = InMemoryRemoteStorageClient(moveMayNotBeIndependent: true)
+        let expected = try await seed(client)
+        let legacy = try await seedLegacyThumbnail(client)
+        try await upgrade(client)
+        let path = RemoteThumbnailPaths.absolutePath(basePath: base, fingerprintHex: expected.hexString)
+        let preview = try await RemoteThumbnailService.readSidecar(remotePath: path, client: client)
+        XCTAssertEqual(preview.data, legacy.data)
+        try await client.delete(path: legacy.path)
+        let newData = await client.fileData(path: path)
+        XCTAssertEqual(newData, legacy.data)
+        let copies = await client.copiedPaths
+        XCTAssertFalse(copies.contains { $0.to == path })
+    }
+
+    func testFailedThumbnailUploadPreservesMonthAndRetryRepairsPartialDestination() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let expected = try await seed(client)
+        let legacy = try await seedLegacyThumbnail(client)
+        let path = RemoteThumbnailPaths.absolutePath(basePath: base, fingerprintHex: expected.hexString)
+        let originalMonth = await client.fileData(path: monthPath(1))
+        await client.failUploadWritingCorruptBytes(Data("partial".utf8), forPathSuffix: path, error: RemoteErrorFixtures.retryable)
+        do { try await upgrade(client); XCTFail("Thumbnail failure must leave the old month recoverable") } catch { }
+        let unchangedMonth = await client.fileData(path: monthPath(1))
+        XCTAssertEqual(unchangedMonth, originalMonth)
+        let marker = await client.fileData(path: versionPath)
+        XCTAssertEqual(try VersionManifestLite.decode(XCTUnwrap(marker)).upgradePending, true)
+        let oldData = await client.fileData(path: legacy.path)
+        XCTAssertEqual(oldData, legacy.data)
+
+        try await upgrade(client)
+        let preview = try await RemoteThumbnailService.readSidecar(remotePath: path, client: client)
+        XCTAssertEqual(preview.data, legacy.data)
+        let store = try await snapshot(client)
+        XCTAssertNotNil(store.assetsByFingerprint[expected])
+    }
+
+    func testOwnershipLostWhileReadingThumbnailPreventsPublishingMonthAndThumbnail() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let expected = try await seed(client)
+        let legacy = try await seedLegacyThumbnail(client)
+        let originalMonth = await client.fileData(path: monthPath(1))
+        let ownership = RepoOwnershipGates.uniform {
+            if await client.downloadAttemptPaths.contains(legacy.path) { throw CancellationError() }
+        }
+        do { try await upgrade(client, ownership: ownership); XCTFail("Lost ownership must stop thumbnail migration") } catch { }
+        let unchangedMonth = await client.fileData(path: monthPath(1))
+        XCTAssertEqual(unchangedMonth, originalMonth)
+        let path = RemoteThumbnailPaths.absolutePath(basePath: base, fingerprintHex: expected.hexString)
+        let data = await client.fileData(path: path)
+        XCTAssertNil(data)
+        let oldData = await client.fileData(path: legacy.path)
+        XCTAssertEqual(oldData, legacy.data)
     }
 
     func testFormat2StillRejectsForeignDirectoryAndThumbnailFile() async throws {

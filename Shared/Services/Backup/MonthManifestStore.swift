@@ -114,6 +114,7 @@ final class MonthManifestStore {
 
     var assetsByFingerprint: [Data: RemoteManifestAsset] = [:]
     var assetLinksByFingerprint: [Data: [RemoteAssetResourceLink]] = [:]
+    private(set) var rekeyedAssetFingerprints: [(previous: Data, current: Data)] = []
 
     // Indexes derived from assetLinksByFingerprint. Maintained incrementally on upsertAsset
     // and applyDeletions; rebuilt wholesale on reloadCache. Without these, the legacy-import
@@ -198,6 +199,9 @@ final class MonthManifestStore {
             let fingerprint = BackupAssetResourcePlanner.assetFingerprint(resourceRoleSlotHashes: originalLinks.map {
                 (role: $0.role, slot: $0.slot, contentHash: $0.resourceHash)
             })
+            if fingerprint != asset.assetFingerprint {
+                rekeyedAssetFingerprints.append((asset.assetFingerprint, fingerprint))
+            }
             guard assets[fingerprint] == nil else { continue }
             assets[fingerprint] = RemoteManifestAsset(year: year, month: month, assetFingerprint: fingerprint,
                 creationDateMs: asset.creationDateMs, backedUpAtMs: asset.backedUpAtMs,
