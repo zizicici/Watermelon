@@ -636,7 +636,7 @@ final class MediaBrowserGridSelectionTests: XCTestCase {
         defer { fixture.close() }
         try await waitUntil { fixture.itemIDs == [original.id] }
         let initialLoads = fixture.source.loadRequests.count
-        let cover = UIViewController()
+        let cover = AppNavigationController(rootViewController: UIViewController())
         cover.modalPresentationStyle = .fullScreen
         await withCheckedContinuation { continuation in
             fixture.controller.present(cover, animated: false) { continuation.resume() }

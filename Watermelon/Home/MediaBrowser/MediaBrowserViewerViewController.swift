@@ -6,6 +6,12 @@ import UIKit
 // pages tear down (release image, stop Live playback) via cell reuse.
 @MainActor
 final class MediaBrowserViewerViewController: UIViewController {
+    @available(iOS 27.1, *)
+    override var preferredVerticalBarBehavior: UIVerticalBarBehavior { .disabled }
+
+    @available(iOS 27.1, *)
+    override var childForPreferredVerticalBarBehavior: UIViewController? { nil }
+
     private let source: MediaBrowserSource
     private let session: MediaBrowserSession
     private var reconciledSessionRevision: UInt64
@@ -356,7 +362,7 @@ final class MediaBrowserViewerViewController: UIViewController {
 
     private func presentMetadata(for item: MediaBrowserItem) {
         let metadata = MediaMetadataViewController(item: item, source: source)
-        let navigation = UINavigationController(rootViewController: metadata)
+        let navigation = AppNavigationController(rootViewController: metadata)
         navigation.overrideUserInterfaceStyle = .dark
         navigation.view.backgroundColor = .mediaBrowserBackdrop
         navigation.navigationBar.barStyle = .black

@@ -1551,7 +1551,7 @@ final class MediaBrowserGridViewController: UIViewController {
             items: items,
             onDeselectAll: onDeselectAll
         )
-        let navigationController = UINavigationController(rootViewController: controller)
+        let navigationController = AppNavigationController(rootViewController: controller)
         navigationController.modalPresentationStyle = .popover
         navigationController.preferredContentSize = CGSize(
             width: min(320, max(280, view.bounds.width - 48)),

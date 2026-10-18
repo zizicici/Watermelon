@@ -66,7 +66,7 @@ final class AppCoordinator {
     private func presentOnboarding(over presenter: UIViewController) {
         isPresentingOnboarding = true
         let onboarding = OnboardingViewController()
-        let nav = UINavigationController(rootViewController: onboarding)
+        let nav = AppNavigationController(rootViewController: onboarding)
         nav.modalPresentationStyle = .pageSheet
         nav.isModalInPresentation = true
         onboarding.onCompleted = { [weak self, weak nav] in

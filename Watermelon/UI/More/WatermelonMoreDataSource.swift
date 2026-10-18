@@ -271,7 +271,7 @@ class WatermelonMoreDataSource: MoreViewControllerDataSource {
                 controller.enterSettings(ICloudPhotoBackupMode.self)
             case ItemID.inboxTransferTutorial:
                 let tutorial = MediaDropTutorialViewController(allowsDismissal: true)
-                let container = UINavigationController(rootViewController: tutorial)
+                let container = AppNavigationController(rootViewController: tutorial)
                 if let sheet = container.sheetPresentationController {
                     sheet.detents = [.large()]
                     sheet.prefersGrabberVisible = true

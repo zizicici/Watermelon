@@ -35,6 +35,12 @@ enum ConnectionFailureAlertFactory {
 }
 
 final class HomeViewController: UIViewController {
+    @available(iOS 27.1, *)
+    override var preferredVerticalBarBehavior: UIVerticalBarBehavior { .disabled }
+
+    @available(iOS 27.1, *)
+    override var childForPreferredVerticalBarBehavior: UIViewController? { nil }
+
     private static let privacyPolicyURLString = "https://watermelonbackup.com/privacy.html"
 
     private enum HomeMode: Equatable {
@@ -1099,7 +1105,7 @@ final class HomeViewController: UIViewController {
             return
         }
 
-        let container = UINavigationController(rootViewController: moreViewController)
+        let container = AppNavigationController(rootViewController: moreViewController)
         if let shortcuts {
             container.setViewControllers([moreViewController, shortcuts], animated: false)
         }
@@ -1255,7 +1261,7 @@ final class HomeViewController: UIViewController {
 
     private func presentMediaDropTutorial() {
         let tutorial = MediaDropTutorialViewController(allowsDismissal: false)
-        let container = UINavigationController(rootViewController: tutorial)
+        let container = AppNavigationController(rootViewController: tutorial)
         container.isModalInPresentation = true
         if let sheet = container.sheetPresentationController {
             sheet.detents = [.large()]
@@ -1321,7 +1327,7 @@ final class HomeViewController: UIViewController {
             target: self,
             action: #selector(dismissModalFlow)
         )
-        let container = UINavigationController(rootViewController: editor)
+        let container = AppNavigationController(rootViewController: editor)
         if let presentation = container.sheetPresentationController {
             presentation.prefersGrabberVisible = true
         }
@@ -1362,7 +1368,7 @@ final class HomeViewController: UIViewController {
             return
         }
 
-        let container = UINavigationController(rootViewController: detail)
+        let container = AppNavigationController(rootViewController: detail)
         if let presentation = container.sheetPresentationController {
             presentation.prefersGrabberVisible = true
         }
@@ -1394,7 +1400,7 @@ final class HomeViewController: UIViewController {
     private func presentMediaBrowser(initialMonth: LibraryMonthKey?, initialRemote: Bool) {
         let browser = makeMediaBrowser(initialMonth: initialMonth, initialRemote: initialRemote)
         // Sheet with a grabber (like the More page): drag-to-dismiss + present/dismiss animation for free.
-        let container = UINavigationController(rootViewController: browser)
+        let container = AppNavigationController(rootViewController: browser)
         if let sheet = container.sheetPresentationController {
             sheet.detents = [.large()]
             sheet.prefersGrabberVisible = true
@@ -1587,7 +1593,7 @@ final class HomeViewController: UIViewController {
             return
         }
 
-        let container = UINavigationController(rootViewController: viewController)
+        let container = AppNavigationController(rootViewController: viewController)
         if let presentation = container.sheetPresentationController {
             presentation.prefersGrabberVisible = true
         }
@@ -1678,7 +1684,7 @@ final class HomeViewController: UIViewController {
             hashIndexRepository: dependencies.hashIndexRepository
         )
 
-        let container = UINavigationController(rootViewController: viewController)
+        let container = AppNavigationController(rootViewController: viewController)
         if let presentation = container.sheetPresentationController {
             presentation.prefersGrabberVisible = true
             presentation.detents = [.medium(), .large()]
@@ -1699,7 +1705,7 @@ final class HomeViewController: UIViewController {
             photoLibraryService: dependencies.photoLibraryService
         )
 
-        let container = UINavigationController(rootViewController: viewController)
+        let container = AppNavigationController(rootViewController: viewController)
         if let presentation = container.sheetPresentationController {
             presentation.prefersGrabberVisible = true
             presentation.detents = [.large()]
@@ -1719,7 +1725,7 @@ final class HomeViewController: UIViewController {
             return
         }
 
-        let container = UINavigationController(rootViewController: viewController)
+        let container = AppNavigationController(rootViewController: viewController)
         if let presentation = container.sheetPresentationController {
             presentation.prefersGrabberVisible = true
             presentation.detents = [.large()]
@@ -2147,7 +2153,7 @@ final class HomeViewController: UIViewController {
         sessionID: UUID? = nil
     ) {
         let tutorial = BrowserLinkTutorialViewController(allowsDismissal: !startsScannerOnCompletion)
-        let navigation = UINavigationController(rootViewController: tutorial)
+        let navigation = AppNavigationController(rootViewController: tutorial)
         navigation.modalPresentationStyle = .pageSheet
         navigation.isModalInPresentation = startsScannerOnCompletion
         if let presentation = navigation.sheetPresentationController {
@@ -2427,7 +2433,7 @@ final class HomeViewController: UIViewController {
             target: self,
             action: #selector(dismissModalFlow)
         )
-        let container = UINavigationController(rootViewController: rootViewController)
+        let container = AppNavigationController(rootViewController: rootViewController)
         if let presentation = container.sheetPresentationController {
             presentation.prefersGrabberVisible = true
         }
@@ -2492,7 +2498,7 @@ final class HomeViewController: UIViewController {
                 browser?.dismiss(animated: ConsideringUser.animated)
             }
         )
-        let container = UINavigationController(rootViewController: rootViewController)
+        let container = AppNavigationController(rootViewController: rootViewController)
         if let presentation = container.sheetPresentationController {
             presentation.prefersGrabberVisible = true
         }

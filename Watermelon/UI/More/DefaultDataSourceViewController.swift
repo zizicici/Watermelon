@@ -52,7 +52,7 @@ enum LocalAlbumSelectionPresentation {
             makeAlbumBrowser: makeAlbumBrowser,
             onDone: onDone
         )
-        let container = UINavigationController(rootViewController: picker)
+        let container = AppNavigationController(rootViewController: picker)
         container.sheetPresentationController?.prefersGrabberVisible = true
         container.sheetPresentationController?.detents = [.medium(), .large()]
         presenter.present(container, animated: ConsideringUser.animated)

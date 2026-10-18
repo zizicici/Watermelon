@@ -2,7 +2,7 @@ import SnapKit
 import UIKit
 
 @MainActor
-final class BrowserLinkSessionNavigationController: UINavigationController {
+final class BrowserLinkSessionNavigationController: AppNavigationController {
     var onSessionEnded: (() -> Void)?
     private var didEndSession = false
 

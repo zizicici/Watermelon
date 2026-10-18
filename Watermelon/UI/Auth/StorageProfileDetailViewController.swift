@@ -740,7 +740,7 @@ final class StorageProfileDetailViewController: UIViewController {
 
     private func presentLeftoverCleanup() {
         let viewController = LeftoverCleanupViewController(dependencies: dependencies, profile: profile)
-        let nav = UINavigationController(rootViewController: viewController)
+        let nav = AppNavigationController(rootViewController: viewController)
         present(nav, animated: true)
     }
 

@@ -42,7 +42,7 @@ final class MediaBrowserTestFixture<Source: MediaBrowserSource> {
         let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
         previousWindow = scene.keyWindow
         window = UIWindow(windowScene: scene)
-        window.rootViewController = UINavigationController(rootViewController: controller)
+        window.rootViewController = AppNavigationController(rootViewController: controller)
         window.makeKeyAndVisible()
         controller.loadViewIfNeeded()
         collection = try XCTUnwrap(controller.view.subviews.compactMap { $0 as? UICollectionView }.first)

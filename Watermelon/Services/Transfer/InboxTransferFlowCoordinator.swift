@@ -371,7 +371,7 @@ final class InboxTransferFlowCoordinator {
         sessionID: UUID
     ) {
         let tutorial = BrowserLinkTutorialViewController(allowsDismissal: false)
-        let navigation = UINavigationController(rootViewController: tutorial)
+        let navigation = AppNavigationController(rootViewController: tutorial)
         navigation.modalPresentationStyle = .pageSheet
         navigation.isModalInPresentation = true
         if let presentation = navigation.sheetPresentationController {
@@ -406,7 +406,7 @@ final class InboxTransferFlowCoordinator {
         scanner.onTutorial = { [weak scanner] in
             guard let scanner else { return }
             let tutorial = BrowserLinkTutorialViewController(allowsDismissal: true)
-            let navigation = UINavigationController(rootViewController: tutorial)
+            let navigation = AppNavigationController(rootViewController: tutorial)
             if let presentation = navigation.sheetPresentationController {
                 presentation.detents = [.large()]
                 presentation.prefersGrabberVisible = true

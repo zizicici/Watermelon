@@ -341,7 +341,7 @@ final class AddSMBServerLoginViewController: UIViewController {
     }
 
     private func presentSelectionController(_ viewController: UIViewController) {
-        let navigationController = UINavigationController(rootViewController: viewController)
+        let navigationController = AppNavigationController(rootViewController: viewController)
         if let sheet = navigationController.sheetPresentationController {
             sheet.detents = [.medium(), .large()]
             sheet.prefersGrabberVisible = true
