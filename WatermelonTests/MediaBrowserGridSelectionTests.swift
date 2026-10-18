@@ -5,6 +5,132 @@ import XCTest
 
 @MainActor
 final class MediaBrowserGridSelectionTests: XCTestCase {
+    func testSectionButtonsTrackMonthAndSizeSelectionsAndRefreshedContents() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let dependencies = DependencyContainer(databaseManager: try DatabaseManager(databaseURL: directory.appendingPathComponent("index.sqlite")),
+            reconcileOneDriveAccounts: false)
+        defer { try? dependencies.databaseManager.dbQueue.close() }
+        let presence = LibraryPresenceIndex(hashIndexRepository: dependencies.hashIndexRepository,
+            coordinator: dependencies.backupCoordinator, profileKey: { nil })
+        let runner = MediaBrowserActionRunner(env: .init(appSession: dependencies.appSession,
+            backupCoordinator: dependencies.backupCoordinator, restoreService: dependencies.restoreService,
+            photoLibraryService: dependencies.photoLibraryService, hashIndexRepository: dependencies.hashIndexRepository,
+            localHashIndexBuildService: dependencies.localHashIndexBuildService,
+            localIndexChangePublisher: dependencies.localIndexChangePublisher, allAccessibleAssetIDs: { [] },
+            presenceIndex: presence, appRuntimeFlags: dependencies.appRuntimeFlags, isTaskActive: { false },
+            iCloudPhotoBackupMode: { .disable }, monthGroupingTimeZone: { .frozenCurrent() }))
+        let items = [20_000_000, 1_000_000, 30_000_000, 2_000_000].enumerated().map { index, size in
+            MediaBrowserItem(kind: .photo, creationDateMs: Int64(index), localIdentifier: "section-\(index)",
+                fingerprint: nil, isBackedUp: false, fileSize: Int64(size))
+        }
+        let source = SelectionSource(sections: [
+            .init(month: .init(year: 2026, month: 2), items: Array(items.prefix(2))),
+            .init(month: .init(year: 2026, month: 1), items: Array(items.suffix(2))),
+        ])
+        let controller = MediaBrowserGridViewController(
+            specs: [.init(mode: .local, isAvailable: { true }, makeSource: { source })],
+            initialMode: .local, initialMonth: nil, remoteStorageImage: { nil }, sessionToken: { nil },
+            actionRunner: runner, presenceIndex: presence, title: "Browser")
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let previousKeyWindow = scene.keyWindow
+        let window = UIWindow(windowScene: scene)
+        window.rootViewController = UINavigationController(rootViewController: controller)
+        window.makeKeyAndVisible()
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+            previousKeyWindow?.makeKey()
+        }
+        controller.loadViewIfNeeded()
+        let collection = try XCTUnwrap(controller.view.subviews.compactMap { $0 as? UICollectionView }.first)
+        try await waitUntil {
+            controller.view.layoutIfNeeded()
+            return collection.numberOfSections == 2 && collection.numberOfItems(inSection: 1) == 2
+        }
+        let dataSource = try XCTUnwrap(collection.dataSource as? UICollectionViewDiffableDataSource<MediaBrowserSectionID, MediaBrowserItemID>)
+        let firstHeader = try XCTUnwrap(collection.supplementaryView(forElementKind: "month-header", at: IndexPath(item: 0, section: 0)))
+        let secondHeader = try XCTUnwrap(collection.supplementaryView(forElementKind: "month-header", at: IndexPath(item: 0, section: 1)))
+        let firstButton = try checkbox(in: firstHeader)
+        let secondButton = try checkbox(in: secondHeader)
+        XCTAssertTrue(firstButton.isHidden)
+        XCTAssertTrue(secondButton.isHidden)
+        controller.perform(NSSelectorFromString("enterSelection"))
+        XCTAssertFalse(firstButton.isHidden)
+        XCTAssertTrue(firstButton.isEnabled)
+        XCTAssertGreaterThanOrEqual(firstButton.bounds.width, 44)
+        XCTAssertGreaterThanOrEqual(firstButton.bounds.height, 44)
+        firstButton.sendActions(for: .touchUpInside)
+        XCTAssertTrue(firstButton.isSelected)
+        XCTAssertFalse(secondButton.isSelected)
+        let firstCell = try XCTUnwrap(collection.cellForItem(at: IndexPath(item: 0, section: 0)))
+        let secondCell = try XCTUnwrap(collection.cellForItem(at: IndexPath(item: 1, section: 0)))
+        XCTAssertTrue(try checkbox(in: firstCell).isSelected)
+        XCTAssertTrue(try checkbox(in: secondCell).isSelected)
+        try checkbox(in: firstCell).sendActions(for: .touchUpInside)
+        XCTAssertFalse(firstButton.isSelected)
+        firstButton.sendActions(for: .touchUpInside)
+        XCTAssertTrue(firstButton.isSelected)
+        XCTAssertTrue(try checkbox(in: firstCell).isSelected)
+        firstButton.sendActions(for: .touchUpInside)
+        XCTAssertFalse(firstButton.isSelected)
+        XCTAssertFalse(try checkbox(in: secondCell).isSelected)
+        controller.perform(NSSelectorFromString("selectAllItems"))
+        XCTAssertTrue(firstButton.isSelected)
+        XCTAssertTrue(secondButton.isSelected)
+        controller.collectionView(collection, didBeginMultipleSelectionInteractionAt: IndexPath(item: 0, section: 0))
+        XCTAssertFalse(firstButton.isEnabled)
+        firstButton.sendActions(for: .touchUpInside)
+        XCTAssertTrue(firstButton.isSelected)
+        controller.collectionViewDidEndMultipleSelectionInteraction(collection)
+        XCTAssertTrue(firstButton.isEnabled)
+        firstButton.sendActions(for: .touchUpInside)
+        XCTAssertFalse(firstButton.isSelected)
+        XCTAssertTrue(secondButton.isSelected)
+
+        try await Task.sleep(for: .milliseconds(300))
+        let preview = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
+            window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
+        }
+        let attachment = XCTAttachment(image: preview)
+        attachment.name = "Browser section selection"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+
+        controller.setSortOrder(.fileSize)
+        try await waitUntil {
+            dataSource.snapshot().sectionIdentifiers == [.fileSize(.from10MBTo100MB), .fileSize(.from1MBTo10MB)]
+        }
+        controller.view.layoutIfNeeded()
+        controller.perform(NSSelectorFromString("enterSelection"))
+        let sizeHeader = try XCTUnwrap(collection.supplementaryView(forElementKind: "month-header", at: IndexPath(item: 0, section: 0)))
+        let sizeButton = try checkbox(in: sizeHeader)
+        XCTAssertFalse(sizeButton.isSelected)
+        sizeButton.sendActions(for: .touchUpInside)
+        for index in 0..<2 {
+            let cell = try XCTUnwrap(collection.cellForItem(at: IndexPath(item: index, section: 0)))
+            XCTAssertTrue(try checkbox(in: cell).isSelected)
+        }
+        let newItem = MediaBrowserItem(kind: .photo, creationDateMs: 5, localIdentifier: "new-section-item",
+                                      fingerprint: nil, isBackedUp: false, fileSize: 25_000_000)
+        source.replace(items: items + [newItem])
+        NotificationCenter.default.post(name: .LibraryPresenceDidChange, object: presence)
+        try await waitUntil { dataSource.snapshot().numberOfItems == 5 }
+        controller.view.layoutIfNeeded()
+        let refreshedHeader = try XCTUnwrap(collection.supplementaryView(forElementKind: "month-header", at: IndexPath(item: 0, section: 0)))
+        let refreshedButton = try checkbox(in: refreshedHeader)
+        XCTAssertFalse(refreshedButton.isSelected)
+        refreshedButton.sendActions(for: .touchUpInside)
+        XCTAssertTrue(refreshedButton.isSelected)
+        let newPath = try XCTUnwrap(dataSource.indexPath(for: newItem.id))
+        let newCell = try XCTUnwrap(collection.cellForItem(at: newPath))
+        XCTAssertTrue(try checkbox(in: newCell).isSelected)
+        controller.perform(NSSelectorFromString("cancelSelection"))
+        XCTAssertTrue(refreshedButton.isHidden)
+        XCTAssertFalse(try checkbox(in: newCell).isSelected)
+    }
+
     func testSizeSortMenuSelectionLabelsAndSwitchBack() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -401,14 +527,19 @@ final class MediaBrowserGridSelectionTests: XCTestCase {
     private final class SelectionSource: MediaBrowserSource, @unchecked Sendable {
         let mode = MediaBrowserMode.local
         private let lock = NSLock()
-        private var items: [MediaBrowserItem]
+        private var sections: [MediaBrowserSection]
         private var requests: [Bool] = []
         private var nextLoadGate: LoadGate?
 
         var loadRequests: [Bool] { lock.withLock { requests } }
 
-        init(items: [MediaBrowserItem]) { self.items = items }
-        func replace(items: [MediaBrowserItem]) { lock.withLock { self.items = items } }
+        init(items: [MediaBrowserItem]) {
+            sections = [.init(month: .init(year: 2026, month: 1), items: items)]
+        }
+        init(sections: [MediaBrowserSection]) { self.sections = sections }
+        func replace(items: [MediaBrowserItem]) {
+            lock.withLock { sections = [.init(month: .init(year: 2026, month: 1), items: items)] }
+        }
         func holdNextLoad(_ gate: LoadGate) { lock.withLock { nextLoadGate = gate } }
         func load() async -> MediaBrowserLoadResult {
             await load(includeFileSizes: false)
@@ -418,7 +549,7 @@ final class MediaBrowserGridSelectionTests: XCTestCase {
                 requests.append(includeFileSizes)
                 let gate = nextLoadGate
                 nextLoadGate = nil
-                return (.init(sections: [.init(month: .init(year: 2026, month: 1), items: items)]), gate)
+                return (.init(sections: sections), gate)
             }
             await gate?.wait()
             return .loaded(content)

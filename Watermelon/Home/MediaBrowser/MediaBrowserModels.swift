@@ -475,6 +475,16 @@ struct MediaBrowserSnapshot: Sendable {
         return sections[sectionIndex].items.map(\.id)
     }
 
+    func itemCount(inSection sectionIndex: Int) -> Int {
+        guard sections.indices.contains(sectionIndex) else { return 0 }
+        return sections[sectionIndex].items.count
+    }
+
+    func sectionIndex(of id: MediaBrowserItemID) -> Int? {
+        guard let index = itemIndexByID[id] else { return nil }
+        return sectionIndex(containing: index)
+    }
+
     func item(section sectionIndex: Int, item itemIndex: Int) -> MediaBrowserItem? {
         guard sections.indices.contains(sectionIndex) else { return nil }
         let items = sections[sectionIndex].items
@@ -483,6 +493,11 @@ struct MediaBrowserSnapshot: Sendable {
     }
 
     func item(at index: Int) -> MediaBrowserItem? {
+        guard let sectionIndex = sectionIndex(containing: index) else { return nil }
+        return sections[sectionIndex].items[index - sectionOffsets[sectionIndex]]
+    }
+
+    private func sectionIndex(containing index: Int) -> Int? {
         guard index >= 0, index < itemCount else { return nil }
         var lowerBound = 0
         var upperBound = sections.count
@@ -494,8 +509,7 @@ struct MediaBrowserSnapshot: Sendable {
                 upperBound = middle
             }
         }
-        let sectionIndex = lowerBound
-        return sections[sectionIndex].items[index - sectionOffsets[sectionIndex]]
+        return lowerBound
     }
 
     func item(id: MediaBrowserItemID) -> MediaBrowserItem? {

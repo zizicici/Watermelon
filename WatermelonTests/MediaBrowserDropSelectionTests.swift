@@ -5,6 +5,28 @@ import XCTest
 
 @MainActor
 final class MediaBrowserDropSelectionTests: XCTestCase {
+    func testSectionButtonIsDisabledWhileDropTaskRunsAndRestoredAfterwards() async throws {
+        let fixture = try Fixture()
+        defer { fixture.close() }
+        try await fixture.show()
+        let button = try XCTUnwrap(fixture.collection.visibleSupplementaryViews(ofKind: "month-header")
+            .flatMap { $0.subviews.compactMap { $0 as? UIButton } }
+            .first { $0.accessibilityIdentifier == "mediaBrowser.sectionSelection" })
+        XCTAssertFalse(button.isHidden)
+        button.sendActions(for: .touchUpInside)
+        XCTAssertTrue(button.isSelected)
+        XCTAssertTrue(fixture.controller.runExternalSelectionAction { _ in
+            try? await Task.sleep(for: .milliseconds(100))
+            return false
+        })
+        XCTAssertFalse(button.isEnabled)
+        button.sendActions(for: .touchUpInside)
+        XCTAssertTrue(button.isSelected)
+        try await waitUntil { button.isEnabled }
+        button.sendActions(for: .touchUpInside)
+        XCTAssertFalse(button.isSelected)
+    }
+
     func testGestureEndAndCancellationRestoreSendAndLibraryMenu() async throws {
         let fixture = try Fixture()
         defer { fixture.close() }

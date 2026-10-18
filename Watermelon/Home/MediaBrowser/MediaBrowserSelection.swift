@@ -33,6 +33,7 @@ final class MediaBrowserSelection {
     private(set) var selectedIDs: Set<MediaBrowserItemID> = []
     private(set) var summary = MediaBrowserSelectionSummary()
     private(set) var revision: UInt64 = 0
+    private var selectedCountsBySection: [Int: Int] = [:]
     private var orderedItemsCache: [MediaBrowserItem]?
     private var drag: Drag?
 
@@ -56,10 +57,7 @@ final class MediaBrowserSelection {
         endDrag()
         self.snapshot = snapshot
         selectedIDs = selectedIDs.filter { snapshot.index(of: $0) != nil }
-        summary = MediaBrowserSelectionSummary()
-        for id in selectedIDs {
-            if let item = snapshot.item(id: id) { summary.include(item, selected: true) }
-        }
+        rebuildSummary()
         changed()
     }
 
@@ -80,6 +78,7 @@ final class MediaBrowserSelection {
     func clear() {
         endDrag()
         selectedIDs.removeAll()
+        selectedCountsBySection.removeAll()
         summary = MediaBrowserSelectionSummary()
         changed()
     }
@@ -88,10 +87,23 @@ final class MediaBrowserSelection {
     func selectAll() -> Bool {
         guard isSelecting, !isDragging, selectedIDs.count != snapshot.itemCount else { return false }
         selectedIDs = Set(snapshot.itemIDs)
-        summary = MediaBrowserSelectionSummary()
-        for id in selectedIDs {
-            if let item = snapshot.item(id: id) { summary.include(item, selected: true) }
-        }
+        rebuildSummary()
+        changed()
+        return true
+    }
+
+    func isSectionSelected(_ sectionIndex: Int) -> Bool {
+        let count = snapshot.itemCount(inSection: sectionIndex)
+        return count > 0 && selectedCountsBySection[sectionIndex] == count
+    }
+
+    @discardableResult
+    func toggleSection(_ sectionIndex: Int) -> Bool {
+        guard isSelecting, !isDragging else { return false }
+        let ids = snapshot.itemIDs(inSection: sectionIndex)
+        guard !ids.isEmpty else { return false }
+        let selects = !isSectionSelected(sectionIndex)
+        for id in ids { _ = setMembership(selects, for: id) }
         changed()
         return true
     }
@@ -158,7 +170,21 @@ final class MediaBrowserSelection {
         guard selectedIDs.contains(id) != selected, let item = snapshot.item(id: id) else { return false }
         if selected { selectedIDs.insert(id) } else { selectedIDs.remove(id) }
         summary.include(item, selected: selected)
+        if let sectionIndex = snapshot.sectionIndex(of: id) {
+            selectedCountsBySection[sectionIndex, default: 0] += selected ? 1 : -1
+        }
         return true
+    }
+
+    private func rebuildSummary() {
+        summary = MediaBrowserSelectionSummary()
+        selectedCountsBySection.removeAll(keepingCapacity: true)
+        for id in selectedIDs {
+            if let item = snapshot.item(id: id) { summary.include(item, selected: true) }
+            if let sectionIndex = snapshot.sectionIndex(of: id) {
+                selectedCountsBySection[sectionIndex, default: 0] += 1
+            }
+        }
     }
 
     private func changed() {

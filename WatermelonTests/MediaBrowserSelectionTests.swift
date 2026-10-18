@@ -3,6 +3,90 @@ import XCTest
 
 @MainActor
 final class MediaBrowserSelectionTests: XCTestCase {
+    func testSectionToggleCompletesPartialSelectionAndPreservesOtherSections() {
+        let selection = makeSelection(count: 8)
+        selection.setSelected(true, for: item(0).id)
+        selection.setSelected(true, for: item(7).id)
+        XCTAssertFalse(selection.isSectionSelected(0))
+        let revision = selection.revision
+        XCTAssertTrue(selection.toggleSection(0))
+        XCTAssertEqual(selection.revision, revision + 1)
+        XCTAssertTrue(selection.isSectionSelected(0))
+        XCTAssertFalse(selection.isSectionSelected(1))
+        XCTAssertEqual(selection.selectedIDs, Set([0, 1, 2, 3, 7].map { item($0).id }))
+        XCTAssertTrue(selection.toggleSection(0))
+        XCTAssertFalse(selection.isSectionSelected(0))
+        XCTAssertEqual(selection.selectedIDs, [item(7).id])
+        assertConsistent(selection)
+        selection.selectAll()
+        XCTAssertTrue(selection.isSectionSelected(0))
+        XCTAssertTrue(selection.isSectionSelected(1))
+        selection.clear()
+        XCTAssertFalse(selection.isSectionSelected(0))
+        XCTAssertFalse(selection.isSectionSelected(1))
+        assertConsistent(selection)
+    }
+
+    func testSectionToggleUsesFilteredSizeGroupsAcrossMonths() {
+        var first = item(0)
+        first.fileSize = 20_000_000
+        var second = item(2)
+        second.fileSize = 30_000_000
+        var small = item(4)
+        small.fileSize = 100_000
+        var hiddenVideo = item(1)
+        hiddenVideo.fileSize = 40_000_000
+        var hiddenBackup = item(6, backedUp: true)
+        hiddenBackup.fileSize = 50_000_000
+        let selection = MediaBrowserSelection()
+        selection.replaceSnapshot(.init(sections: [
+            .init(month: .init(year: 2026, month: 2), items: [first, hiddenVideo]),
+            .init(month: .init(year: 2026, month: 1), items: [second, small, hiddenBackup]),
+        ], filter: .localOnly, mediaFilter: .photos, sortOrder: .fileSize))
+        selection.enter()
+        XCTAssertTrue(selection.toggleSection(0))
+        XCTAssertEqual(selection.selectedIDs, [first.id, second.id])
+        XCTAssertEqual(selection.orderedItems.map(\.id), [second.id, first.id])
+        XCTAssertTrue(selection.isSectionSelected(0))
+        XCTAssertFalse(selection.isSectionSelected(1))
+        assertConsistent(selection)
+    }
+
+    func testSectionStateRebuildsWhenRefreshMovesItemsAndAddsUnselectedItems() {
+        let selection = makeSelection(count: 4)
+        selection.toggleSection(0)
+        selection.replaceSnapshot(.init(sections: [
+            .init(month: .init(year: 2026, month: 2), items: [item(2), item(3)]),
+            .init(month: .init(year: 2026, month: 1), items: [item(1), item(0, backedUp: true), item(4)]),
+        ]))
+        XCTAssertEqual(selection.selectedIDs, [item(0).id, item(1).id])
+        XCTAssertFalse(selection.isSectionSelected(0))
+        XCTAssertFalse(selection.isSectionSelected(1))
+        selection.toggleSection(1)
+        XCTAssertTrue(selection.isSectionSelected(1))
+        XCTAssertFalse(selection.summary.actions.showsUpload)
+        selection.remove([item(1).id])
+        XCTAssertFalse(selection.isSectionSelected(1))
+        assertConsistent(selection)
+        selection.exit()
+        XCTAssertFalse(selection.isSectionSelected(1))
+    }
+
+    func testSectionToggleRequiresSelectionAndValidNonemptySection() {
+        let selection = MediaBrowserSelection()
+        selection.replaceSnapshot(snapshot([item(0)]))
+        XCTAssertFalse(selection.toggleSection(0))
+        selection.enter()
+        let revision = selection.revision
+        XCTAssertFalse(selection.toggleSection(-1))
+        XCTAssertFalse(selection.toggleSection(1))
+        XCTAssertFalse(selection.isSectionSelected(1))
+        XCTAssertEqual(selection.revision, revision)
+        selection.replaceSnapshot(snapshot([]))
+        XCTAssertFalse(selection.toggleSection(0))
+        XCTAssertFalse(selection.isSectionSelected(0))
+    }
+
     func testSelectAllAndSingleChangesKeepSummaryAndOrderedSelectionConsistent() {
         let selection = makeSelection(count: 50_000)
         XCTAssertTrue(selection.selectAll())
@@ -101,6 +185,7 @@ final class MediaBrowserSelectionTests: XCTestCase {
         let revision = selection.revision
         XCTAssertFalse(selection.updateDrag(through: item(8).id))
         XCTAssertFalse(selection.selectAll())
+        XCTAssertFalse(selection.toggleSection(0))
         XCTAssertFalse(selection.setSelected(true, for: item(10).id))
         XCTAssertFalse(selection.remove([item(3).id]))
         XCTAssertEqual(selection.revision, revision)
@@ -154,5 +239,9 @@ final class MediaBrowserSelectionTests: XCTestCase {
         XCTAssertEqual(selection.summary.photoCount, items.filter { !$0.isVideo }.count, file: file, line: line)
         XCTAssertEqual(selection.summary.videoCount, items.filter(\.isVideo).count, file: file, line: line)
         XCTAssertEqual(selection.summary.actions, BatchActionResolver.resolve(items), file: file, line: line)
+        for section in selection.snapshot.sectionIDs.indices {
+            let ids = selection.snapshot.itemIDs(inSection: section)
+            XCTAssertEqual(selection.isSectionSelected(section), !ids.isEmpty && ids.allSatisfy(selection.selectedIDs.contains), file: file, line: line)
+        }
     }
 }

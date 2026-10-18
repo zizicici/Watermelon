@@ -129,6 +129,12 @@ final class MediaBrowserModelsTests: XCTestCase {
         XCTAssertEqual(snapshot.item(section: 1, item: 0), second)
         XCTAssertEqual(snapshot.item(id: .local("second")), second)
         XCTAssertEqual(snapshot.index(of: second.id), 1)
+        XCTAssertEqual(snapshot.sectionIndex(of: first.id), 0)
+        XCTAssertEqual(snapshot.sectionIndex(of: second.id), 1)
+        XCTAssertNil(snapshot.sectionIndex(of: .local("missing")))
+        XCTAssertEqual(snapshot.itemCount(inSection: 0), 1)
+        XCTAssertEqual(snapshot.itemCount(inSection: -1), 0)
+        XCTAssertEqual(snapshot.itemCount(inSection: 2), 0)
     }
 
     func testSnapshotReportsOnlyExistingItemsWhosePresentationChanged() {

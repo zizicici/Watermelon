@@ -811,7 +811,10 @@ final class MediaBrowserGridViewController: UIViewController {
             elementKind: Self.headerKind
         ) { [weak self] header, _, indexPath in
             guard let self, self.sectionIDs.indices.contains(indexPath.section) else { return }
-            header.configure(title: self.sectionIDs[indexPath.section].title)
+            let sectionID = self.sectionIDs[indexPath.section]
+            header.configure(sectionID: sectionID)
+            header.onSelectionButtonTapped = { [weak self] in self?.toggleSectionSelection(sectionID) }
+            self.updateSelectionState(of: header)
         }
         dataSource.supplementaryViewProvider = { collectionView, _, indexPath in
             collectionView.dequeueConfiguredReusableSupplementary(using: headerRegistration, for: indexPath)
@@ -2192,6 +2195,7 @@ final class MediaBrowserGridViewController: UIViewController {
     }
 
     private func updateSelectBarButton(animated: Bool = false) {
+        refreshVisibleSectionSelection()
         if selectionAction != nil {
             updateTransferOptionsButton()
             return
@@ -2324,6 +2328,27 @@ final class MediaBrowserGridViewController: UIViewController {
                   let itemID = dataSource?.itemIdentifier(for: indexPath) else { continue }
             cell.setSelecting(isSelecting, selected: selectedItemIDs.contains(itemID))
         }
+        refreshVisibleSectionSelection()
+    }
+
+    private func refreshVisibleSectionSelection() {
+        for case let header as MediaBrowserHeaderView in collectionView.visibleSupplementaryViews(ofKind: Self.headerKind) {
+            updateSelectionState(of: header)
+        }
+    }
+
+    private func updateSelectionState(of header: MediaBrowserHeaderView) {
+        guard let sectionID = header.sectionID, let index = sectionIDs.firstIndex(of: sectionID) else {
+            header.setSelecting(false, selected: false, isEnabled: false)
+            return
+        }
+        header.setSelecting(isSelecting, selected: selection.isSectionSelected(index), isEnabled: canInteractWithSelection)
+    }
+
+    private func toggleSectionSelection(_ sectionID: MediaBrowserSectionID) {
+        guard isSelecting, canInteractWithSelection,
+              let index = sectionIDs.firstIndex(of: sectionID) else { return }
+        if selection.toggleSection(index) { selectionDidChange() }
     }
 
     private func synchronizeCollectionSelection(including indexPath: IndexPath? = nil) {
@@ -2491,6 +2516,7 @@ final class MediaBrowserGridViewController: UIViewController {
 
     private func recomputeBatchBar() {
         if let selectionAction {
+            refreshVisibleSectionSelection()
             let selectedItems = selectedMediaItems()
             let transferItemCount = selectedTransferItemCount
             let accessPolicy = selectionAction.accessPolicy()
@@ -2836,10 +2862,13 @@ extension MediaBrowserGridViewController: HeroTransitionSource {
     }
 }
 
-// A floating, content-sized month pill (not a full-width bar).
 private final class MediaBrowserHeaderView: UICollectionReusableView {
     private let pill = UIVisualEffectView(effect: UIBlurEffect(style: .systemThinMaterial))
     private let label = UILabel()
+    private let selectionPill = UIVisualEffectView(effect: UIBlurEffect(style: .systemThinMaterial))
+    private let selectionButton = UIButton(type: .custom)
+    private(set) var sectionID: MediaBrowserSectionID?
+    var onSelectionButtonTapped: (() -> Void)?
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -2854,15 +2883,37 @@ private final class MediaBrowserHeaderView: UICollectionReusableView {
         label.textColor = .label
         pill.contentView.addSubview(label)
 
-        pill.translatesAutoresizingMaskIntoConstraints = false
-        label.translatesAutoresizingMaskIntoConstraints = false
+        selectionPill.clipsToBounds = true
+        selectionPill.layer.cornerRadius = 16
+        selectionPill.isUserInteractionEnabled = false
+        addSubview(selectionPill)
+        selectionButton.setImage(UIImage(systemName: "circle"), for: .normal)
+        selectionButton.setImage(UIImage(systemName: "checkmark.circle.fill"), for: .selected)
+        selectionButton.setPreferredSymbolConfiguration(.init(pointSize: 22, weight: .regular), forImageIn: .normal)
+        selectionButton.accessibilityIdentifier = "mediaBrowser.sectionSelection"
+        selectionButton.addTarget(self, action: #selector(selectionButtonTapped), for: .touchUpInside)
+        addSubview(selectionButton)
+        setSelecting(false, selected: false, isEnabled: false)
+
+        for view in [pill, label, selectionPill, selectionButton] {
+            view.translatesAutoresizingMaskIntoConstraints = false
+        }
         NSLayoutConstraint.activate([
             pill.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 6),
+            pill.trailingAnchor.constraint(lessThanOrEqualTo: selectionButton.leadingAnchor, constant: -4),
             pill.centerYAnchor.constraint(equalTo: centerYAnchor),
             label.topAnchor.constraint(equalTo: pill.contentView.topAnchor, constant: 6),
             label.bottomAnchor.constraint(equalTo: pill.contentView.bottomAnchor, constant: -6),
             label.leadingAnchor.constraint(equalTo: pill.contentView.leadingAnchor, constant: 6),
             label.trailingAnchor.constraint(equalTo: pill.contentView.trailingAnchor, constant: -6),
+            selectionButton.trailingAnchor.constraint(equalTo: trailingAnchor),
+            selectionButton.centerYAnchor.constraint(equalTo: centerYAnchor),
+            selectionButton.widthAnchor.constraint(equalToConstant: 44),
+            selectionButton.heightAnchor.constraint(equalToConstant: 44),
+            selectionPill.centerXAnchor.constraint(equalTo: selectionButton.centerXAnchor),
+            selectionPill.centerYAnchor.constraint(equalTo: selectionButton.centerYAnchor),
+            selectionPill.widthAnchor.constraint(equalToConstant: 32),
+            selectionPill.heightAnchor.constraint(equalToConstant: 32),
         ])
     }
 
@@ -2871,8 +2922,35 @@ private final class MediaBrowserHeaderView: UICollectionReusableView {
         fatalError("init(coder:) has not been implemented")
     }
 
-    func configure(title: String) {
-        label.text = title
+    override func prepareForReuse() {
+        super.prepareForReuse()
+        sectionID = nil
+        onSelectionButtonTapped = nil
+        label.text = nil
+        setSelecting(false, selected: false, isEnabled: false)
+    }
+
+    func configure(sectionID: MediaBrowserSectionID) {
+        self.sectionID = sectionID
+        label.text = sectionID.title
+        selectionButton.accessibilityLabel = "\(sectionID.title), \(String(localized: "mediaBrowser.select"))"
+    }
+
+    func setSelecting(_ selecting: Bool, selected: Bool, isEnabled: Bool) {
+        selectionButton.isHidden = !selecting
+        selectionPill.isHidden = !selecting
+        selectionButton.isSelected = selected
+        selectionButton.isEnabled = isEnabled
+        selectionButton.tintColor = selected
+            ? .materialAdaptive(light: .Material.Green._600, dark: .Material.Green._500)
+            : .secondaryLabel
+        selectionButton.alpha = isEnabled ? 1 : 0.4
+        selectionButton.accessibilityTraits = selected ? [.button, .selected] : .button
+        if !isEnabled { selectionButton.accessibilityTraits.insert(.notEnabled) }
+    }
+
+    @objc private func selectionButtonTapped() {
+        onSelectionButtonTapped?()
     }
 }
 
