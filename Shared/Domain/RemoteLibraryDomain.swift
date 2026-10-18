@@ -464,6 +464,7 @@ struct RemoteLibrarySnapshotState: Sendable {
     // Identity of the profile this snapshot belongs to (nil = no remote context established yet). Lets a
     // reader reject a snapshot that was reset to a different profile than the one it was built for.
     let profileKey: String?
+    var isAuthoritative: Bool = true
 }
 
 enum RepoUpgradePhase: Hashable, Sendable {

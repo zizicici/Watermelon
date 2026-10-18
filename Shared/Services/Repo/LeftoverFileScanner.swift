@@ -588,7 +588,7 @@ struct LeftoverDataScanResult: Sendable {
     let knownResources: [LeftoverKnownResource]
 }
 
-// Forward leftover-file scan/cleanup: complements `RemoteIndexSyncService.verifyMonth` (which prunes manifest
+// Forward leftover-file scan/cleanup: complements `MonthManifestStore.verifyMonth` (which prunes manifest
 // entries whose remote file is missing). Here we find remote data files the manifest never recorded —
 // left by a backup interrupted after byte upload but before the manifest flush. Pure logic: no connection
 // or lease management. Only months with an authoritative manifest are considered (the caller proves a

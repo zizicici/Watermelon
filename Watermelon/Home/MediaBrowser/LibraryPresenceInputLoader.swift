@@ -30,9 +30,8 @@ final class LibraryPresenceInputLoader: @unchecked Sendable {
         let hashIndexRepository = hashIndexRepository
         return await withCancellableDetachedValue(priority: .userInitiated) {
             let startedAt = CFAbsoluteTimeGetCurrent()
-            let map = homeSeed?.localIDByFingerprint
-                ?? (try? hashIndexRepository.fetchLocalIdentifiersByFingerprint())
-                ?? [:]
+            guard let map = homeSeed?.localIDByFingerprint
+                ?? (try? hashIndexRepository.fetchLocalIdentifiersByFingerprint()) else { return nil }
             guard !Task.isCancelled else { return nil }
             return LibraryLocalPresenceInput(
                 localIDByFingerprint: map,
@@ -55,11 +54,11 @@ final class LibraryPresenceInputLoader: @unchecked Sendable {
             }
             let captured = coordinator.currentRemoteSnapshotState(since: nil)
             guard !Task.isCancelled else { return nil }
-            let authoritative = RemoteSnapshotOwnership.matches(
+            let owned = RemoteSnapshotOwnership.matches(
                 ownerProfileKey: captured.profileKey,
                 expectedProfileKey: profileKey
             )
-            let state = authoritative
+            let state = owned
                 ? captured
                 : RemoteLibrarySnapshotState(
                     revision: captured.revision,
@@ -70,7 +69,7 @@ final class LibraryPresenceInputLoader: @unchecked Sendable {
             return LibraryRemotePresenceInput(
                 state: state,
                 monthCount: captured.monthDeltas.count,
-                isAuthoritative: authoritative,
+                isAuthoritative: owned && captured.isAuthoritative,
                 snapshotMs: (CFAbsoluteTimeGetCurrent() - startedAt) * 1_000
             )
         }

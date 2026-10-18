@@ -35,7 +35,6 @@ final class LocalIndexBuildCoordinator {
     private let buildService: LocalHashIndexBuildService
     private let photoLibraryService: PhotoLibraryService
     private let hashIndexRepository: ContentHashIndexRepository
-    private let changePublisher: LocalIndexChangePublisher
     private let appRuntimeFlags: AppRuntimeFlags
 
     private(set) var state: State?
@@ -53,13 +52,11 @@ final class LocalIndexBuildCoordinator {
         buildService: LocalHashIndexBuildService,
         photoLibraryService: PhotoLibraryService,
         hashIndexRepository: ContentHashIndexRepository,
-        changePublisher: LocalIndexChangePublisher,
         appRuntimeFlags: AppRuntimeFlags
     ) {
         self.buildService = buildService
         self.photoLibraryService = photoLibraryService
         self.hashIndexRepository = hashIndexRepository
-        self.changePublisher = changePublisher
         self.appRuntimeFlags = appRuntimeFlags
     }
 
@@ -137,8 +134,6 @@ final class LocalIndexBuildCoordinator {
     private func runWork() async {
         guard let initialState = state else { return }
         let mode = initialState.mode
-        var didClear = false
-        var processedIDs = Set<String>()
 
         do {
             try await Self.ensureAuthorization(photoLibraryService: photoLibraryService)
@@ -146,7 +141,6 @@ final class LocalIndexBuildCoordinator {
 
             if mode == .rebuild {
                 try await Self.clearIndex(repository: hashIndexRepository)
-                didClear = true
                 try Task.checkCancellation()
                 updateState { $0.initialIndexed = 0 }
             }
@@ -171,7 +165,6 @@ final class LocalIndexBuildCoordinator {
             }
 
             guard !processIDs.isEmpty else { return }
-            processedIDs = processIDs
 
             _ = try await buildService.buildIndex(
                 for: processIDs,
@@ -184,12 +177,6 @@ final class LocalIndexBuildCoordinator {
         } catch is CancellationError {
         } catch {
             lastError = error
-        }
-
-        if didClear {
-            changePublisher.publish(.bulkInvalidation)
-        } else if !processedIDs.isEmpty {
-            changePublisher.publish(.touched(assetIDs: processedIDs))
         }
     }
 
@@ -238,14 +225,11 @@ final class LocalIndexBuildCoordinator {
         )
         pendingRevalidationAssetIDs.subtract(assetIDs)
 
-        guard let result = try? await buildService.buildIndex(
+        _ = try? await buildService.buildIndex(
             for: assetIDs,
             workerCount: min(2, max(assetIDs.count, 1)),
             allowNetworkAccess: false
-        ) else { return }
-        if !result.readyAssetIDs.isEmpty {
-            changePublisher.publish(.touched(assetIDs: result.readyAssetIDs))
-        }
+        )
     }
 
     private func finishAutomaticRevalidationBatch() {

@@ -1286,13 +1286,14 @@ final class PrepareRunCutoverTests: XCTestCase {
 
         let service = RemoteIndexSyncService()
         do {
-            try await service.verifyMonth(
+            _ = service.snapshotCache.claimIfUnowned(profileKey: service.snapshotCache.currentProfileKey() ?? "verify-test")
+            try await MonthManifestStore.verifyMonth(
                 client: client,
                 basePath: basePath,
                 month: LibraryMonthKey(year: 2024, month: 3),
                 layout: .lite,
-                assertOwnership: .uniform({ throw LiteRepoError.ownershipLost })
-            )
+                assertOwnership: .uniform({ throw LiteRepoError.ownershipLost }),
+                snapshotObserver: service.snapshotCache.snapshotObserver(profileKey: service.snapshotCache.currentProfileKey() ?? "verify-test"))
             XCTFail("verify must fail closed when ownership cannot be re-asserted before flush")
         } catch let error as LiteRepoError {
             XCTAssertEqual(error, .ownershipLost)
@@ -1304,13 +1305,14 @@ final class PrepareRunCutoverTests: XCTestCase {
         let service = RemoteIndexSyncService()
 
         do {
-            try await service.verifyMonth(
+            _ = service.snapshotCache.claimIfUnowned(profileKey: service.snapshotCache.currentProfileKey() ?? "verify-test")
+            try await MonthManifestStore.verifyMonth(
                 client: client,
                 basePath: basePath,
                 month: LibraryMonthKey(year: 2024, month: 3),
                 layout: .lite,
-                assertOwnership: .uniform({})
-            )
+                assertOwnership: .uniform({}),
+                snapshotObserver: service.snapshotCache.snapshotObserver(profileKey: service.snapshotCache.currentProfileKey() ?? "verify-test"))
             XCTFail("owned verify must fail when the Lite month manifest is missing")
         } catch let error as LiteRepoError {
             XCTFail("owned verify should not report ownership loss while ownership assertion is true: \(error)")
@@ -1618,13 +1620,14 @@ final class PrepareRunCutoverTests: XCTestCase {
         XCTAssertEqual(digests.count, 1, "scan should find the Lite manifest")
 
         // verifyMonth should succeed — missing data dir treated as empty, stale entries pruned.
-        try await service.verifyMonth(
+        _ = service.snapshotCache.claimIfUnowned(profileKey: service.snapshotCache.currentProfileKey() ?? "verify-test")
+        try await MonthManifestStore.verifyMonth(
             client: client2,
             basePath: basePath,
             month: LibraryMonthKey(year: 2024, month: 3),
             layout: .lite,
-            assertOwnership: .uniform({})
-        )
+            assertOwnership: .uniform({}),
+            snapshotObserver: service.snapshotCache.snapshotObserver(profileKey: service.snapshotCache.currentProfileKey() ?? "verify-test"))
     }
 
     // MARK: - Transient fault / destructive-prune gate (P05 Phase 3)
@@ -1930,10 +1933,11 @@ final class PrepareRunCutoverTests: XCTestCase {
         await client.enqueueListError(RemoteErrorFixtures.smbBadNetworkName)
         let service = RemoteIndexSyncService()
         do {
-            try await service.verifyMonth(
+            _ = service.snapshotCache.claimIfUnowned(profileKey: service.snapshotCache.currentProfileKey() ?? "verify-test")
+            try await MonthManifestStore.verifyMonth(
                 client: client, basePath: basePath, month: LibraryMonthKey(year: 2024, month: 3),
-                layout: .lite, assertOwnership: .uniform({})
-            )
+                layout: .lite, assertOwnership: .uniform({}),
+                snapshotObserver: service.snapshotCache.snapshotObserver(profileKey: service.snapshotCache.currentProfileKey() ?? "verify-test"))
             XCTFail("a transient data-dir LIST fault during verify must surface, not flush a pruned manifest")
         } catch {
             XCTAssertNotEqual(RemoteFaultLite.classify(error), .notFound)
@@ -4213,13 +4217,12 @@ final class PrepareRunCutoverTests: XCTestCase {
         let repo = ContentHashIndexRepository(databaseManager: dbm)
         let assetProcessor = AssetProcessor(
             photoLibraryService: PhotoLibraryService(),
-            hashIndexRepository: repo,
-            remoteIndexService: remoteIndexService
+            hashIndexRepository: repo
         )
         return BackupParallelExecutor(
             hashIndexRepository: repo,
             assetProcessor: assetProcessor,
-            remoteIndexService: remoteIndexService
+            remoteSnapshotCache: remoteIndexService.snapshotCache
         )
     }
 
@@ -4297,7 +4300,7 @@ final class PrepareRunCutoverTests: XCTestCase {
         _ = try await service.syncIndex(client: client, profile: profile, layout: .lite)
 
         // Optimistic entry for month B (no remote sqlite — unanchored).
-        service.upsertCachedResource(RemoteManifestResource(
+        service.snapshotCache.replaceMonth(monthB, resources: [RemoteManifestResource(
             year: monthB.year, month: monthB.month,
             fileName: "test.jpg",
             contentHash: Data([0x01]),
@@ -4305,8 +4308,8 @@ final class PrepareRunCutoverTests: XCTestCase {
             resourceType: 0,
             creationDateMs: nil,
             backedUpAtMs: 1000
-        ), expectedProfileKey: nil)
-        XCTAssertTrue(service.allKnownMonths().contains(monthB),
+        )], assets: [], assetResourceLinks: [], onlyIfOwnedBy: nil)
+        XCTAssertTrue(service.snapshotCache.allKnownMonths().contains(monthB),
                        "optimistic upsert should add month B to cache")
 
         // Add month C on remote — forces non-fast-path (changedMonths non-empty).
@@ -4319,7 +4322,7 @@ final class PrepareRunCutoverTests: XCTestCase {
         // Second sync: must evict unanchored month B even though the fast path is skipped.
         _ = try await service.syncIndex(client: client, profile: profile, layout: .lite)
 
-        let months = service.allKnownMonths()
+        let months = service.snapshotCache.allKnownMonths()
         XCTAssertFalse(months.contains(monthB),
                        "unanchored optimistic month B must be evicted when a real month changes")
     }
@@ -4346,7 +4349,7 @@ final class PrepareRunCutoverTests: XCTestCase {
         _ = try await service.syncIndex(client: client, profile: profile, layout: .lite)
 
         // Optimistic entry for month B (no remote sqlite — unanchored).
-        service.upsertCachedResource(RemoteManifestResource(
+        service.snapshotCache.replaceMonth(monthB, resources: [RemoteManifestResource(
             year: monthB.year, month: monthB.month,
             fileName: "test.jpg",
             contentHash: Data([0x01]),
@@ -4354,18 +4357,18 @@ final class PrepareRunCutoverTests: XCTestCase {
             resourceType: 0,
             creationDateMs: nil,
             backedUpAtMs: 1000
-        ), expectedProfileKey: nil)
-        XCTAssertTrue(service.allKnownMonths().contains(monthB),
+        )], assets: [], assetResourceLinks: [], onlyIfOwnedBy: nil)
+        XCTAssertTrue(service.snapshotCache.allKnownMonths().contains(monthB),
                        "optimistic upsert should add month B to cache")
 
         // Second sync: remote unchanged → fast path. Must still evict month B.
         _ = try await service.syncIndex(client: client, profile: profile, layout: .lite)
 
-        XCTAssertFalse(service.allKnownMonths().contains(monthB),
+        XCTAssertFalse(service.snapshotCache.allKnownMonths().contains(monthB),
                        "unanchored optimistic month B must be evicted on unchanged fast-path sync")
     }
 
-    func testCancelledSyncPublishesUnanchoredEvictionWithoutMarkingSynced() async throws {
+    func testCancelledScanDefersEvictionUntilSuccessfulFinish() async throws {
         let client = InMemoryRemoteStorageClient()
         let cache = RemoteLibrarySnapshotCache()
         let service = RemoteIndexSyncService(snapshotCache: cache)
@@ -4382,8 +4385,7 @@ final class PrepareRunCutoverTests: XCTestCase {
         )
         _ = try await service.syncIndex(client: client, profile: profile, layout: .lite)
 
-        service.upsertCachedResource(
-            RemoteManifestResource(
+        cache.replaceMonth(unanchoredMonth, resources: [RemoteManifestResource(
                 year: unanchoredMonth.year,
                 month: unanchoredMonth.month,
                 fileName: "orphan.jpg",
@@ -4392,35 +4394,33 @@ final class PrepareRunCutoverTests: XCTestCase {
                 resourceType: 0,
                 creationDateMs: nil,
                 backedUpAtMs: 1000
-            ),
-            expectedProfileKey: nil
-        )
+            )], assets: [], assetResourceLinks: [])
         let lastSyncedAt = cache.currentLastSyncedAt()
         let notifications = CallCounter()
-        let observer = NotificationCenter.default.addObserver(
-            forName: .RemoteLibrarySnapshotDidChange,
-            object: nil,
-            queue: nil
-        ) { _ in
-            notifications.bump()
-        }
-        defer { NotificationCenter.default.removeObserver(observer) }
+        let progressEvents = CallCounter()
+        let observer = service.snapshotCache.changes.addObserver { notifications.bump() }
+        defer { service.snapshotCache.changes.removeObserver(observer) }
 
         do {
             _ = try await service.syncIndex(
                 client: client,
                 profile: profile,
+                onSyncProgress: { _ in progressEvents.bump() },
                 layout: .lite,
-                shouldStop: { !service.allKnownMonths().contains(unanchoredMonth) }
+                shouldStop: { progressEvents.count > 0 }
             )
-            XCTFail("sync should stop after evicting the unanchored month")
+            XCTFail("sync should stop before committing the scan")
         } catch is CancellationError {
         } catch {
             XCTFail("expected CancellationError, got \(error)")
         }
 
-        XCTAssertFalse(service.allKnownMonths().contains(unanchoredMonth))
+        XCTAssertTrue(service.snapshotCache.allKnownMonths().contains(unanchoredMonth))
         XCTAssertEqual(cache.currentLastSyncedAt(), lastSyncedAt)
+        XCTAssertEqual(notifications.count, 0)
+
+        _ = try await service.syncIndex(client: client, profile: profile, layout: .lite)
+        XCTAssertFalse(cache.allKnownMonths().contains(unanchoredMonth))
         XCTAssertEqual(notifications.count, 1)
     }
 
@@ -4436,21 +4436,15 @@ final class PrepareRunCutoverTests: XCTestCase {
         try await seedPopulatedLiteMonth(client, month: month, hashByte: 0x44)
 
         let notifications = CallCounter()
-        let observer = NotificationCenter.default.addObserver(
-            forName: .RemoteLibrarySnapshotDidChange,
-            object: nil,
-            queue: nil
-        ) { _ in
-            notifications.bump()
-        }
-        defer { NotificationCenter.default.removeObserver(observer) }
+        let observer = service.snapshotCache.changes.addObserver { notifications.bump() }
+        defer { service.snapshotCache.changes.removeObserver(observer) }
 
         do {
             _ = try await service.syncIndex(
                 client: client,
                 profile: profile,
                 layout: .lite,
-                shouldStop: { service.allKnownMonths().contains(month) }
+                shouldStop: { service.snapshotCache.allKnownMonths().contains(month) }
             )
             XCTFail("sync should stop after applying the changed month")
         } catch is CancellationError {
@@ -4458,7 +4452,7 @@ final class PrepareRunCutoverTests: XCTestCase {
             XCTFail("expected CancellationError, got \(error)")
         }
 
-        XCTAssertTrue(service.allKnownMonths().contains(month))
+        XCTAssertTrue(service.snapshotCache.allKnownMonths().contains(month))
         XCTAssertEqual(notifications.count, 1)
     }
 
@@ -4472,14 +4466,8 @@ final class PrepareRunCutoverTests: XCTestCase {
         _ = try await service.syncIndex(client: client, profile: profile, layout: .lite)
 
         let notifications = CallCounter()
-        let observer = NotificationCenter.default.addObserver(
-            forName: .RemoteLibrarySnapshotDidChange,
-            object: nil,
-            queue: nil
-        ) { _ in
-            notifications.bump()
-        }
-        defer { NotificationCenter.default.removeObserver(observer) }
+        let observer = service.snapshotCache.changes.addObserver { notifications.bump() }
+        defer { service.snapshotCache.changes.removeObserver(observer) }
 
         do {
             _ = try await service.syncIndex(
@@ -4539,8 +4527,8 @@ final class PrepareRunCutoverTests: XCTestCase {
 
         XCTAssertEqual(parallelDigest.resourceCount, serialDigest.resourceCount)
         XCTAssertEqual(parallelDigest.assetCount, serialDigest.assetCount)
-        XCTAssertEqual(parallelService.allKnownMonths(), serialService.allKnownMonths())
-        XCTAssertEqual(parallelService.allKnownMonths().count, months.count)
+        XCTAssertEqual(parallelService.snapshotCache.allKnownMonths(), serialService.snapshotCache.allKnownMonths())
+        XCTAssertEqual(parallelService.snapshotCache.allKnownMonths().count, months.count)
         XCTAssertGreaterThanOrEqual(factoryCalls.count, 1, "parallel path must build a download pool via makeClient")
 
         // Out-of-order completion still reports monotonic progress reaching the full changed-month count.
@@ -4553,7 +4541,7 @@ final class PrepareRunCutoverTests: XCTestCase {
 
     func testV1SyncStaysSerialAndNeverBuildsDownloadPool() async throws {
         let client = InMemoryRemoteStorageClient()
-        // Two months so totalWorkers would be ≥2 if V1 were (incorrectly) parallelized.
+        // Legacy scanning keeps its single-client behavior.
         try await seedPopulatedV1Month(client, month: LibraryMonthKey(year: 2024, month: 2), hashByte: 0xA1)
         try await seedPopulatedV1Month(client, month: LibraryMonthKey(year: 2024, month: 3), hashByte: 0xA2)
 
@@ -4570,8 +4558,8 @@ final class PrepareRunCutoverTests: XCTestCase {
             downloadConcurrency: 2
         )
 
-        XCTAssertEqual(factoryCalls.count, 0, "V1 may schema-push on load, so it must never build a download pool")
-        XCTAssertEqual(service.allKnownMonths().count, 2)
+        XCTAssertEqual(factoryCalls.count, 0, "Legacy scans retain a single client")
+        XCTAssertEqual(service.snapshotCache.allKnownMonths().count, 2)
         XCTAssertEqual(digest.resourceCount, 2)
     }
 
@@ -4598,7 +4586,7 @@ final class PrepareRunCutoverTests: XCTestCase {
             downloadConcurrency: 2
         )
 
-        XCTAssertEqual(service.allKnownMonths().count, months.count, "primary must still sync every month when pool clients can't connect")
+        XCTAssertEqual(service.snapshotCache.allKnownMonths().count, months.count, "primary must still sync every month when pool clients can't connect")
         XCTAssertEqual(digest.resourceCount, months.count)
     }
 
@@ -4621,7 +4609,7 @@ final class PrepareRunCutoverTests: XCTestCase {
             downloadConcurrency: 3
         )
 
-        XCTAssertEqual(service.allKnownMonths().count, months.count, "partial pool failure must still sync every month")
+        XCTAssertEqual(service.snapshotCache.allKnownMonths().count, months.count, "partial pool failure must still sync every month")
         XCTAssertEqual(digest.resourceCount, months.count)
     }
 

@@ -1,6 +1,10 @@
 import Foundation
 @preconcurrency import Photos
 
+struct HomeLocalIndexReadError: LocalizedError {
+    var errorDescription: String? { String(localized: "home.localIndex.error.title") }
+}
+
 @MainActor
 final class HomeIncrementalDataManager: NSObject, PHPhotoLibraryChangeObserver {
     struct Hooks {
@@ -15,19 +19,23 @@ final class HomeIncrementalDataManager: NSObject, PHPhotoLibraryChangeObserver {
 
     private var isObservingPhotoLibrary = false
     private var cachedMonthGroupingTimeZone: MonthGroupingTimeZonePreference = .frozenCurrent()
+    private(set) var needsLocalIndexReload = true
 
+    var onReloadNeeded: (() -> Void)?
     var onMonthsChanged: ((Set<LibraryMonthKey>) -> Void)?
     var onFingerprintValidationNeeded: ((Set<String>) -> Void)?
 
     init(
         photoLibraryService: PhotoLibraryService,
         contentHashIndexRepository: ContentHashIndexRepository,
-        hooks: Hooks
+        hooks: Hooks,
+        fetchLocalLibrary: (@Sendable (PhotoLibraryQuery) -> HomeDataProcessingWorker.LocalLibraryInput?)? = nil
     ) {
         let worker = HomeDataProcessingWorker(
             photoLibraryService: photoLibraryService,
             contentHashIndexRepository: contentHashIndexRepository,
-            remoteMonthSnapshot: hooks.remoteMonthSnapshot
+            remoteMonthSnapshot: hooks.remoteMonthSnapshot,
+            fetchLocalLibrary: fetchLocalLibrary
         )
         self.processingWorker = worker
         self.fileSizeCoordinator = HomeFileSizeScanCoordinator(
@@ -36,6 +44,11 @@ final class HomeIncrementalDataManager: NSObject, PHPhotoLibraryChangeObserver {
         )
         self.hooks = hooks
         super.init()
+    }
+
+    func setAppActive(_ active: Bool) {
+        processingWorker.setAppActive(active)
+        fileSizeCoordinator.setActive(active)
     }
 
     func remoteSnapshotRevisionForQuery(hasActiveConnection: Bool) -> UInt64? {
@@ -51,42 +64,47 @@ final class HomeIncrementalDataManager: NSObject, PHPhotoLibraryChangeObserver {
     }
 
     func browserLocalSeed(expectedScope: HomeLocalLibraryScope) async -> HomeBrowserLocalSeed? {
-        await processingWorker.browserLocalSeed(expectedScope: expectedScope)
+        let result = await processingWorker.refreshLocalIndex(
+            forAssetIDs: [], expectedScope: expectedScope, allowFullReload: false
+        )
+        applyRefreshResult(result)
+        if !result.changedMonths.isEmpty { onMonthsChanged?(result.changedMonths) }
+        return await processingWorker.browserLocalSeed(expectedScope: expectedScope)
     }
 
     func browserFileSizes(for identifiers: Set<String>) async -> [String: Int64] {
         await processingWorker.browserFileSizes(for: identifiers)
     }
 
-    @discardableResult
-    func ensureLocalIndexLoaded() async -> Bool {
-        await loadLocalIndex(forceReload: false)
+    func reloadLocalIndex() async {
+        let result = await processingWorker.reloadLocalIndex(scope: hooks.currentScope())
+        applyLoadResult(result)
     }
 
     @discardableResult
-    func reloadLocalIndex() async -> Bool {
-        await loadLocalIndex(forceReload: true)
-    }
-
-    func refreshLocalFingerprints() async -> Set<LibraryMonthKey> {
-        let changedMonths = await processingWorker.refreshLocalFingerprints()
-        if !changedMonths.isEmpty {
-            notifyBrowserLocalSeedChanged()
-        }
-        return changedMonths
-    }
-
-    @discardableResult
-    func refreshLocalIndex(forAssetIDs assetIDs: Set<String>) async -> Set<LibraryMonthKey> {
-        guard !assetIDs.isEmpty else { return [] }
-        let changedMonths = await processingWorker.refreshLocalIndex(
+    func refreshLocalIndex(forAssetIDs assetIDs: Set<String>, allowFullReload: Bool = true) async -> Set<LibraryMonthKey> {
+        let result = await processingWorker.refreshLocalIndex(
             forAssetIDs: assetIDs,
-            expectedScope: hooks.currentScope()
+            expectedScope: hooks.currentScope(),
+            allowFullReload: allowFullReload
         )
-        if !changedMonths.isEmpty {
-            notifyBrowserLocalSeedChanged()
+        applyRefreshResult(result)
+        return result.changedMonths
+    }
+
+    private func applyRefreshResult(_ result: HomeLocalIndexRefreshResult) {
+        switch result {
+        case .requiresReload:
+            needsLocalIndexReload = true
+            onReloadNeeded?()
+        case .failed:
+            localIndexReadFailed()
+        case .reloaded(let load):
+            applyLoadResult(load)
+        case .incremental(let changedMonths, let membershipChangedMonths):
+            if !changedMonths.isEmpty { notifyBrowserLocalSeedChanged() }
+            fileSizeCoordinator.enqueueRescan(for: membershipChangedMonths)
         }
-        return changedMonths
     }
 
     @discardableResult
@@ -112,15 +130,23 @@ final class HomeIncrementalDataManager: NSObject, PHPhotoLibraryChangeObserver {
         processingWorker.localAssetIDs(for: month, expectedScope: hooks.currentScope())
     }
 
-    func remoteOnlyItems(for month: LibraryMonthKey) async -> [RemoteAlbumItem] {
-        await processingWorker.remoteOnlyItems(for: month, expectedScope: hooks.currentScope())
+    func remoteOnlyItems(for month: LibraryMonthKey) async throws -> [RemoteAlbumItem] {
+        let months = await refreshLocalIndex(forAssetIDs: [])
+        if !months.isEmpty { onMonthsChanged?(months) }
+        guard !needsLocalIndexReload else { throw HomeLocalIndexReadError() }
+        return try await processingWorker.remoteOnlyItems(for: month, expectedScope: hooks.currentScope())
     }
 
     nonisolated func photoLibraryDidChange(_ changeInstance: PHChange) {
         processingWorker.handlePhotoLibraryChange(changeInstance) { [weak self] result in
             MainActor.assumeIsolated {
                 guard let self else { return }
-                self.notifyBrowserLocalSeedChanged()
+                if result.readFailed { self.localIndexReadFailed() }
+                else { self.notifyBrowserLocalSeedChanged() }
+                if result.requiresReload {
+                    self.needsLocalIndexReload = true
+                    self.onReloadNeeded?()
+                }
                 if !result.changedMonths.isEmpty {
                     self.fileSizeCoordinator.enqueueRescan(for: result.changedMonths)
                     self.onMonthsChanged?(result.changedMonths)
@@ -132,20 +158,18 @@ final class HomeIncrementalDataManager: NSObject, PHPhotoLibraryChangeObserver {
         }
     }
 
-    @discardableResult
-    private func loadLocalIndex(forceReload: Bool) async -> Bool {
-        let result = await processingWorker.loadLocalIndex(
-            forceReload: forceReload,
-            scope: hooks.currentScope()
-        )
+    private func applyLoadResult(_ result: HomeDataLoadResult) {
+        guard !result.readFailed else {
+            localIndexReadFailed()
+            return
+        }
+        needsLocalIndexReload = false
         if let monthGroupingTimeZone = result.monthGroupingTimeZone {
             cachedMonthGroupingTimeZone = monthGroupingTimeZone
         }
         if result.isAuthorized {
             registerPhotoLibraryObserverIfNeeded()
-            if result.didReload {
-                fileSizeCoordinator.startFullScan()
-            }
+            fileSizeCoordinator.startFullScan()
         } else {
             unregisterPhotoLibraryObserverIfNeeded()
             fileSizeCoordinator.reset()
@@ -153,10 +177,13 @@ final class HomeIncrementalDataManager: NSObject, PHPhotoLibraryChangeObserver {
         if !result.fingerprintValidationAssetIDs.isEmpty {
             onFingerprintValidationNeeded?(result.fingerprintValidationAssetIDs)
         }
-        if result.didReload {
-            notifyBrowserLocalSeedChanged()
-        }
-        return !result.changedMonths.isEmpty
+        notifyBrowserLocalSeedChanged()
+    }
+
+    private func localIndexReadFailed() {
+        needsLocalIndexReload = true
+        fileSizeCoordinator.reset()
+        notifyBrowserLocalSeedChanged()
     }
 
     private func notifyBrowserLocalSeedChanged() {
@@ -175,3 +202,9 @@ final class HomeIncrementalDataManager: NSObject, PHPhotoLibraryChangeObserver {
         isObservingPhotoLibrary = false
     }
 }
+
+#if DEBUG
+extension HomeIncrementalDataManager {
+    var _testIsObservingPhotoLibrary: Bool { isObservingPhotoLibrary }
+}
+#endif

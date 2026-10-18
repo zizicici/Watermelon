@@ -60,6 +60,8 @@ final class ContentHashIndexRepository: @unchecked Sendable {
 
     private let databaseManager: DatabaseManager
 
+    var changes: LocalIndexChangePublisher { databaseManager.localIndexChanges }
+
     init(databaseManager: DatabaseManager) {
         self.databaseManager = databaseManager
     }
@@ -415,15 +417,8 @@ final class ContentHashIndexRepository: @unchecked Sendable {
         guard !entries.isEmpty else { return }
         try databaseManager.write { db in
             let now = Date()
-            // On conflict:
-            // - Don't touch assetFingerprint/resourceCount: hash-indexed rows keep their identity.
-            // - Don't touch updatedAt: it tracks "last hash write", which AssetProcessor and
-            //   LocalHashIndexBuildService compare against PHAsset.modificationDate to decide
-            //   whether to reuse a cached hash. Bumping it from a size-only write would make
-            //   a post-modification scan look "newer than the photo edit" and silently revive
-            //   a stale hash.
-            // - Reject stale mtime writes: fire-and-forget detached write-backs are not ordered
-            //   across scans, so guard against an older batch overwriting a newer one.
+            // Size-only writes must not revive stale hashes by advancing updatedAt.
+            // Keep newer modification dates if another writer has already refreshed the row.
             let statement = try db.makeStatement(sql: """
                 INSERT INTO local_assets (
                     assetLocalIdentifier,

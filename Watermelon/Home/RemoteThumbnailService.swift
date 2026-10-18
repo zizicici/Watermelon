@@ -106,7 +106,6 @@ final class RemoteThumbnailService: @unchecked Sendable {
             expectedProfileKey: remoteProfileKey
         )
     }
-    func invalidateLocalIndex() { presenceIndex.invalidate() }
 
     func shutdown() async {
         // Drain writebacks before the pool: a survivor's late create-if-absent could re-create a sidecar a

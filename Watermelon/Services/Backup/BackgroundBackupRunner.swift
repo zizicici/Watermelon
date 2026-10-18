@@ -450,8 +450,7 @@ final class BackgroundBackupRunner {
         notifyRunMarkerDidChange()
     }
 
-    // Wake an active foreground Home to re-run background-fingerprint pickup now that a marker landed, instead
-    // of waiting for the next activation/execution-end/maintenance-end. A no-op when no foreground store observes.
+    // The marker keeps a foreground rescan pending even when no page observed the run.
     private func notifyRunMarkerDidChange() {
         NotificationCenter.default.post(name: .BackgroundBackupRunMarkerDidChange, object: nil)
     }

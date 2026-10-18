@@ -153,11 +153,11 @@ SMB / WebDAV / S3 / SFTP / OneDrive / Dropbox / Google Drive / BrowserLink 走 `
 4. 每趟用一个新的 `MonthWorkQueue`（actor，定义在 `Watermelon/Services/Backup/BackupMonthScheduler.swift`）动态分发月份
 5. 每个 worker：
    - 领取一个月份
-   - `MonthManifestStore.loadOrCreate(...)` 装载或基于 seed 初始化月级 manifest
+   - `MonthManifestStore.loadOrCreate(...)` 装载或基于 seed 初始化月级 manifest，并统一发布加载中已提交的修正
    - 以 `500` 个 asset 为一批处理
    - 批量读取本地 hash cache
    - 逐 asset 调 `AssetProcessor.process(...)`
-6. 月份结束后 `flushToRemote(...)`
+6. 月份检查点与结束时通过 `MonthManifestStore.flushToRemote(...)` 提交 manifest，读回确认后由 store 统一发布整月快照；不同月份的网络操作保持并行，提交不等待索引扫描
 7. flush 成功后发出 `.monthChanged(.completed)`
 8. 若提供了 `onMonthUploaded`，则在该月份 flush 完成后执行月级收尾
 
@@ -182,7 +182,7 @@ SMB / WebDAV / S3 / SFTP / OneDrive / Dropbox / Google Drive / BrowserLink 走 `
 
 `AssetProcessor`（核心类在 `AssetProcessor.swift`，命名细节在 `+Naming`，上传策略在 `+Upload`）的关键规则：
 
-1. 先基于 `LocalHashIndexBuildService` / `ContentHashIndexRepository` 的结果尝试本地 cache 快速命中（`processWithLocalCache`）。`assetFingerprint` 命中目标月份完整资产后，仍比较资产拍摄日期和 `adjustmentData` 的 `role/slot/原始哈希`；整月跳过使用相同规则。日期不同只更新资产记录。描述不同则复用远端已有哈希，仅导出上传缺少的描述文件，全部成功后事务替换描述关联、更新数量和大小，记为 `asset_resources_updated` 成功并参与月份 flush、检查点和失败回滚。媒体关联与资产指纹保持不变，原描述文件和资源行保留；本地没有描述时保留远端描述，不自动删除。缓存与导出哈希不符会清除该资产缓存并退回完整校验；上传期间 Photos 修改了资产则中止关联更新。
+1. 先基于 `LocalHashIndexBuildService` / `ContentHashIndexRepository` 的结果尝试本地 cache 快速命中（`processWithLocalCache`）。`assetFingerprint` 命中目标月份完整资产后，仍比较资产拍摄日期和 `adjustmentData` 的 `role/slot/原始哈希`；整月跳过使用相同规则。日期不同只更新资产记录。描述不同则复用远端已有哈希，仅导出上传缺少的描述文件，全部成功后事务替换描述关联、更新数量和大小，记为 `asset_resources_updated` 成功并参与月份 flush 和检查点；未提交状态不会进入共享远端快照。媒体关联与资产指纹保持不变，原描述文件和资源行保留；本地没有描述时保留远端描述，不自动删除。缓存与导出哈希不符会清除该资产缓存并退回完整校验；上传期间 Photos 修改了资产则中止关联更新。
 2. 未命中时，按 `BackupAssetResourcePlanner`（`Shared/Services/Backup/`）选择资源并分配 `role/slot`
 3. 将资源导出到临时文件并计算 `SHA-256`
 4. 生成 `assetFingerprint`（`role|slot|hashHex` token 排序、`\n` 连接、再 SHA-256）
@@ -196,7 +196,7 @@ SMB / WebDAV / S3 / SFTP / OneDrive / Dropbox / Google Drive / BrowserLink 走 `
 6. 所有资源成功后才写：
    - 月 manifest 的 `assets / asset_resources / resources`
    - 本地 `local_assets / local_asset_resources`
-   - 远端快照缓存增量
+   - 月份工作状态；共享远端快照只在 manifest 提交确认后更新
 
 ## 8. 同步月份的内联下载
 

@@ -161,7 +161,7 @@ final class MediaBrowserDropSelectionTests: XCTestCase {
                 backupCoordinator: dependencies.backupCoordinator, restoreService: dependencies.restoreService,
                 photoLibraryService: dependencies.photoLibraryService, hashIndexRepository: dependencies.hashIndexRepository,
                 localHashIndexBuildService: dependencies.localHashIndexBuildService,
-                localIndexChangePublisher: dependencies.localIndexChangePublisher, allAccessibleAssetIDs: { [] },
+                allAccessibleAssetIDs: { [] },
                 presenceIndex: presence, appRuntimeFlags: dependencies.appRuntimeFlags, isTaskActive: { false },
                 iCloudPhotoBackupMode: { .disable }, monthGroupingTimeZone: { .frozenCurrent() }))
             library = MediaDropLocalLibraryController(photoLibraryService: dependencies.photoLibraryService,
@@ -242,6 +242,8 @@ final class MediaBrowserDropSelectionTests: XCTestCase {
         }
 
         func assertAvailability(send: Bool, scope: Bool, file: StaticString = #filePath, line: UInt = #line) {
+            XCTAssertTrue(controller.navigationController?.isToolbarHidden ?? false, file: file, line: line)
+            XCTAssertTrue(controller.toolbarItems?.isEmpty ?? true, file: file, line: line)
             XCTAssertEqual(sendButton.isUserInteractionEnabled, send, file: file, line: line)
             XCTAssertEqual(scopeButton.isEnabled, scope, file: file, line: line)
             XCTAssertEqual(library.canChangeScope(), scope, file: file, line: line)

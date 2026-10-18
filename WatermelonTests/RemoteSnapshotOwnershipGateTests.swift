@@ -31,8 +31,6 @@ final class RemoteSnapshotOwnershipGateTests: XCTestCase {
         let data = monthData()
 
         XCTAssertFalse(cache.replaceMonth(monthKey, resources: data.resources, assets: data.assets, assetResourceLinks: data.links, onlyIfOwnedBy: "profile-a"))
-        cache.upsertResource(data.resources[0], onlyIfOwnedBy: "profile-a")
-        cache.upsertAsset(data.assets[0], links: data.links, onlyIfOwnedBy: "profile-a")
         XCTAssertTrue(cache.allKnownMonths().isEmpty, "a foreign-owner write must not land in B's cache")
         XCTAssertFalse(cache.resetIfOwned(by: "profile-a"))
         XCTAssertEqual(cache.currentProfileKey(), "profile-b")
@@ -49,28 +47,30 @@ final class RemoteSnapshotOwnershipGateTests: XCTestCase {
         XCTAssertTrue(cache.containsAssetFingerprint(fingerprint).contains)
         XCTAssertTrue(cache.resetIfOwned(by: "profile-a"))
         XCTAssertTrue(cache.allKnownMonths().isEmpty)
+        XCTAssertEqual(cache.currentProfileKey(), "profile-a")
+        cache.reset()
+        XCTAssertNil(cache.currentProfileKey())
     }
 
     func testDeleteWritebackLandingAfterRetagIsDropped() async {
-        // The browser delete's write-back queues behind a connect sync on the FIFO gate; by the time it
-        // applies, the cache belongs to B — A's post-delete month must be dropped, B's view untouched.
+        // A late deletion must not clear a different profile's snapshot.
         let cache = RemoteLibrarySnapshotCache()
         let service = RemoteIndexSyncService(snapshotCache: cache)
         let dataB = monthData(Data([0xB1]))
         cache.setProfileKey("profile-b")
         cache.replaceMonth(monthKey, resources: dataB.resources, assets: dataB.assets, assetResourceLinks: dataB.links)
 
-        let dataA = monthData(Data([0xA1]))
-        await service.replaceCachedMonthSynchronized(monthKey, resources: dataA.resources, assets: dataA.assets, links: dataA.links, expectedProfileKey: "profile-a")
-        XCTAssertEqual(cache.fileNames(for: monthKey), ["a.jpg"])
+        service.snapshotCache.removeConfirmedMonth(monthKey, profileKey: "profile-a")
+        XCTAssertEqual(cache.monthRawData(for: monthKey)?.resources.map(\.fileName), ["a.jpg"])
         XCTAssertEqual(cache.monthRawData(for: monthKey)?.resources.first?.contentHash, Data([0xB1]), "B's month must survive A's late write-back")
 
-        await service.resetSnapshotCache(expectedProfileKey: "profile-a")
+        _ = service.snapshotCache.resetIfOwned(by: "profile-a")
         XCTAssertFalse(cache.allKnownMonths().isEmpty, "A's repo-gone reset must not wipe B's cache")
         XCTAssertEqual(cache.currentProfileKey(), "profile-b")
 
-        await service.resetSnapshotCache(expectedProfileKey: "profile-b")
+        _ = service.snapshotCache.resetIfOwned(by: "profile-b")
         XCTAssertTrue(cache.allKnownMonths().isEmpty)
+        XCTAssertEqual(cache.currentProfileKey(), "profile-b")
     }
 
     func testPreflightSyncRefusesToStealForeignContext() async throws {

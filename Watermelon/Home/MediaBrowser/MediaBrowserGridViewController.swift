@@ -125,6 +125,7 @@ final class MediaBrowserGridViewController: UIViewController {
     private struct LoadedContent: Sendable {
         let content: MediaBrowserContent
         let includesFileSizes: Bool
+        let monthGroupingTimeZone: MonthGroupingTimeZonePreference
     }
 
     private typealias DataSource = UICollectionViewDiffableDataSource<MediaBrowserSectionID, MediaBrowserItemID>
@@ -170,6 +171,7 @@ final class MediaBrowserGridViewController: UIViewController {
     private var contentGeneration = 0
     private var isScopeReloading = false
     private var thumbnailReloadTracker = MediaBrowserThumbnailReloadTracker()
+    private var readyThumbnailReloadGeneration: UInt64 = 0
     private weak var segmentedControl: UISegmentedControl?
     private lazy var filterBarButtonItem: UIBarButtonItem = {
         let button = UIBarButtonItem(
@@ -211,12 +213,13 @@ final class MediaBrowserGridViewController: UIViewController {
     private var isSelecting: Bool { selection.isSelecting }
     private var selectedItemIDs: Set<MediaBrowserItemID> { selection.selectedIDs }
     private var renderedBatchActions: [BatchAction] = []
+    private var batchToolbarItems: [BatchAction: UIBarButtonItem] = [:]
+    private var isBrowserVisible = false
     private var isNativeMultipleSelectionInteraction = false
     private weak var activeSelectionDragGesture: UILongPressGestureRecognizer?
     private var selectionDragDisplayLink: CADisplayLink?
     private var selectionDragDisplayLinkTimestamp: CFTimeInterval?
-    private let batchBarContainer = UIView()
-    private let batchBar = MediaActionBar()
+    private let transferPanelContainer = UIView()
     private let selectionActionButton = UIButton(configuration: .filled())
     private let transferSelectionSummaryScrollView = UIScrollView()
     private let transferPhotoSummaryButton = UIButton(type: .system)
@@ -249,9 +252,20 @@ final class MediaBrowserGridViewController: UIViewController {
     private var selectionActionUIState = SelectionActionUIState.idle
     private var showsSelectionActivityPanel = false
     private var selectionActivityTransitionAnimator: UIViewPropertyAnimator?
-    private static let batchBarHeight: CGFloat = 72
-    private var libraryChangeReload: DispatchWorkItem?
-    private var deferredReloadTrigger: String?
+    private lazy var foregroundActivity = AppForegroundActivity(onForeground: { [weak self] in
+        self?.thumbnailReloadTracker.requestReload()
+        self?.load(trigger: "foreground")
+    }) { [weak self] active in
+        guard let self else { return }
+        if active {
+            self.refreshTransferAccessPresentation()
+        }
+        self.updateRefreshActivity()
+    }
+    private var activeLoadRequest: MediaBrowserReloadScheduler.Request?
+    private lazy var reloadScheduler = MediaBrowserReloadScheduler { [weak self] request in
+        self?.performLoad(request)
+    }
     private var lastTransferPhotoAuthorizationStatus: PHAuthorizationStatus?
     private var transferPhotoSummaryRequestKey: TransferPhotoSummaryRequestKey?
     private var transferPhotoSelectionDetails: [String: InboxTransferPhotoSelectionDetail] = [:]
@@ -278,7 +292,7 @@ final class MediaBrowserGridViewController: UIViewController {
     }
 
     var mediaDropPanelTopAnchor: NSLayoutYAxisAnchor {
-        batchBarContainer.topAnchor
+        transferPanelContainer.topAnchor
     }
 
     private lazy var collectionView = MediaBrowserCollectionView(frame: .zero, collectionViewLayout: makeLayout())
@@ -440,15 +454,13 @@ final class MediaBrowserGridViewController: UIViewController {
         configureNavigation()
         configureModeSwitcher()
         configureTransferTopBar()
-        configureBatchBar()
+        configureTransferPanel()
         configureUI()
-        view.bringSubviewToFront(batchBarContainer)
+        if isMediaDrop { view.bringSubviewToFront(transferPanelContainer) }
         configureTransferFileSelection()
         configureDataSource()
         actionRunner.onActionStateChanged = { [weak self] isRunning in
             self?.updateSelectBarButton()
-            self?.batchBar.isUserInteractionEnabled = !isRunning
-            guard !isRunning else { return }
             self?.flushDeferredReloadIfNeeded()
         }
         updateSelectBarButton()
@@ -459,10 +471,12 @@ final class MediaBrowserGridViewController: UIViewController {
             startRuntimeObservation()
             load(trigger: "initial")
         }
+        foregroundActivity.start()
     }
 
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
+        if !isMediaDrop { updateBatchToolbarVisibility(animated: false) }
         guard isContentActive else { return }
         flushDeferredReloadIfNeeded()
         refreshVisibleThumbnails()
@@ -471,8 +485,19 @@ final class MediaBrowserGridViewController: UIViewController {
 
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
+        if !isMediaDrop {
+            isBrowserVisible = true
+            updateBatchToolbarVisibility(animated: animated)
+        }
         guard isContentActive else { return }
         refreshTransferAccessPresentation()
+    }
+
+    override func viewWillDisappear(_ animated: Bool) {
+        super.viewWillDisappear(animated)
+        guard !isMediaDrop else { return }
+        isBrowserVisible = false
+        navigationController?.setToolbarHidden(true, animated: animated)
     }
 
     func setMediaDropActive(_ active: Bool) {
@@ -486,16 +511,11 @@ final class MediaBrowserGridViewController: UIViewController {
             lastTransferPhotoAuthorizationStatus = PHPhotoLibrary.authorizationStatus(for: .readWrite)
             thumbnailReloadTracker.requestReload()
             refreshTransferAccessPresentation()
-            reloadRespectingActionGate(trigger: "mediaDropActivated")
+            load(trigger: "mediaDropActivated")
             return
         }
         stopRuntimeObservation()
-        libraryChangeReload?.cancel()
-        libraryChangeReload = nil
-        deferredReloadTrigger = nil
-        loadTask?.cancel()
-        loadTask = nil
-        loadGeneration += 1
+        updateRefreshActivity()
         transferPhotoSummaryTask?.cancel()
         transferPhotoSummaryTask = nil
         transferPhotoSummaryRequestKey = nil
@@ -552,10 +572,15 @@ final class MediaBrowserGridViewController: UIViewController {
         } else {
             runtimeObservers.insert(center.addObserver(
                 forName: .LibraryPresenceDidChange,
-                object: nil,
+                object: presenceIndex,
                 queue: .main
             ) { [weak self] _ in
                 MainActor.assumeIsolated { self?.presenceChanged() }
+            })
+        }
+        for name in [Notification.Name.ExecutionLifecycleDidChange, .RemoteMaintenanceDidChange] {
+            runtimeObservers.insert(center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.updateRefreshActivity() }
             })
         }
         PHPhotoLibrary.shared().register(self)
@@ -573,7 +598,7 @@ final class MediaBrowserGridViewController: UIViewController {
     }
 
     private func transferAvailabilityChanged() {
-        guard isContentActive, selectionAction != nil else { return }
+        guard isRefreshActive, selectionAction != nil else { return }
         transferLocalLibrary?.applyDefaultSourceIfNeeded()
         recomputeBatchBar()
     }
@@ -589,19 +614,12 @@ final class MediaBrowserGridViewController: UIViewController {
 
     private func scheduleLibraryChangeReload() {
         guard isContentActive else { return }
-        invalidateLoadedContent()
-        // Remote mode reloads too: membership is PhotoKit-independent, but the device handles bound at load
-        // are not — a Photos edit must reproject the record (stale handle drops → `.remoteOnly`).
         thumbnailReloadTracker.requestReload()
-        libraryChangeReload?.cancel()
-        let work = DispatchWorkItem { [weak self] in self?.reloadRespectingActionGate(trigger: "photoLibrary") }
-        libraryChangeReload = work
-        // Coalesce PhotoKit bursts (iCloud sync fires per batch) into one reload.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: work)
+        reloadRespectingActionGate(trigger: "photoLibrary")
     }
 
     private func thumbnailStored(_ image: UIImage, fingerprint: Data) {
-        guard isContentActive else { return }
+        guard isRefreshActive else { return }
         applyStoredThumbnail(image, fingerprint: fingerprint)
     }
 
@@ -614,7 +632,9 @@ final class MediaBrowserGridViewController: UIViewController {
         }
     }
 
-    private func refreshVisibleThumbnails(forceReload: Bool = false) {
+    private func refreshVisibleThumbnails() {
+        guard isRefreshActive else { return }
+        let forceReload = thumbnailReloadTracker.shouldApply(readyThumbnailReloadGeneration)
         for indexPath in collectionView.indexPathsForVisibleItems {
             guard let item = item(at: indexPath),
                   let cell = collectionView.cellForItem(at: indexPath) as? MediaBrowserGridCell else { continue }
@@ -624,24 +644,55 @@ final class MediaBrowserGridViewController: UIViewController {
                 cell.beginLoading(item: item, source: source)
             }
         }
+        if forceReload { thumbnailReloadTracker.markApplied(readyThumbnailReloadGeneration) }
+    }
+
+    private var isRefreshActive: Bool {
+        isContentActive && foregroundActivity.isActive
+    }
+
+    private func updateRefreshActivity() {
+        var interruptedRequest: MediaBrowserReloadScheduler.Request?
+        if let request = activeLoadRequest,
+           !isRefreshActive || defersSnapshotReload {
+            interruptedRequest = request
+            cancelActiveLoad()
+        }
+        updateReloadScheduling()
+        if let interruptedRequest { reloadScheduler.request(interruptedRequest, delay: 0) }
+        if isRefreshActive {
+            refreshVisibleThumbnails()
+            transferAvailabilityChanged()
+        } else {
+            for case let cell as MediaBrowserGridCell in collectionView.visibleCells { cell.cancelLoading() }
+        }
+    }
+
+    private func cancelActiveLoad() {
+        loadTask?.cancel()
+        loadTask = nil
+        activeLoadRequest = nil
+        loadGeneration += 1
     }
 
     private func reloadRespectingActionGate(trigger: String) {
         guard isContentActive else { return }
-        if defersSnapshotReload {
-            invalidateLoadedContent()
-            deferredReloadTrigger = trigger
-            return
-        }
-        load(trigger: trigger)
+        invalidateLoadedContent()
+        updateReloadScheduling()
+        reloadScheduler.request(.init(trigger: trigger, staleAttempt: 0),
+                                delay: actionRunner.isLibraryTaskActive ? 1 : nil)
+    }
+
+    private func updateReloadScheduling() {
+        reloadScheduler.update(isActive: isRefreshActive,
+                               isInteractionBlocked: defersSnapshotReload,
+                               isLoading: activeLoadRequest != nil)
     }
 
     private func flushDeferredReloadIfNeeded() {
         guard isContentActive else { return }
-        transferLocalLibrary?.applyDefaultSourceIfNeeded()
-        guard !defersSnapshotReload, let trigger = deferredReloadTrigger else { return }
-        deferredReloadTrigger = nil
-        load(trigger: trigger)
+        if isRefreshActive { transferLocalLibrary?.applyDefaultSourceIfNeeded() }
+        updateRefreshActivity()
     }
 
     override func viewDidDisappear(_ animated: Bool) {
@@ -759,7 +810,7 @@ final class MediaBrowserGridViewController: UIViewController {
         view.addSubview(collectionView)
         collectionView.translatesAutoresizingMaskIntoConstraints = false
         let topAnchor = selectionAction == nil ? view.topAnchor : transferTopBar.bottomAnchor
-        let bottomAnchor = selectionAction == nil ? view.bottomAnchor : batchBarContainer.topAnchor
+        let bottomAnchor = selectionAction == nil ? view.bottomAnchor : transferPanelContainer.topAnchor
         NSLayoutConstraint.activate([
             collectionView.topAnchor.constraint(equalTo: topAnchor),
             collectionView.bottomAnchor.constraint(equalTo: bottomAnchor),
@@ -825,19 +876,28 @@ final class MediaBrowserGridViewController: UIViewController {
     private func invalidateLoadedContent() {
         loadedContent = nil
         contentGeneration += 1
+        let wasCurrent = browserSession.isCurrent
+        browserSession.invalidate()
+        if wasCurrent { (presentedViewController as? MediaBrowserViewerViewController)?.reconcileItems() }
     }
 
-    private func load(trigger: String, staleAttempt: Int = 0, reusingContent: Bool = false) {
+    private func load(trigger: String, reusingContent: Bool = false) {
         guard isContentActive else { return }
-        if !reusingContent {
-            invalidateLoadedContent()
-        }
-        if !defersSnapshotReload {
-            deferredReloadTrigger = nil
-        }
-        loadTask?.cancel()
-        loadGeneration += 1
+        if !reusingContent { invalidateLoadedContent() }
+        cancelActiveLoad()
+        updateReloadScheduling()
+        reloadScheduler.request(.init(trigger: trigger, staleAttempt: 0), delay: 0)
+    }
+
+    private func performLoad(_ request: MediaBrowserReloadScheduler.Request) {
+        let trigger = request.trigger
+        let staleAttempt = request.staleAttempt
+        cancelActiveLoad()
+        activeLoadRequest = request
+        updateReloadScheduling()
         let generation = loadGeneration
+        let photoAuthorization = PHPhotoLibrary.authorizationStatus(for: .readWrite)
+        let monthGroupingTimeZone = MonthGroupingTimeZonePreference.frozenCurrent()
         let thumbnailReloadGeneration = thumbnailReloadTracker.requestedGeneration
         let source = source
         let filter = effectiveFilter
@@ -845,7 +905,9 @@ final class MediaBrowserGridViewController: UIViewController {
         let sortOrder = currentSortOrder
         let contentGeneration = contentGeneration
         let needsFileSizes = sortOrder == .fileSize
-        let cachedContent = loadedContent.flatMap { needsFileSizes && !$0.includesFileSizes ? nil : $0 }
+        let cachedContent = loadedContent.flatMap {
+            $0.monthGroupingTimeZone == monthGroupingTimeZone && (!needsFileSizes || $0.includesFileSizes) ? $0 : nil
+        }
         let includesFileSizes = cachedContent?.includesFileSizes ?? needsFileSizes
         let trace = MediaBrowserLoadTrace.makeContext(mode: source.mode)
         MediaBrowserLoadTrace.emit(
@@ -857,6 +919,13 @@ final class MediaBrowserGridViewController: UIViewController {
             collectionView.backgroundView = makeLoadingState()
         }
         loadTask = Task { [weak self] in
+            defer {
+                if self?.loadGeneration == generation {
+                    self?.activeLoadRequest = nil
+                    self?.loadTask = nil
+                    self?.updateReloadScheduling()
+                }
+            }
             await MediaBrowserLoadTrace.$context.withValue(trace) {
                 let sectionsStartedAt = CFAbsoluteTimeGetCurrent()
                 let result: MediaBrowserLoadResult
@@ -876,31 +945,24 @@ final class MediaBrowserGridViewController: UIViewController {
                     )
                     guard staleAttempt < 5 else { return }
                     let retryDelay = min(0.8, 0.05 * pow(2.0, Double(staleAttempt)))
+                    do { try await Task.sleep(for: .seconds(retryDelay)) } catch { return }
                     await MainActor.run {
                         guard let self,
                               !Task.isCancelled,
-                              self.loadGeneration == generation,
-                              self.contentGeneration == contentGeneration else { return }
-                        DispatchQueue.main.asyncAfter(deadline: .now() + retryDelay) { [weak self] in
-                            guard let self, self.loadGeneration == generation,
-                                  self.contentGeneration == contentGeneration else { return }
-                            if self.defersSnapshotReload {
-                                self.reloadRespectingActionGate(trigger: "staleDeferred")
-                            } else {
-                                self.load(
-                                    trigger: "staleRetry",
-                                    staleAttempt: staleAttempt + 1
-                                )
-                            }
-                        }
+                              self.loadGeneration == generation else { return }
+                        self.reloadScheduler.request(.init(trigger: "staleRetry", staleAttempt: staleAttempt + 1), delay: 0)
                     }
                     return
                 case .cancelled:
                     MediaBrowserLoadTrace.emit("cancelled", details: "after=load")
                     return
                 }
-                let snapshot = await withCancellableDetachedValue(priority: .userInitiated) {
-                    MediaBrowserSnapshot(sections: content.sections, filter: filter, mediaFilter: mediaFilter, sortOrder: sortOrder)
+                guard !Task.isCancelled, self?.loadGeneration == generation else { return }
+                let viewerPageOrder = (self?.presentedViewController as? MediaBrowserViewerViewController)?.pageOrder
+                let (snapshot, viewerPages) = await withCancellableDetachedValue(priority: .userInitiated) {
+                    let snapshot = MediaBrowserSnapshot(sections: content.sections, localFingerprintAliases: content.localFingerprintAliases,
+                                                        filter: filter, mediaFilter: mediaFilter, sortOrder: sortOrder)
+                    return (snapshot, viewerPageOrder?.reconciling(with: snapshot))
                 }
                 let itemCount = snapshot.itemCount
                 MediaBrowserLoadTrace.emit(
@@ -917,8 +979,7 @@ final class MediaBrowserGridViewController: UIViewController {
                 await MainActor.run {
                     // Drop a completion from a superseded source (rapid tab switch / session change) so it can't
                     // overwrite the current snapshot — !Task.isCancelled alone can race a past-await continuation.
-                    guard let self, !Task.isCancelled, self.loadGeneration == generation,
-                          self.contentGeneration == contentGeneration else {
+                    guard let self, !Task.isCancelled, self.loadGeneration == generation else {
                         MediaBrowserLoadTrace.emit(
                             "dropped",
                             context: trace,
@@ -927,15 +988,26 @@ final class MediaBrowserGridViewController: UIViewController {
                         )
                         return
                     }
-                    guard !self.defersSnapshotReload else {
+                    guard self.isRefreshActive, !self.defersSnapshotReload else {
                         self.reloadRespectingActionGate(trigger: "loadDeferred")
                         return
                     }
-                    self.loadedContent = LoadedContent(content: content, includesFileSizes: includesFileSizes)
+                    guard PHPhotoLibrary.authorizationStatus(for: .readWrite) == photoAuthorization else {
+                        self.load(trigger: "photoAuthorization")
+                        return
+                    }
+                    guard monthGroupingTimeZone == .frozenCurrent() else {
+                        self.load(trigger: "monthGroupingTimeZone")
+                        return
+                    }
+                    let isCurrent = self.contentGeneration == contentGeneration
+                    self.loadedContent = isCurrent ? LoadedContent(content: content, includesFileSizes: includesFileSizes,
+                                                                 monthGroupingTimeZone: monthGroupingTimeZone) : nil
                     let changedItemIDs = snapshot.sortOrder == self.browserSnapshot.sortOrder
                         ? snapshot.changedItemIDs(comparedTo: self.browserSnapshot)
                         : Set(snapshot.itemIDs)
                     self.browserSession.replace(with: snapshot)
+                    if !isCurrent { self.browserSession.invalidate() }
                     self.isScopeReloading = false
                     self.applySnapshot(
                         reconfiguring: changedItemIDs,
@@ -960,7 +1032,7 @@ final class MediaBrowserGridViewController: UIViewController {
                         }
                     }
                     // The viewer keeps its page order but resolves visible pages from this new session revision.
-                    (self.presentedViewController as? MediaBrowserViewerViewController)?.reconcileItems()
+                    (self.presentedViewController as? MediaBrowserViewerViewController)?.reconcileItems(preparedPageOrder: viewerPages)
                     MediaBrowserLoadTrace.emit(
                         "main",
                         context: trace,
@@ -1024,8 +1096,8 @@ final class MediaBrowserGridViewController: UIViewController {
                       let loadGeneration,
                       self.loadGeneration == loadGeneration,
                       self.thumbnailReloadTracker.shouldApply(thumbnailReloadGeneration) else { return }
-                self.thumbnailReloadTracker.markApplied(thumbnailReloadGeneration)
-                self.refreshVisibleThumbnails(forceReload: true)
+                self.readyThumbnailReloadGeneration = max(self.readyThumbnailReloadGeneration, thumbnailReloadGeneration)
+                self.refreshVisibleThumbnails()
             }
         }
     }
@@ -1625,198 +1697,175 @@ final class MediaBrowserGridViewController: UIViewController {
         transferChooseFilesButton.accessibilityLabel = String(localized: "transfer.files.select")
     }
 
-    private func configureBatchBar() {
-        batchBarContainer.isHidden = true
-        batchBarContainer.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(batchBarContainer)
-        if let selectionAction {
-            let selectionPanelSurface = UIView()
-            let transferSelectionSummaryStack = UIStackView()
-            batchBarContainer.isHidden = false
-            let iconConfiguration = UIImage.SymbolConfiguration(pointSize: 14, weight: .bold)
-            var configuration = UIButton.Configuration.filled()
-            configuration.image = UIImage(systemName: selectionAction.symbolName, withConfiguration: iconConfiguration)
-            configuration.cornerStyle = .capsule
-            configuration.baseBackgroundColor = .systemGray3
-            configuration.baseForegroundColor = .label
-            configuration.contentInsets = .init(top: 8, leading: 14, bottom: 8, trailing: 14)
-            selectionActionButton.configuration = configuration
-            selectionActionButton.showsMenuAsPrimaryAction = true
-            selectionActionButton.accessibilityLabel = selectionAction.buttonTitle
-            selectionActionButton.translatesAutoresizingMaskIntoConstraints = false
+    private func configureTransferPanel() {
+        guard let selectionAction else { return }
+        transferPanelContainer.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(transferPanelContainer)
+        let selectionPanelSurface = UIView()
+        let transferSelectionSummaryStack = UIStackView()
+        transferPanelContainer.isHidden = false
+        let iconConfiguration = UIImage.SymbolConfiguration(pointSize: 14, weight: .bold)
+        var configuration = UIButton.Configuration.filled()
+        configuration.image = UIImage(systemName: selectionAction.symbolName, withConfiguration: iconConfiguration)
+        configuration.cornerStyle = .capsule
+        configuration.baseBackgroundColor = .systemGray3
+        configuration.baseForegroundColor = .label
+        configuration.contentInsets = .init(top: 8, leading: 14, bottom: 8, trailing: 14)
+        selectionActionButton.configuration = configuration
+        selectionActionButton.showsMenuAsPrimaryAction = true
+        selectionActionButton.accessibilityLabel = selectionAction.buttonTitle
+        selectionActionButton.translatesAutoresizingMaskIntoConstraints = false
 
-            configureTransferSelectionSummaryButton(
-                transferPhotoSummaryButton,
-                symbolName: "photo",
-                accessibilityLabel: String(localized: "transfer.source.photos")
-            )
-            transferPhotoSummaryButton.addTarget(
-                self,
-                action: #selector(showTransferPhotoSelectionPopover(_:)),
-                for: .touchUpInside
-            )
-            configureTransferSelectionSummaryButton(
-                transferVideoSummaryButton,
-                symbolName: "video",
-                accessibilityLabel: String(localized: "transfer.source.videos")
-            )
-            transferVideoSummaryButton.addTarget(
-                self,
-                action: #selector(showTransferVideoSelectionPopover(_:)),
-                for: .touchUpInside
-            )
-            configureTransferSelectionSummaryButton(
-                transferFileSummaryButton,
-                symbolName: "doc",
-                accessibilityLabel: String(localized: "transfer.source.files")
-            )
-            transferFileSummaryButton.addTarget(
-                self,
-                action: #selector(showTransferFileSelectionPopover(_:)),
-                for: .touchUpInside
-            )
-            transferSelectionSummaryStack.axis = .horizontal
-            transferSelectionSummaryStack.alignment = .center
-            transferSelectionSummaryStack.spacing = 10
-            transferSelectionSummaryStack.addArrangedSubview(transferPhotoSummaryButton)
-            transferSelectionSummaryStack.addArrangedSubview(transferVideoSummaryButton)
-            transferSelectionSummaryStack.addArrangedSubview(transferFileSummaryButton)
-            transferSelectionSummaryStack.translatesAutoresizingMaskIntoConstraints = false
-            transferSelectionSummaryScrollView.showsHorizontalScrollIndicator = false
-            transferSelectionSummaryScrollView.alwaysBounceHorizontal = true
-            transferSelectionSummaryScrollView.delaysContentTouches = false
-            transferSelectionSummaryScrollView.addSubview(transferSelectionSummaryStack)
-            transferSelectionSummaryScrollView.translatesAutoresizingMaskIntoConstraints = false
+        configureTransferSelectionSummaryButton(
+            transferPhotoSummaryButton,
+            symbolName: "photo",
+            accessibilityLabel: String(localized: "transfer.source.photos")
+        )
+        transferPhotoSummaryButton.addTarget(
+            self,
+            action: #selector(showTransferPhotoSelectionPopover(_:)),
+            for: .touchUpInside
+        )
+        configureTransferSelectionSummaryButton(
+            transferVideoSummaryButton,
+            symbolName: "video",
+            accessibilityLabel: String(localized: "transfer.source.videos")
+        )
+        transferVideoSummaryButton.addTarget(
+            self,
+            action: #selector(showTransferVideoSelectionPopover(_:)),
+            for: .touchUpInside
+        )
+        configureTransferSelectionSummaryButton(
+            transferFileSummaryButton,
+            symbolName: "doc",
+            accessibilityLabel: String(localized: "transfer.source.files")
+        )
+        transferFileSummaryButton.addTarget(
+            self,
+            action: #selector(showTransferFileSelectionPopover(_:)),
+            for: .touchUpInside
+        )
+        transferSelectionSummaryStack.axis = .horizontal
+        transferSelectionSummaryStack.alignment = .center
+        transferSelectionSummaryStack.spacing = 10
+        transferSelectionSummaryStack.addArrangedSubview(transferPhotoSummaryButton)
+        transferSelectionSummaryStack.addArrangedSubview(transferVideoSummaryButton)
+        transferSelectionSummaryStack.addArrangedSubview(transferFileSummaryButton)
+        transferSelectionSummaryStack.translatesAutoresizingMaskIntoConstraints = false
+        transferSelectionSummaryScrollView.showsHorizontalScrollIndicator = false
+        transferSelectionSummaryScrollView.alwaysBounceHorizontal = true
+        transferSelectionSummaryScrollView.delaysContentTouches = false
+        transferSelectionSummaryScrollView.addSubview(transferSelectionSummaryStack)
+        transferSelectionSummaryScrollView.translatesAutoresizingMaskIntoConstraints = false
 
-            selectionPanelSurface.backgroundColor = .appPaper
-            selectionPanelSurface.translatesAutoresizingMaskIntoConstraints = false
-            batchBarContainer.addSubview(selectionPanelSurface)
-            selectionPanelSurface.addSubview(transferSelectionSummaryScrollView)
-            selectionPanelSurface.addSubview(selectionActionButton)
+        selectionPanelSurface.backgroundColor = .appPaper
+        selectionPanelSurface.translatesAutoresizingMaskIntoConstraints = false
+        transferPanelContainer.addSubview(selectionPanelSurface)
+        selectionPanelSurface.addSubview(transferSelectionSummaryScrollView)
+        selectionPanelSurface.addSubview(selectionActionButton)
 
-            selectionActivityPanel.backgroundColor = .clear
-            selectionActivityPanel.isHidden = true
-            selectionActivityPanel.translatesAutoresizingMaskIntoConstraints = false
-            selectionPanelSurface.addSubview(selectionActivityPanel)
+        selectionActivityPanel.backgroundColor = .clear
+        selectionActivityPanel.isHidden = true
+        selectionActivityPanel.translatesAutoresizingMaskIntoConstraints = false
+        selectionPanelSurface.addSubview(selectionActivityPanel)
 
-            let separator = UIView()
-            separator.backgroundColor = .separator
-            separator.translatesAutoresizingMaskIntoConstraints = false
-            selectionPanelSurface.addSubview(separator)
+        let separator = UIView()
+        separator.backgroundColor = .separator
+        separator.translatesAutoresizingMaskIntoConstraints = false
+        selectionPanelSurface.addSubview(separator)
 
-            configureSelectionActivityStatusButton()
-            configureSelectionActivityCategoryButton(selectionActivityPhotoButton, symbolName: "photo")
-            configureSelectionActivityCategoryButton(selectionActivityVideoButton, symbolName: "video")
-            configureSelectionActivityCategoryButton(selectionActivityFileButton, symbolName: "doc")
-            configureSelectionActivityControlButtons()
+        configureSelectionActivityStatusButton()
+        configureSelectionActivityCategoryButton(selectionActivityPhotoButton, symbolName: "photo")
+        configureSelectionActivityCategoryButton(selectionActivityVideoButton, symbolName: "video")
+        configureSelectionActivityCategoryButton(selectionActivityFileButton, symbolName: "doc")
+        configureSelectionActivityControlButtons()
 
-            let categorySpacer = UIView()
-            categorySpacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
-            let activityCategoryRow = UIStackView(arrangedSubviews: [
-                selectionActivityPhotoButton,
-                selectionActivityVideoButton,
-                selectionActivityFileButton,
-                categorySpacer,
-            ])
-            activityCategoryRow.axis = .horizontal
-            activityCategoryRow.alignment = .fill
-            activityCategoryRow.spacing = 10
-
-            let activityInfoStack = UIStackView(arrangedSubviews: [
-                activityCategoryRow,
-                selectionActivityStatusButton,
-            ])
-            activityInfoStack.axis = .vertical
-            activityInfoStack.alignment = .fill
-            activityInfoStack.spacing = 6
-            activityInfoStack.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-
-            let activityStack = UIStackView(arrangedSubviews: [
-                activityInfoStack,
-                selectionActivityStopButton,
-                selectionActivityPauseButton,
-            ])
-            activityStack.axis = .horizontal
-            activityStack.alignment = .center
-            activityStack.spacing = 10
-            activityStack.setCustomSpacing(12, after: selectionActivityStopButton)
-            activityStack.translatesAutoresizingMaskIntoConstraints = false
-            selectionActivityPanel.addSubview(activityStack)
-            NSLayoutConstraint.activate([
-                batchBarContainer.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-                batchBarContainer.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-                selectionPanelSurface.leadingAnchor.constraint(equalTo: batchBarContainer.leadingAnchor),
-                selectionPanelSurface.trailingAnchor.constraint(equalTo: batchBarContainer.trailingAnchor),
-                selectionPanelSurface.topAnchor.constraint(equalTo: batchBarContainer.topAnchor),
-                selectionPanelSurface.bottomAnchor.constraint(equalTo: batchBarContainer.bottomAnchor),
-                separator.topAnchor.constraint(equalTo: selectionPanelSurface.topAnchor),
-                separator.leadingAnchor.constraint(equalTo: selectionPanelSurface.leadingAnchor),
-                separator.trailingAnchor.constraint(equalTo: selectionPanelSurface.trailingAnchor),
-                separator.heightAnchor.constraint(equalToConstant: 0.5),
-                transferSelectionSummaryScrollView.leadingAnchor.constraint(equalTo: batchBarContainer.leadingAnchor, constant: 18),
-                transferSelectionSummaryScrollView.topAnchor.constraint(equalTo: batchBarContainer.topAnchor, constant: 12),
-                transferSelectionSummaryScrollView.bottomAnchor.constraint(
-                    equalTo: batchBarContainer.safeAreaLayoutGuide.bottomAnchor,
-                    constant: -12
-                ),
-                transferSelectionSummaryScrollView.heightAnchor.constraint(equalToConstant: 52),
-                transferSelectionSummaryScrollView.trailingAnchor.constraint(
-                    equalTo: selectionActionButton.leadingAnchor,
-                    constant: -10
-                ),
-                transferSelectionSummaryStack.leadingAnchor.constraint(equalTo: transferSelectionSummaryScrollView.contentLayoutGuide.leadingAnchor),
-                transferSelectionSummaryStack.trailingAnchor.constraint(equalTo: transferSelectionSummaryScrollView.contentLayoutGuide.trailingAnchor),
-                transferSelectionSummaryStack.topAnchor.constraint(equalTo: transferSelectionSummaryScrollView.contentLayoutGuide.topAnchor),
-                transferSelectionSummaryStack.bottomAnchor.constraint(equalTo: transferSelectionSummaryScrollView.contentLayoutGuide.bottomAnchor),
-                transferSelectionSummaryStack.heightAnchor.constraint(equalTo: transferSelectionSummaryScrollView.frameLayoutGuide.heightAnchor),
-                selectionActionButton.trailingAnchor.constraint(equalTo: batchBarContainer.trailingAnchor, constant: -12),
-                selectionActionButton.centerYAnchor.constraint(equalTo: transferSelectionSummaryScrollView.centerYAnchor),
-                selectionActionButton.widthAnchor.constraint(equalToConstant: 72),
-                selectionActionButton.heightAnchor.constraint(equalToConstant: 36),
-
-                selectionActivityPanel.leadingAnchor.constraint(equalTo: batchBarContainer.leadingAnchor),
-                selectionActivityPanel.trailingAnchor.constraint(equalTo: batchBarContainer.trailingAnchor),
-                selectionActivityPanel.topAnchor.constraint(equalTo: batchBarContainer.topAnchor),
-                selectionActivityPanel.bottomAnchor.constraint(
-                    equalTo: batchBarContainer.safeAreaLayoutGuide.bottomAnchor
-                ),
-                selectionActivityPanel.heightAnchor.constraint(greaterThanOrEqualToConstant: 58),
-
-                activityStack.leadingAnchor.constraint(equalTo: selectionActivityPanel.leadingAnchor, constant: 18),
-                activityStack.trailingAnchor.constraint(equalTo: selectionActivityPanel.trailingAnchor, constant: -12),
-                activityStack.topAnchor.constraint(equalTo: selectionActivityPanel.topAnchor, constant: 12),
-                activityStack.bottomAnchor.constraint(equalTo: selectionActivityPanel.bottomAnchor, constant: -12),
-                activityInfoStack.heightAnchor.constraint(equalToConstant: 52),
-                selectionActivityPauseButton.widthAnchor.constraint(equalToConstant: 72),
-                selectionActivityPauseButton.heightAnchor.constraint(equalToConstant: 36),
-                selectionActivityStopButton.widthAnchor.constraint(equalToConstant: 72),
-                selectionActivityStopButton.heightAnchor.constraint(equalToConstant: 36),
-            ])
-            transferPanelShownConstraint = batchBarContainer.bottomAnchor.constraint(equalTo: view.bottomAnchor)
-            transferPanelHiddenConstraint = batchBarContainer.topAnchor.constraint(equalTo: view.bottomAnchor)
-            transferPanelHiddenConstraint?.isActive = true
-            return
-        }
-
-        let blur = UIVisualEffectView(effect: UIBlurEffect(style: .systemThinMaterial))
-        blur.translatesAutoresizingMaskIntoConstraints = false
-        batchBarContainer.addSubview(blur)
-        batchBar.translatesAutoresizingMaskIntoConstraints = false
-        batchBarContainer.addSubview(batchBar)
-        NSLayoutConstraint.activate([
-            batchBarContainer.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            batchBarContainer.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            batchBarContainer.bottomAnchor.constraint(equalTo: view.bottomAnchor),
-            blur.topAnchor.constraint(equalTo: batchBarContainer.topAnchor),
-            blur.bottomAnchor.constraint(equalTo: batchBarContainer.bottomAnchor),
-            blur.leadingAnchor.constraint(equalTo: batchBarContainer.leadingAnchor),
-            blur.trailingAnchor.constraint(equalTo: batchBarContainer.trailingAnchor),
-            batchBar.leadingAnchor.constraint(equalTo: batchBarContainer.leadingAnchor),
-            batchBar.trailingAnchor.constraint(equalTo: batchBarContainer.trailingAnchor),
-            batchBar.topAnchor.constraint(equalTo: batchBarContainer.topAnchor, constant: 6),
-            batchBar.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -6),
-            batchBar.heightAnchor.constraint(equalToConstant: Self.batchBarHeight),
+        let categorySpacer = UIView()
+        categorySpacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        let activityCategoryRow = UIStackView(arrangedSubviews: [
+            selectionActivityPhotoButton,
+            selectionActivityVideoButton,
+            selectionActivityFileButton,
+            categorySpacer,
         ])
+        activityCategoryRow.axis = .horizontal
+        activityCategoryRow.alignment = .fill
+        activityCategoryRow.spacing = 10
+
+        let activityInfoStack = UIStackView(arrangedSubviews: [
+            activityCategoryRow,
+            selectionActivityStatusButton,
+        ])
+        activityInfoStack.axis = .vertical
+        activityInfoStack.alignment = .fill
+        activityInfoStack.spacing = 6
+        activityInfoStack.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+
+        let activityStack = UIStackView(arrangedSubviews: [
+            activityInfoStack,
+            selectionActivityStopButton,
+            selectionActivityPauseButton,
+        ])
+        activityStack.axis = .horizontal
+        activityStack.alignment = .center
+        activityStack.spacing = 10
+        activityStack.setCustomSpacing(12, after: selectionActivityStopButton)
+        activityStack.translatesAutoresizingMaskIntoConstraints = false
+        selectionActivityPanel.addSubview(activityStack)
+        NSLayoutConstraint.activate([
+            transferPanelContainer.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            transferPanelContainer.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            selectionPanelSurface.leadingAnchor.constraint(equalTo: transferPanelContainer.leadingAnchor),
+            selectionPanelSurface.trailingAnchor.constraint(equalTo: transferPanelContainer.trailingAnchor),
+            selectionPanelSurface.topAnchor.constraint(equalTo: transferPanelContainer.topAnchor),
+            selectionPanelSurface.bottomAnchor.constraint(equalTo: transferPanelContainer.bottomAnchor),
+            separator.topAnchor.constraint(equalTo: selectionPanelSurface.topAnchor),
+            separator.leadingAnchor.constraint(equalTo: selectionPanelSurface.leadingAnchor),
+            separator.trailingAnchor.constraint(equalTo: selectionPanelSurface.trailingAnchor),
+            separator.heightAnchor.constraint(equalToConstant: 0.5),
+            transferSelectionSummaryScrollView.leadingAnchor.constraint(equalTo: transferPanelContainer.leadingAnchor, constant: 18),
+            transferSelectionSummaryScrollView.topAnchor.constraint(equalTo: transferPanelContainer.topAnchor, constant: 12),
+            transferSelectionSummaryScrollView.bottomAnchor.constraint(
+                equalTo: transferPanelContainer.safeAreaLayoutGuide.bottomAnchor,
+                constant: -12
+            ),
+            transferSelectionSummaryScrollView.heightAnchor.constraint(equalToConstant: 52),
+            transferSelectionSummaryScrollView.trailingAnchor.constraint(
+                equalTo: selectionActionButton.leadingAnchor,
+                constant: -10
+            ),
+            transferSelectionSummaryStack.leadingAnchor.constraint(equalTo: transferSelectionSummaryScrollView.contentLayoutGuide.leadingAnchor),
+            transferSelectionSummaryStack.trailingAnchor.constraint(equalTo: transferSelectionSummaryScrollView.contentLayoutGuide.trailingAnchor),
+            transferSelectionSummaryStack.topAnchor.constraint(equalTo: transferSelectionSummaryScrollView.contentLayoutGuide.topAnchor),
+            transferSelectionSummaryStack.bottomAnchor.constraint(equalTo: transferSelectionSummaryScrollView.contentLayoutGuide.bottomAnchor),
+            transferSelectionSummaryStack.heightAnchor.constraint(equalTo: transferSelectionSummaryScrollView.frameLayoutGuide.heightAnchor),
+            selectionActionButton.trailingAnchor.constraint(equalTo: transferPanelContainer.trailingAnchor, constant: -12),
+            selectionActionButton.centerYAnchor.constraint(equalTo: transferSelectionSummaryScrollView.centerYAnchor),
+            selectionActionButton.widthAnchor.constraint(equalToConstant: 72),
+            selectionActionButton.heightAnchor.constraint(equalToConstant: 36),
+
+            selectionActivityPanel.leadingAnchor.constraint(equalTo: transferPanelContainer.leadingAnchor),
+            selectionActivityPanel.trailingAnchor.constraint(equalTo: transferPanelContainer.trailingAnchor),
+            selectionActivityPanel.topAnchor.constraint(equalTo: transferPanelContainer.topAnchor),
+            selectionActivityPanel.bottomAnchor.constraint(
+                equalTo: transferPanelContainer.safeAreaLayoutGuide.bottomAnchor
+            ),
+            selectionActivityPanel.heightAnchor.constraint(greaterThanOrEqualToConstant: 58),
+
+            activityStack.leadingAnchor.constraint(equalTo: selectionActivityPanel.leadingAnchor, constant: 18),
+            activityStack.trailingAnchor.constraint(equalTo: selectionActivityPanel.trailingAnchor, constant: -12),
+            activityStack.topAnchor.constraint(equalTo: selectionActivityPanel.topAnchor, constant: 12),
+            activityStack.bottomAnchor.constraint(equalTo: selectionActivityPanel.bottomAnchor, constant: -12),
+            activityInfoStack.heightAnchor.constraint(equalToConstant: 52),
+            selectionActivityPauseButton.widthAnchor.constraint(equalToConstant: 72),
+            selectionActivityPauseButton.heightAnchor.constraint(equalToConstant: 36),
+            selectionActivityStopButton.widthAnchor.constraint(equalToConstant: 72),
+            selectionActivityStopButton.heightAnchor.constraint(equalToConstant: 36),
+        ])
+        transferPanelShownConstraint = transferPanelContainer.bottomAnchor.constraint(equalTo: view.bottomAnchor)
+        transferPanelHiddenConstraint = transferPanelContainer.topAnchor.constraint(equalTo: view.bottomAnchor)
+        transferPanelHiddenConstraint?.isActive = true
     }
 
     private func configureTransferSelectionSummaryButton(
@@ -1865,14 +1914,7 @@ final class MediaBrowserGridViewController: UIViewController {
         ])
     }
 
-    private func setBatchBarVisible(_ visible: Bool, animated: Bool) {
-        guard selectionAction != nil else {
-            batchBarContainer.isHidden = !visible
-            let inset = visible ? Self.batchBarHeight + 12 : 0
-            collectionView.contentInset.bottom = inset
-            collectionView.verticalScrollIndicatorInsets.bottom = inset
-            return
-        }
+    private func setTransferPanelVisible(_ visible: Bool, animated: Bool) {
         guard visible != isTransferPanelVisible else { return }
         view.layoutIfNeeded()
         isTransferPanelVisible = visible
@@ -2200,6 +2242,7 @@ final class MediaBrowserGridViewController: UIViewController {
             updateTransferOptionsButton()
             return
         }
+        updateBatchToolbar()
         let filters = UIMenu(
             title: currentMode.filterGroupTitle,
             options: [.displayInline, .singleSelection],
@@ -2294,7 +2337,6 @@ final class MediaBrowserGridViewController: UIViewController {
     @objc private func enterSelection() {
         guard !isAnyActionRunning, !isScopeReloading, !browserSnapshot.isEmpty || selectionAction != nil,
               selection.enter() else { return }
-        setBatchBarVisible(selectionAction == nil, animated: false)
         updateSelectBarButton(animated: true)
         recomputeBatchBar()
         refreshVisibleSelectionOverlays()
@@ -2315,10 +2357,9 @@ final class MediaBrowserGridViewController: UIViewController {
         selection.exit()
         setNativeSelectionInteractionActive(false)
         endSelectionDrag()
-        setBatchBarVisible(false, animated: false)
         updateSelectBarButton(animated: true)
         refreshVisibleSelectionOverlays()
-        if selectionAction != nil { recomputeBatchBar() }
+        recomputeBatchBar()
     }
 
     private func refreshVisibleSelectionOverlays() {
@@ -2417,6 +2458,7 @@ final class MediaBrowserGridViewController: UIViewController {
     }
 
     private func selectionInteractionDidChange() {
+        updateRefreshActivity()
         updateSelectBarButton()
         if isMediaDrop, isContentActive { recomputeBatchBar() }
     }
@@ -2540,7 +2582,7 @@ final class MediaBrowserGridViewController: UIViewController {
                 && !selectionActionUIState.isPerforming
                 && !transferFileSelection.isWorking
             let showsActivityPanel = selectionActionUIState.showsPanel || transferFileSelection.isWorking
-            setBatchBarVisible(transferItemCount > 0 || showsActivityPanel, animated: true)
+            setTransferPanelVisible(transferItemCount > 0 || showsActivityPanel, animated: true)
             selectionActionButton.isEnabled = true
             selectionActionButton.isUserInteractionEnabled = canChooseDestination
             updateSelectionActionButtonAppearance(isAvailable: canChooseDestination)
@@ -2572,30 +2614,64 @@ final class MediaBrowserGridViewController: UIViewController {
             return
         }
 
-        let result = selection.summary.actions
-        // Upload/download need a live remote session AND an authoritative presence for the active profile: hide
-        // them offline (no destination → "not connected"), and during a profile switch's reload window, when
-        // items transiently read `.localOnly`, so the bar can't advertise a remote action for content whose
-        // backup state isn't yet known for the target profile.
-        let remoteReady = actionRunner.isRemoteReachable && presenceIndex.isRemotePresenceAuthoritative
-        var entries: [MediaActionBar.Entry] = []
-        if result.showsUpload && remoteReady {
-            entries.append(MediaActionBar.Entry(id: BatchAction.upload, symbolName: MediaBrowserActionKind.upload.symbolName, title: MediaBrowserActionKind.upload.title))
-        }
-        if result.showsDownload && remoteReady {
-            entries.append(MediaActionBar.Entry(id: BatchAction.download, symbolName: MediaBrowserActionKind.download.symbolName, title: MediaBrowserActionKind.download.title))
-        }
-        if result.showsDelete {
-            entries.append(MediaActionBar.Entry(id: BatchAction.delete, symbolName: "trash", title: String(localized: "mediaBrowser.action.delete"), isDestructive: true))
-        }
-        let actions = entries.compactMap { $0.id.base as? BatchAction }
-        guard actions != renderedBatchActions else { return }
-        renderedBatchActions = actions
-        batchBar.configure(entries: entries) { [weak self] id in self?.handleBatchTap(id) }
+        updateBatchToolbar()
     }
 
-    private func handleBatchTap(_ id: AnyHashable) {
-        guard canInteractWithSelection, isSelecting, let action = id as? BatchAction else { return }
+    private func updateBatchToolbar() {
+        let result = selection.summary.actions
+        let remoteReady = actionRunner.isRemoteReachable && presenceIndex.isRemotePresenceAuthoritative
+        var actions: [BatchAction] = []
+        if isSelecting {
+            if result.showsUpload && remoteReady { actions.append(.upload) }
+            if result.showsDownload && remoteReady { actions.append(.download) }
+            if result.showsDelete { actions.append(.delete) }
+        }
+        if actions != renderedBatchActions {
+            renderedBatchActions = actions
+            var items: [UIBarButtonItem] = []
+            for action in actions {
+                if action == .delete { items.append(.flexibleSpace()) }
+                items.append(batchToolbarItem(for: action))
+            }
+            setToolbarItems(items, animated: false)
+        }
+        for (action, item) in batchToolbarItems {
+            item.isEnabled = canInteractWithSelection && actions.contains(action)
+        }
+        updateBatchToolbarVisibility(animated: viewIfLoaded?.window != nil)
+    }
+
+    private func batchToolbarItem(for action: BatchAction) -> UIBarButtonItem {
+        if let item = batchToolbarItems[action] { return item }
+        let content: (title: String, identifier: String)
+        switch action {
+        case .upload:
+            content = (MediaBrowserActionKind.upload.title, "upload")
+        case .download:
+            content = (MediaBrowserActionKind.download.title, "download")
+        case .delete:
+            content = (String(localized: "mediaBrowser.action.delete"), "delete")
+        }
+        let item = UIBarButtonItem(title: content.title, style: .plain,
+                                 target: self, action: #selector(batchToolbarTapped(_:)))
+        item.accessibilityLabel = content.title
+        item.accessibilityIdentifier = "mediaBrowser.batch.\(content.identifier)"
+        item.tintColor = action == .delete ? .systemRed : .label
+        batchToolbarItems[action] = item
+        return item
+    }
+
+    private func updateBatchToolbarVisibility(animated: Bool) {
+        guard isBrowserVisible, let navigationController,
+              navigationController.topViewController === self else { return }
+        let hidden = !isSelecting || renderedBatchActions.isEmpty
+        guard hidden != navigationController.isToolbarHidden else { return }
+        navigationController.setToolbarHidden(hidden, animated: animated && !UIAccessibility.isReduceMotionEnabled)
+    }
+
+    @objc private func batchToolbarTapped(_ sender: UIBarButtonItem) {
+        guard let action = batchToolbarItems.first(where: { $0.value === sender })?.key,
+              renderedBatchActions.contains(action), canInteractWithSelection, isSelecting else { return }
         let items = selectedMediaItems()
         guard !items.isEmpty else { return }
         actionRunner.runBatch(action, items: items, from: self) { [weak self] in
@@ -2816,7 +2892,7 @@ extension MediaBrowserGridViewController: UICollectionViewDelegate {
     func collectionView(_ collectionView: UICollectionView, willDisplay cell: UICollectionViewCell, forItemAt indexPath: IndexPath) {
         guard let cell = cell as? MediaBrowserGridCell, let item = item(at: indexPath) else { return }
         cell.setSelecting(isSelecting, selected: selectedItemIDs.contains(item.id))
-        cell.beginLoading(item: item, source: source)
+        if isRefreshActive { cell.beginLoading(item: item, source: source) }
     }
 
     // …and cancel it the moment the cell leaves the screen.

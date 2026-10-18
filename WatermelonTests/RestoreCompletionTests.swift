@@ -49,8 +49,7 @@ final class RestoreCompletionTests: XCTestCase {
         let item = RestoreService.RestoreItemDescriptor(instances: source, identity: remoteFingerprint, creationDate: expectedDate)
         let restored = try await Task {
             try await service.restoreItems(items: [item], profile: profile, password: "", onItemCompleted: { _, _, result in
-                XCTAssertTrue(result?.asset.indexWriteHandled == true)
-                XCTAssertTrue(result?.asset.isCompleteRestore == true)
+                XCTAssertEqual(result?.asset.localIdentifier, "restored")
                 XCTAssertEqual(try repository.fetchAssetHashCaches(assetIDs: ["restored"])["restored"]?.assetFingerprint, actualFingerprint)
             })
         }.value
@@ -82,8 +81,7 @@ final class RestoreCompletionTests: XCTestCase {
         }, hashIndexRepository: repository)
         let descriptor = RestoreService.RestoreItemDescriptor(instances: [resource], identity: fingerprint)
         let first = try await service.restoreItems(items: [descriptor], profile: profile(), password: "", onItemCompleted: { _, _, _ in })
-        XCTAssertFalse(first.first?.asset.isCompleteRestore ?? true)
-        XCTAssertTrue(first.first?.asset.indexWriteHandled == true)
+        XCTAssertEqual(first.first?.asset.localIdentifier, "pending")
         XCTAssertTrue(try repository.fetchAssetHashCaches(assetIDs: ["pending"]).isEmpty)
         let imports = await probe.imports
         XCTAssertEqual(imports, 1)
@@ -100,12 +98,13 @@ final class RestoreCompletionTests: XCTestCase {
         ], profileKey: nil)
         let resolved = MediaBrowserActionRunner.resolveInstances(from: state, fingerprint: fingerprint, preferredMonth: nil)
         XCTAssertEqual(resolved.creationDate, asset.creationDate)
+        XCTAssertFalse(resolved.isIncomplete)
         let descriptor = RestoreService.RestoreItemDescriptor(instances: resolved.instances, identity: fingerprint,
-            creationDate: resolved.creationDate, isIncomplete: resolved.isIncomplete)
+            creationDate: resolved.creationDate)
         let deduped = MediaBrowserActionRunner.dedupeResolvedDescriptors([descriptor, descriptor])
         XCTAssertEqual(deduped.count, 1)
         XCTAssertEqual(deduped.first?.creationDate, asset.creationDate)
-        XCTAssertFalse(deduped.first?.isIncomplete ?? true)
+        XCTAssertEqual(deduped.first?.instances.map(\.id), resolved.instances.map(\.id))
     }
 }
 

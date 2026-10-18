@@ -2,24 +2,58 @@ import Foundation
 import GRDB
 
 final class DatabaseManager: @unchecked Sendable {
-    let dbQueue: DatabaseQueue
+    private static let storages = StorageRegistry()
+    private let storage: Storage
+    #if DEBUG
+    var dbQueue: DatabaseQueue { storage.queue }
+    #endif
+    var localIndexChanges: LocalIndexChangePublisher { storage.localIndexChanges }
     private let externalBookmarkRefreshLock = NSLock()
     private var externalBookmarkRefreshes: [Int64: (previous: Data?, current: Data)] = [:]
 
     init(databaseURL: URL? = nil) throws {
-        let url = databaseURL ?? Self.defaultDatabaseURL()
-        try Self.prepareDatabaseLocation(at: url)
-        // Foreground and background-task connections share one file; WAL + busy timeout avoid "database is locked" COMMIT failures on overlap.
-        var config = Configuration()
-        config.journalMode = .wal
-        config.busyMode = .timeout(5)
-        dbQueue = try DatabaseQueue(path: url.path, configuration: config)
-        try migrator.migrate(dbQueue)
-        try refreshAssetFingerprintVersion()
-        Self.enableBackgroundAccessForDatabaseFiles(at: url)
+        let url = (databaseURL ?? Self.defaultDatabaseURL()).standardizedFileURL.resolvingSymlinksInPath()
+        storage = try Self.storages.resolve(url)
     }
 
-    private var migrator: DatabaseMigrator {
+    private final class Storage: @unchecked Sendable {
+        let queue: DatabaseQueue
+        let localIndexChanges: LocalIndexChangePublisher
+
+        init(url: URL) throws {
+            try prepareDatabaseLocation(at: url)
+            var config = Configuration()
+            config.journalMode = .wal
+            config.busyMode = .timeout(5)
+            queue = try DatabaseQueue(path: url.path, configuration: config)
+            try migrator.migrate(queue)
+            try refreshAssetFingerprintVersion(in: queue)
+            localIndexChanges = try queue.write { try LocalIndexChangePublisher(database: $0) }
+            enableBackgroundAccessForDatabaseFiles(at: url)
+        }
+    }
+
+    private final class StorageRegistry: @unchecked Sendable {
+        private struct Entry {
+            weak var storage: Storage?
+        }
+
+        private let lock = NSLock()
+        private var entries: [URL: Entry] = [:]
+
+        func resolve(_ url: URL) throws -> Storage {
+            try lock.withLock {
+                if let existing = entries[url]?.storage { return existing }
+                entries = entries.filter { $0.value.storage != nil }
+                // Publish only after migration and observer installation have completed.
+                let storage = try Storage(url: url)
+                entries[url] = Entry(storage: storage)
+                return storage
+            }
+        }
+    }
+
+    private static var migrator: DatabaseMigrator {
         var migrator = DatabaseMigrator()
         migrator.registerMigration("v1_initial") { db in
             try db.create(table: ServerProfileRecord.databaseTableName) { table in
@@ -129,8 +163,8 @@ final class DatabaseManager: @unchecked Sendable {
         return migrator
     }
 
-    private func refreshAssetFingerprintVersion() throws {
-        try dbQueue.write { db in
+    private static func refreshAssetFingerprintVersion(in queue: DatabaseQueue) throws {
+        try queue.write { db in
             let key = "local_asset_fingerprint_version"
             let version = String(AssetContentFingerprint.version)
             guard try String.fetchOne(db, sql: "SELECT stateValue FROM sync_state WHERE stateKey = ?", arguments: [key]) != version else { return }
@@ -160,11 +194,11 @@ final class DatabaseManager: @unchecked Sendable {
     }
 
     func read<T>(_ block: (Database) throws -> T) throws -> T {
-        try dbQueue.read(block)
+        try storage.queue.read(block)
     }
 
     func write<T>(_ block: (Database) throws -> T) throws -> T {
-        try dbQueue.write(block)
+        try storage.queue.write(block)
     }
 
     func fetchServerProfiles() throws -> [ServerProfileRecord] {

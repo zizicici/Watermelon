@@ -127,7 +127,7 @@ final class BackgroundRunMarkerDestinationTests: XCTestCase {
         XCTAssertTrue(try databaseManager.fetchBackgroundBackupEnabledProfiles().isEmpty)
 
         XCTAssertEqual(
-            HomeScreenStore._testLatestBackgroundRun(databaseManager),
+            HomeConnectionController.latestBackgroundRun(databaseManager, profileID: id),
             runDate,
             "a disabled profile's completed-run marker must remain visible to foreground pickup"
         )

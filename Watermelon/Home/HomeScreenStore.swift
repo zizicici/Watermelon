@@ -19,13 +19,12 @@ final class HomeScreenStore {
     private let scopeNormalizer: HomeScopeNormalizer
     // Lazily binds hooks after stored properties are initialized.
     private lazy var monthGroupingTimeZoneChangeObserver = makeMonthGroupingTimeZoneChangeObserver()
-    private lazy var localIndexReloadCoordinator = makeLocalIndexReloadCoordinator()
     private lazy var refreshScheduler = makeRefreshScheduler()
     private lazy var selectionController = makeSelectionController()
     private lazy var autoConnectCoordinator = HomeAutoConnectCoordinator(hooks: .init(
         isReady: { [weak self] in
             guard let self else { return false }
-            return !self.isBrowserLinkPairingActive && !self.isBrowserLinkTransportActive
+            return self.isAppActive && !self.isBrowserLinkPairingActive && !self.isBrowserLinkTransportActive
                 && !self.isExecutionActive && !self.isMaintenanceBlocked
         },
         attempt: { [weak self] in self?.connectionController.attemptAutoConnect() ?? .finished }
@@ -46,10 +45,10 @@ final class HomeScreenStore {
     var localLibraryScope: HomeLocalLibraryScope { scopeController.activeScope }
     var isLocalIndexReloading: Bool {
         scopeController.isReloading
-            || localIndexReloadCoordinator.isReloading
+            || refreshScheduler.hasQueuedOrRunningReloadLocal
     }
     // Excludes reloads deferred behind execution/maintenance — nothing is scanning then.
-    var isLocalIndexReloadUnderway: Bool { refreshScheduler.hasQueuedOrRunningReloadLocal }
+    var isLocalIndexReloadUnderway: Bool { refreshScheduler.isReloadUnderway }
 
     var connectionState: ConnectionState { connectionController.state }
     var remoteSyncProgress: RemoteSyncProgress? { connectionController.syncProgress }
@@ -59,6 +58,8 @@ final class HomeScreenStore {
     private(set) var isRemoteMaintenanceActive: Bool = false
     private var isBrowserLinkPairingActive = false
     private var isBrowserLinkTransportActive = false
+    private(set) var isAppActive = false
+    private(set) var isPresentationCatchingUp = false
 
     // False between connect/switch and the sync that applies the new connection's snapshot.
     private(set) var isRemoteReady: Bool = false
@@ -68,7 +69,9 @@ final class HomeScreenStore {
             && localPhotoAccessState.isAuthorized
             && !isExecutionActive
             && !isLocalIndexReloading
+            && !dataManager.needsLocalIndexReload
             && !isMaintenanceBlocked
+            && !isPresentationCatchingUp
             && localDataSourceError == nil
     }
 
@@ -90,6 +93,7 @@ final class HomeScreenStore {
 
     func browserLocalSeed() async -> HomeBrowserLocalSeed? {
         guard localLibraryScope == .device(.all),
+              !dataManager.needsLocalIndexReload,
               !isLocalIndexReloading,
               !isLocalIndexReloadUnderway,
               !isExecutionActive,
@@ -142,16 +146,9 @@ final class HomeScreenStore {
     // sync once the blocker clears, so Home's remote rows/counts don't stay stale until the next sync.
     private var pendingRemoteSnapshotRefresh = false
     private var lastMonthPhases: [LibraryMonthKey: MonthPlan.Phase] = [:]
-    private var bootstrapTask: Task<Void, Never>?
     private var notificationObservers: [NSObjectProtocol] = []
     private var indexChangeObserverID: UUID?
-    // Global bg-run watermarks, baselined at init (cold-launch load already read the DB), never re-baselined
-    // on connect (that would risk suppressing a reload when a same-profile bg run raced the connect scan).
-    // Remote advances only after a successful reload (skipped/failed → retries next foreground). Local advances
-    // on detection: a transient DB-read failure is a non-destructive no-op (empty-guard in refreshFingerprintsFromDB),
-    // not auto-retried for that run but healed by the next reload / PHChange / bg run.
-    private var lastBackgroundRunWatermark: Date?
-    private var remoteReloadWatermark: Date?
+    private var remoteSnapshotObserverID: UUID?
 
     // MARK: - Init
 
@@ -162,9 +159,6 @@ final class HomeScreenStore {
         self.scopeController = HomeScopeController(initialScope: source.scope)
         self.defaultSourceTracker = BackupDataSourceDefaultsTracker(profile: profile, source: source)
         self.isRemoteMaintenanceActive = dependencies.remoteMaintenanceController.isBusy
-        let backgroundRunBaseline = Self.latestBackgroundRun(dependencies.databaseManager)
-        self.lastBackgroundRunWatermark = backgroundRunBaseline
-        self.remoteReloadWatermark = backgroundRunBaseline
         self.photoAccessGate = HomePhotoAccessGate(photoLibraryService: dependencies.photoLibraryService)
         let photoLib = dependencies.photoLibraryService
         self.scopeNormalizer = HomeScopeNormalizer(hooks: HomeScopeNormalizer.Hooks(
@@ -181,6 +175,7 @@ final class HomeScreenStore {
                 currentScope: { scopeController.activeScope }
             )
         )
+        self.dataManager.setAppActive(false)
         self.connectionController = HomeConnectionController(dependencies: dependencies)
         let connectionCtrl = self.connectionController
         self.executionCoordinator = HomeExecutionCoordinator(
@@ -188,7 +183,7 @@ final class HomeScreenStore {
             dataAccess: HomeExecutionCoordinator.DataAccess(
                 localAssetIDs: { [dataManager] month in dataManager.localAssetIDs(for: month) },
                 localMonthGroupingTimeZone: { [dataManager] in dataManager.monthGroupingTimeZoneForLocalIndex() },
-                remoteOnlyItems: { [dataManager] month in await dataManager.remoteOnlyItems(for: month) },
+                remoteOnlyItems: { [dataManager] month in try await dataManager.remoteOnlyItems(for: month) },
                 syncRemoteData: { [dataManager, dependencies, weak connectionCtrl] in
                     let active = connectionCtrl?.state.isConnected ?? false
                     let revision = dataManager.remoteSnapshotRevisionForQuery(hasActiveConnection: active)
@@ -216,30 +211,18 @@ final class HomeScreenStore {
         bind()
         pipBridge.attach()
         _ = monthGroupingTimeZoneChangeObserver
-        _ = localIndexReloadCoordinator
         observeExecutionLifecycle()
         observeMaintenance()
         observeRemoteSnapshotChange()
-        observeBackgroundRunMarkers()
         observeLocalIndexChanges()
         for name in [Notification.Name.NodeBackupDataSourceChanged, .SettingsUpdate] {
             observeNotification(name) { [weak self] in self?.applyDefaultDataSourceIfNeeded() }
         }
     }
 
-    // The background runner lives in a separate container; its marker write can land after the one activation
-    // pickup already ran. Re-run pickup on that signal so an active foreground Home reconciles promptly.
-    private func observeBackgroundRunMarkers() {
-        observeNotification(.BackgroundBackupRunMarkerDidChange) { [weak self] in
-            self?.pickUpBackgroundFingerprintsIfNeeded()
-        }
-    }
-
     private func observeLocalIndexChanges() {
-        indexChangeObserverID = dependencies.localIndexChangePublisher.addObserver { [weak self] change in
-            Task { @MainActor [weak self] in
-                self?.handleLocalIndexChange(change)
-            }
+        indexChangeObserverID = dependencies.hashIndexRepository.changes.addCoalescedMainActorObserver { [weak self] in
+            self?.refreshScheduler.enqueue(.reconcileLocal, coalescing: true)
         }
     }
 
@@ -249,30 +232,14 @@ final class HomeScreenStore {
         }
     }
 
-    private func handleLocalIndexChange(_ change: LocalIndexChangePublisher.Change) {
-        switch change {
-        case .touched(let assetIDs):
-            Task { @MainActor [weak self] in
-                guard let self else { return }
-                let reconciledMonths = await self.dataManager.refreshLocalIndex(forAssetIDs: assetIDs)
-                guard !reconciledMonths.isEmpty else { return }
-                self.handleDataChange(reconciledMonths)
-            }
-        case .bulkInvalidation:
-            scheduleRefresh([.reloadLocal, .notifyStructural])
-        }
-    }
-
     private func observeMaintenance() {
         observeNotification(.RemoteMaintenanceDidChange) { [weak self] in
             self?.handleRemoteMaintenanceChange()
         }
     }
 
-    // A browser-initiated remote delete (or any out-of-band snapshot mutation) posts this AFTER updating the
-    // shared cache. Home isn't otherwise told, so its remote rows/counts would stay stale until the next reload.
     private func observeRemoteSnapshotChange() {
-        observeNotification(.RemoteLibrarySnapshotDidChange) { [weak self] in
+        remoteSnapshotObserverID = dependencies.backupCoordinator.remoteSnapshotChanges.addCoalescedMainActorObserver { [weak self] in
             self?.handleRemoteSnapshotChange()
         }
     }
@@ -283,7 +250,7 @@ final class HomeScreenStore {
         // (the browser delete posts this while still holding the execution lease), defer to when it clears
         // instead of silently dropping the refresh.
         guard connectionState.isConnected else { return }
-        guard !isExecutionActive, !isMaintenanceBlocked else {
+        guard isAppActive, !isExecutionActive, !isMaintenanceBlocked else {
             pendingRemoteSnapshotRefresh = true
             return
         }
@@ -294,7 +261,7 @@ final class HomeScreenStore {
     // whichever handler runs first, the refresh still happens — either the snapshot handler sets the latch and
     // this flush clears it, or the snapshot handler runs after the flag cleared and schedules directly.
     private func flushPendingRemoteSnapshotRefreshIfNeeded() {
-        guard pendingRemoteSnapshotRefresh, !isExecutionActive, !isMaintenanceBlocked, connectionState.isConnected else { return }
+        guard isAppActive, pendingRemoteSnapshotRefresh, !isExecutionActive, !isMaintenanceBlocked, connectionState.isConnected else { return }
         pendingRemoteSnapshotRefresh = false
         scheduleRefresh([.syncRemote, .notifyStructural])
     }
@@ -310,14 +277,12 @@ final class HomeScreenStore {
         }
 
         applyDefaultDataSourceIfNeeded()
-        localIndexReloadCoordinator.replayIfPossible()
+        refreshScheduler.resumeIfPossible()
         // Maintenance just ended — flush a remote-snapshot refresh deferred while it was active (coalesces with the sync below).
         flushPendingRemoteSnapshotRefreshIfNeeded()
         guard changed else { return }
         // Sync first: verify's `replaceMonth` won't reach the grid until HomeIncrementalDataManager pulls the new revision.
         scheduleRefresh([.syncRemote, .notifyStructural])
-        // Catch up a bg run whose remote reload was deferred while maintenance was active.
-        pickUpBackgroundFingerprintsIfNeeded()
     }
 
     private func observeNotification(_ name: Notification.Name, handler: @escaping @MainActor () -> Void) {
@@ -337,74 +302,57 @@ final class HomeScreenStore {
         HomeMonthGroupingTimeZoneChangeObserver(hooks: .init(
             requestLocalIndexReload: { [weak self] in
                 guard let self else { return }
-                self.localIndexReloadCoordinator.schedule(
-                    [.reloadLocal, .notifyStructural],
-                    onEnqueued: { [weak self] in
-                        guard let self else { return }
-                        self.selectionController.clear()
-                        self.onChange?(.structural)
-                    }
-                )
-            }
-        ))
-    }
-
-    private func makeLocalIndexReloadCoordinator() -> HomeLocalIndexReloadCoordinator {
-        HomeLocalIndexReloadCoordinator(hooks: .init(
-            isBlocked: { [weak self] in
-                self?.isLocalIndexReloadBlocked ?? false
-            },
-            hasQueuedOrRunningReload: { [weak self] in
-                self?.refreshScheduler.hasQueuedOrRunningReloadLocal ?? false
-            },
-            enqueue: { [weak self] work in
-                self?.refreshScheduler.enqueue(work)
-            },
-            notifyAvailabilityChanged: { [weak self] in
-                self?.onChange?(.structural)
+                self.selectionController.clear()
+                self.scheduleRefresh([.reloadLocal, .notifyStructural])
             }
         ))
     }
 
     private func makeRefreshScheduler() -> HomeRefreshScheduler {
-        HomeRefreshScheduler(hooks: HomeRefreshScheduler.Hooks(
+        HomeRefreshScheduler(initiallyActive: isAppActive, hooks: HomeRefreshScheduler.Hooks(
             normalizeBeforeReload: { [weak self] in
                 self?.normalizeLocalLibraryScopeIfNeeded(shouldAlert: true) ?? false
             },
-            deferIfNeeded: { [weak self] work in
-                self?.localIndexReloadCoordinator.deferIfBlocked(work) ?? false
+            isReloadBlocked: { [weak self] in
+                self?.isLocalIndexReloadBlocked ?? false
             },
             reloadLocal: { [weak self] in
-                _ = await self?.dataManager.reloadLocalIndex()
+                await self?.dataManager.reloadLocalIndex()
             },
-            refreshFingerprints: { [weak self] in
-                _ = await self?.dataManager.refreshLocalFingerprints()
+            reconcileLocal: { [weak self] in
+                await self?.dataManager.refreshLocalIndex(forAssetIDs: [], allowFullReload: false) ?? []
             },
             refreshAccessState: { [weak self] in
                 self?.refreshLocalPhotoAccessState() ?? false
             },
             afterReload: { [weak self] scopeChanged, accessChanged, hasMoreReloadPending in
                 guard let self else { return }
+                guard !self.dataManager.needsLocalIndexReload else {
+                    self.selectionController.clear()
+                    return
+                }
                 if accessChanged || scopeChanged { self.selectionController.clear() }
                 self.scopeController.completeReload(
                     loaded: self.scopeController.activeScope,
                     hasMoreReloadPending: hasMoreReloadPending
                 )
+                self.autoConnectCoordinator.request()
             },
             syncRemote: { [weak self] in
                 await self?.syncRemoteDataIfNeeded()
             },
-            postProcess: { [weak self] in
-                guard let self else { return }
+            onIterationComplete: { [weak self] work, scopeChanged, accessChanged, localMonths in
+                guard let self, self.isAppActive else { return }
+                if work == .reconcileLocal {
+                    if !localMonths.isEmpty { self.handleDataChange(localMonths) }
+                    return
+                }
                 self.sectionBuilder.rebuildAll()
-                // handleDataChange only reconciles selection on local changes; remote-sync/reload rebuilds (maintenance verify, bg-run reload) can evict a selected month or one of its sides too.
                 self.reconcileSelectionToVisibleSides()
-            },
-            onIterationComplete: { [weak self] work, scopeChanged, accessChanged in
-                guard let self else { return }
+                self.isPresentationCatchingUp = false
                 if work.contains(.notifyConnection) {
                     self.onChange?(.connection)
-                } else if work.contains(.notifyStructural) || accessChanged || scopeChanged {
+                } else if work.contains(.notifyStructural) || work.contains(.reloadLocal) || accessChanged || scopeChanged {
                     self.onChange?(.structural)
                 }
             }
@@ -421,12 +369,14 @@ final class HomeScreenStore {
     }
 
     deinit {
-        bootstrapTask?.cancel()
         for observer in notificationObservers {
             NotificationCenter.default.removeObserver(observer)
         }
         if let id = indexChangeObserverID {
-            dependencies.localIndexChangePublisher.removeObserver(id)
+            dependencies.hashIndexRepository.changes.removeObserver(id)
+        }
+        if let id = remoteSnapshotObserverID {
+            dependencies.backupCoordinator.remoteSnapshotChanges.removeObserver(id)
         }
     }
 
@@ -438,6 +388,10 @@ final class HomeScreenStore {
         }
         scopeNormalizer.onAlert = { [weak self] error in
             self?.onDataSourceError?(error)
+        }
+        dataManager.onReloadNeeded = { [weak self] in
+            guard let self, !self.refreshScheduler.hasQueuedOrRunningReloadLocal else { return }
+            self.scheduleRefresh([.reloadLocal, .notifyStructural])
         }
         dataManager.onMonthsChanged = { [weak self] months in
             self?.handleDataChange(months)
@@ -498,24 +452,23 @@ final class HomeScreenStore {
 
     // MARK: - Lifecycle
 
+    func setAppActive(_ active: Bool) {
+        guard isAppActive != active else { return }
+        isAppActive = active
+        if active { isPresentationCatchingUp = true }
+        dataManager.setAppActive(active)
+        refreshScheduler.setActive(active)
+        guard active else { return }
+        refreshLocalPhotoAccessIfNeeded()
+        flushPendingRemoteSnapshotRefreshIfNeeded()
+        scheduleRefresh([.reconcileLocal, .syncRemote, .notifyStructural])
+        autoConnectCoordinator.resumeIfPossible()
+    }
+
     func load() {
         connectionController.loadProfiles()
         pushProfilesToReachabilityService()
-        bootstrapTask?.cancel()
-        bootstrapTask = Task { @MainActor [weak self] in
-            guard let self else { return }
-            if !self.localIndexReloadCoordinator.deferIfBlocked([.reloadLocal, .notifyStructural]) {
-                await self.dataManager.ensureLocalIndexLoaded()
-            }
-            guard !Task.isCancelled else { return }
-            _ = self.refreshLocalPhotoAccessState()
-            self.autoConnectCoordinator.request()
-            // Don't call syncRemoteDataIfNeeded here — if auto-connect is in progress,
-            // connectionState is .connecting and hasActiveConnection would be false,
-            // which would clear remote data and advance revision, corrupting the bootstrap.
-            // Connection callbacks handle sync when ready.
-            self.refreshAllAndNotify()
-        }
+        scheduleRefresh([.reloadLocal, .notifyStructural])
     }
 
     func reloadProfiles() {
@@ -573,7 +526,7 @@ final class HomeScreenStore {
     // MARK: - Execution Actions
 
     func startExecution(backup: [LibraryMonthKey], download: [LibraryMonthKey], complement: [LibraryMonthKey], incompletePolicy: IncompleteDownloadPolicy = .skip) {
-        guard !isExecutionActive, !isLocalIndexReloading else { return }
+        guard isSelectable else { return }
         _ = normalizeLocalLibraryScopeIfNeeded(shouldAlert: true)
         guard localDataSourceError == nil else {
             onChange?(.structural)
@@ -590,10 +543,10 @@ final class HomeScreenStore {
 
     // Total incomplete remote records across the given download/complement months — lets the UI prompt once,
     // upfront, before starting a restore that would otherwise silently skip them.
-    func incompleteDownloadItemCount(download: [LibraryMonthKey], complement: [LibraryMonthKey]) async -> Int {
+    func incompleteDownloadItemCount(download: [LibraryMonthKey], complement: [LibraryMonthKey]) async throws -> Int {
         var count = 0
         for month in Set(download).union(complement) {
-            count += await dataManager.remoteOnlyItems(for: month).lazy.filter(\.isIncomplete).count
+            count += try await dataManager.remoteOnlyItems(for: month).lazy.filter(\.isIncomplete).count
         }
         return count
     }
@@ -675,16 +628,12 @@ final class HomeScreenStore {
             let access = LocalPhotoAccessState(authorizationStatus: self.photoAccessGate.currentSystemAuthorizationStatus())
             switch access {
             case .authorized:
-                self.scheduleRefresh([.reloadLocal, .notifyStructural], onEnqueued: { [weak self] in
-                    self?.onChange?(.structural)
-                })
+                self.scheduleRefresh([.reloadLocal, .notifyStructural])
             case .notDetermined:
                 _ = await self.photoAccessGate.requestAuthorization()
                 guard !Task.isCancelled else { return }
                 // Begin-time .structural lets the overlay show its scanning state during the first index load.
-                self.scheduleRefresh([.reloadLocal, .notifyStructural], onEnqueued: { [weak self] in
-                    self?.onChange?(.structural)
-                })
+                self.scheduleRefresh([.reloadLocal, .notifyStructural])
             case .denied:
                 break
             }
@@ -697,50 +646,10 @@ final class HomeScreenStore {
         let accessChanged = photoAccessGate.hasSystemStateDiverged()
         let timeZoneChanged = dataManager.monthGroupingTimeZoneForLocalIndex() != .frozenCurrent()
         if scopeChanged || accessChanged || timeZoneChanged {
-            scheduleRefresh([.reloadLocal, .notifyStructural], onEnqueued: { [weak self] in
-                self?.onChange?(.structural)
-            })
+            scheduleRefresh([.reloadLocal, .notifyStructural])
         }
-        pickUpBackgroundFingerprintsIfNeeded()
+        connectionController.refreshRemoteIndexIfNeeded()
     }
-
-    /// On foreground, re-read DB fingerprints and reload the connected remote when a background backup (which
-    /// runs in a separate DependencyContainer) advanced the global bg-run watermark since our last pickup.
-    private func pickUpBackgroundFingerprintsIfNeeded() {
-        guard let current = Self.latestBackgroundRun(dependencies.databaseManager) else { return }
-        if current > (lastBackgroundRunWatermark ?? .distantPast) {
-            lastBackgroundRunWatermark = current
-            scheduleRefresh([.refreshFingerprints, .notifyStructural])
-        }
-
-        guard !isExecutionActive, !isMaintenanceBlocked, connectionState.isConnected,
-              current > (remoteReloadWatermark ?? .distantPast) else { return }
-        connectionController.refreshActiveRemoteIndex { [weak self] in
-            guard let self, !self.isExecutionActive, !self.isMaintenanceBlocked else { return }
-            self.remoteReloadWatermark = current  // advance only after a successful reload
-            self.scheduleRefresh([.syncRemote, .notifyStructural])
-        }
-    }
-
-    private static func latestBackgroundRun(_ db: DatabaseManager) -> Date? {
-        // All saved profiles, not just background-enabled ones: a run that already mutated a profile stamps its
-        // marker gated by destination identity (not the enabled flag), so disabling background backup mid-run
-        // must not hide that completed run from foreground pickup. Future-run eligibility is unaffected.
-        guard let profiles = try? db.fetchServerProfiles() else { return nil }
-        return profiles.compactMap { $0.id.flatMap { Self.latestBackgroundRun(db, profileID: $0) } }.max()
-    }
-
-    private static func latestBackgroundRun(_ db: DatabaseManager, profileID: Int64) -> Date? {
-        let ran = try? db.backgroundBackupLastRanAt(profileID: profileID)
-        let completed = try? db.backgroundBackupLastCompletedAt(profileID: profileID)
-        return [ran, completed].compactMap { $0 }.max()
-    }
-
-    #if DEBUG
-    static func _testLatestBackgroundRun(_ db: DatabaseManager) -> Date? {
-        latestBackgroundRun(db)
-    }
-    #endif
 
     // MARK: - Derived State
 
@@ -767,9 +676,9 @@ final class HomeScreenStore {
     // MARK: - Change Handlers
 
     private func handleDataChange(_ months: Set<LibraryMonthKey>) {
-        // A queued reload's postProcess subsumes this rebuild. Not isLocalIndexReloading: that is also
-        // true while a reload is deferred behind an execution, which must keep row updates flowing.
-        guard !refreshScheduler.hasQueuedOrRunningReloadLocal else { return }
+        guard isAppActive, !isPresentationCatchingUp else { return }
+        // Execution-deferred reloads still allow incremental presentation until a full reload is queued.
+        guard !refreshScheduler.isReloadUnderway else { return }
         if normalizeLocalLibraryScopeIfNeeded(shouldAlert: true) {
             scheduleRefresh([.reloadLocal, .notifyStructural])
             return
@@ -784,7 +693,7 @@ final class HomeScreenStore {
         // A side eviction that keeps the month key (survives via the opposite side) leaves the key set
         // unchanged but trims the selection; emit .structural so the action panel and top toggles re-render
         // (the .data path refreshes neither).
-        if previousMonths != currentMonths || selectionChanged {
+        if previousMonths != currentMonths || selectionChanged || dataManager.needsLocalIndexReload {
             onChange?(.structural)
         } else {
             onChange?(.data(months))
@@ -805,7 +714,8 @@ final class HomeScreenStore {
     }
 
     private func handleFileSizeChange(_ months: Set<LibraryMonthKey>) {
-        guard !refreshScheduler.hasQueuedOrRunningReloadLocal else { return }
+        guard isAppActive, !isPresentationCatchingUp else { return }
+        guard !refreshScheduler.isReloadUnderway else { return }
         let changed = sectionBuilder.refreshFileSizeRows(for: months)
         guard !changed.isEmpty else { return }
         onChange?(.fileSizes(changed))
@@ -826,13 +736,11 @@ final class HomeScreenStore {
             lastMonthPhases.removeAll()
 
             applyDeferredScopeNormalizationIfNeeded(shouldAlert: true)
-            localIndexReloadCoordinator.replayIfPossible()
+            refreshScheduler.resumeIfPossible()
 
             // This full refresh subsumes any snapshot change deferred during the run, so clear the latch too.
             pendingRemoteSnapshotRefresh = false
             scheduleRefresh([.reloadLocal, .syncRemote, .notifyStructural])
-            // Catch up a bg run whose remote reload was deferred while execution was active.
-            pickUpBackgroundFingerprintsIfNeeded()
 
             onChange?(.execution(allPrevious))
             return
@@ -840,6 +748,12 @@ final class HomeScreenStore {
 
         if !wasExecutionActive && isNowActive {
             wasExecutionActive = true
+        }
+
+        guard isAppActive, !isPresentationCatchingUp else {
+            _ = executionCoordinator.consumePendingDataChangedMonths()
+            lastMonthPhases = executionCoordinator.currentState?.monthPlans.mapValues(\.phase) ?? [:]
+            return
         }
 
         // Compute which months actually need UI update:
@@ -874,8 +788,7 @@ final class HomeScreenStore {
         flushPendingRemoteSnapshotRefreshIfNeeded()
         guard !executionCoordinator.isActive, !wasExecutionActive else { return }
         applyDefaultDataSourceIfNeeded()
-        localIndexReloadCoordinator.replayIfPossible()
-        pickUpBackgroundFingerprintsIfNeeded()
+        refreshScheduler.resumeIfPossible()
         onChange?(.structural)
     }
 
@@ -932,6 +845,7 @@ final class HomeScreenStore {
     }
 
     func syncRemoteDataIfNeeded() async {
+        guard !connectionState.isConnecting else { return }
         let start = CFAbsoluteTimeGetCurrent()
         let active = connectionState.isConnected
         let activeProfileIdentity = connectionState.activeProfile?.runtimeConnectionIdentity
@@ -945,15 +859,10 @@ final class HomeScreenStore {
         if active,
            connectionState.isConnected,
            connectionState.activeProfile?.runtimeConnectionIdentity == activeProfileIdentity {
-            isRemoteReady = true
+            isRemoteReady = snapshotState.isAuthoritative && !dependencies.backupCoordinator.remoteSnapshotRequiresReconciliation
         }
         let elapsed = CFAbsoluteTimeGetCurrent() - start
         homeLog.info("[HomeSync] syncRemoteDataIfNeeded: revision=\(revision.map { String($0) } ?? "nil"), connected=\(active), deltaMonths=\(snapshotState.monthDeltas.count), \(String(format: "%.3f", elapsed))s")
-    }
-
-    private func refreshAllAndNotify() {
-        sectionBuilder.rebuildAll()
-        onChange?(.structural)
     }
 
     @discardableResult
@@ -1006,10 +915,8 @@ final class HomeScreenStore {
         isExecutionActive || isMaintenanceBlocked
     }
 
-    private func scheduleRefresh(
-        _ work: HomeRefreshScheduler.Work,
-        onEnqueued: (@MainActor () -> Void)? = nil
-    ) {
-        localIndexReloadCoordinator.schedule(work, onEnqueued: onEnqueued)
+    private func scheduleRefresh(_ work: HomeRefreshScheduler.Work) {
+        refreshScheduler.enqueue(work)
+        if work.contains(.reloadLocal) { onChange?(.structural) }
     }
 }

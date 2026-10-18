@@ -372,7 +372,8 @@ struct BackupRunPreparationService: Sendable {
                         contextPolicy: .claimIfUnowned,
                         shouldStop: { request.terminationControl?.shouldDrain == true }
                     )
-                    snapshotSeedLookup = makeMonthSeedLookup(from: digest, eventStream: eventStream)
+                    snapshotSeedLookup = makeMonthSeedLookup(from: digest,
+                        expectedProfileKey: RemoteIndexSyncService.remoteProfileKey(profile), eventStream: eventStream)
                     eventStream.emitLog(
                         String.localizedStringWithFormat(
                             String(localized: "backup.log.remoteIndexSynced"),
@@ -607,7 +608,7 @@ struct BackupRunPreparationService: Sendable {
             activeLiteMonthsListing = prepared.monthsListing
         }
         if upgradeSession != nil {
-            await remoteIndexService.resetSnapshotCache(expectedProfileKey: RemoteIndexSyncService.remoteProfileKey(profile))
+            _ = remoteIndexService.snapshotCache.resetIfOwned(by: RemoteIndexSyncService.remoteProfileKey(profile))
         }
         onSyncProgress?(RemoteSyncProgress(current: 0, total: 0, kind: .scanningRemoteIndex))
         do {
@@ -645,7 +646,8 @@ struct BackupRunPreparationService: Sendable {
         try await withConnectedClient(profile: profile, password: password) { client in
             let plan = try await self.makeMaintenancePlan(client: client, profile: profile, password: password)
             do {
-                try await self.verifyMonth(client: client, basePath: profile.basePath, month: month, plan: plan)
+                try await self.verifyMonth(client: client, basePath: profile.basePath, month: month, plan: plan,
+                    expectedProfileKey: RemoteIndexSyncService.remoteProfileKey(profile))
                 await plan.session?.release()
             } catch {
                 await plan.session?.release()
@@ -707,7 +709,8 @@ struct BackupRunPreparationService: Sendable {
                 client: client,
                 basePath: profile.basePath,
                 month: month,
-                plan: plan
+                plan: plan,
+                expectedProfileKey: RemoteIndexSyncService.remoteProfileKey(profile)
             )
             try terminationControl?.checkDrainRequested()
         }
@@ -737,7 +740,8 @@ struct BackupRunPreparationService: Sendable {
                 client: client,
                 basePath: profile.basePath,
                 month: month,
-                plan: RepoMaintenancePlan(layout: layout, session: session, monthsListing: nil)
+                plan: RepoMaintenancePlan(layout: layout, session: session, monthsListing: nil),
+                expectedProfileKey: RemoteIndexSyncService.remoteProfileKey(profile)
             )
         }
     }
@@ -815,17 +819,23 @@ struct BackupRunPreparationService: Sendable {
         client: any RemoteStorageClientProtocol,
         basePath: String,
         month: LibraryMonthKey,
-        plan: RepoMaintenancePlan
+        plan: RepoMaintenancePlan,
+        expectedProfileKey: String
     ) async throws {
         let session = plan.session
         // Read-only lease gate: the in-run finalizer verifies concurrently with upload workers, so it must
         // never write the lock. Standalone verify reuses a session whose refresh task maintains the lease.
-        try await remoteIndexService.verifyMonth(
+        let cache = remoteIndexService.snapshotCache
+        guard cache.claimIfUnowned(profileKey: expectedProfileKey) else {
+            throw RemoteIndexSyncService.foreignSnapshotContextError()
+        }
+        try await MonthManifestStore.verifyMonth(
             client: client,
             basePath: basePath,
             month: month,
             layout: plan.layout,
-            assertOwnership: RepoWriteGuard.ownershipGates(session)
+            assertOwnership: RepoWriteGuard.ownershipGates(session),
+            snapshotObserver: cache.snapshotObserver(profileKey: expectedProfileKey)
         )
     }
 
@@ -1153,7 +1163,6 @@ struct BackupRunPreparationService: Sendable {
                 profile: profile,
                 password: password
             )
-            var didPublishManifest = false
             do {
                 guard plan.layout == .lite else {
                     await plan.session?.release()
@@ -1257,7 +1266,8 @@ struct BackupRunPreparationService: Sendable {
                         assertOwnership: ownership,
                         liteMonthsListing: plan.monthsListing,
                         surfaceDownloadNotFound: true,
-                        surfaceDownloadFailure: true
+                        surfaceDownloadFailure: true,
+                        snapshotObserver: remoteIndexService.snapshotCache.snapshotObserver(profileKey: actingProfileKey)
                     ) else {
                         failedCount += candidateGroup.count
                         for _ in candidateGroup { await progress.advance() }
@@ -1270,42 +1280,17 @@ struct BackupRunPreparationService: Sendable {
                         await progress.advance()
                     }
                     guard !adoptedInMonth.isEmpty else { continue }
-                    _ = try await store.flushToRemote(ignoreCancellation: true)
-                    let snapshot = store.unsortedSnapshot()
-                    await remoteIndexService.replaceCachedMonthSynchronized(
-                        month,
-                        resources: snapshot.resources,
-                        assets: snapshot.assets,
-                        links: snapshot.links,
-                        expectedProfileKey: actingProfileKey
-                    )
-                    await remoteIndexService.forgetMonthDigest(
-                        month,
-                        expectedProfileKey: actingProfileKey
-                    )
-                    didPublishManifest = true
+                    try await store.flushToRemote(ignoreCancellation: true)
                     adoptedCandidateCount += adoptedInMonth.count
                     try Task.checkCancellation()
                 }
 
-                if didPublishManifest {
-                    NotificationCenter.default.post(
-                        name: .RemoteLibrarySnapshotDidChange,
-                        object: nil
-                    )
-                }
                 await plan.session?.release()
                 return LeftoverAdoptionResult(
                     adoptedCandidateCount: adoptedCandidateCount,
                     failedCandidateCount: failedCount
                 )
             } catch {
-                if didPublishManifest {
-                    NotificationCenter.default.post(
-                        name: .RemoteLibrarySnapshotDidChange,
-                        object: nil
-                    )
-                }
                 await plan.session?.release()
                 throw error
             }
@@ -1873,11 +1858,11 @@ struct BackupRunPreparationService: Sendable {
                     resolved = .present(mode: mode, store: try await MonthManifestStore.loadOrCreate(
                         client: client,
                         basePath: liteProfile.basePath,
-                        year: month.year,
-                        month: month.month,
+                        year: month.year, month: month.month,
                         layout: mode.manifestLayout,
                         assertOwnership: mode.ownershipGates,
-                        liteMonthsListing: mode.liteMonthsListing
+                        liteMonthsListing: mode.liteMonthsListing,
+                        snapshotObserver: remoteIndexService.snapshotCache.snapshotObserver(profileKey: actingProfileKey)
                     ))
                 } else {
                     resolved = .monthGone
@@ -1887,7 +1872,7 @@ struct BackupRunPreparationService: Sendable {
             switch resolved {
             case let .present(mode, store):
                 let orphanFileNames = try store.removeAsset(fingerprint: assetFingerprint)
-                _ = try await store.flushToRemote()
+                try await store.flushToRemote()
                 // The manifest is committed (the asset IS removed). Delete the now-orphaned resource files
                 // through a LeasedRemoteWriter, which re-proves ownership before EACH delete: a lease lost
                 // mid-sweep stops it, leaving the rest as a leak — never corruption of a writer that
@@ -1912,25 +1897,18 @@ struct BackupRunPreparationService: Sendable {
                 if !leakedFileNames.isEmpty {
                     deleteLog.error("deleteRemoteAsset: \(leakedFileNames.count, privacy: .public) orphan resource file(s) leaked (asset deleted; recoverable only via manual leftover cleanup): \(leakedFileNames, privacy: .public)")
                 }
-                let snap = store.unsortedSnapshot()
-                await remoteIndexService.replaceCachedMonthSynchronized(month, resources: snap.resources, assets: snap.assets, links: snap.links, expectedProfileKey: actingProfileKey)
                 // The now-orphaned thumbnail sidecar is reclaimed by the authoritative ThumbnailOrphanScanner
                 // maintenance sweep (which lists the real remote thumbs against the full manifest). We deliberately
                 // don't reclaim it inline off the cached snapshot — that could miss a grouping-TZ twin in an
                 // unsynced month and delete a still-referenced shared sidecar.
             case .repoGone:
                 // Whole repo gone: every cached month is stale, so drop the entire snapshot.
-                await remoteIndexService.resetSnapshotCache(expectedProfileKey: actingProfileKey)
+                _ = remoteIndexService.snapshotCache.resetIfOwned(by: actingProfileKey)
             case .monthGone:
                 // Only this month gone: drop just it so a reload doesn't resurrect the deleted asset, and forget
                 // its digest so a later sync doesn't read a stale "unchanged" and skip re-pulling a re-created month.
-                await remoteIndexService.replaceCachedMonthSynchronized(month, resources: [], assets: [], links: [], expectedProfileKey: actingProfileKey)
-                await remoteIndexService.forgetMonthDigest(month, expectedProfileKey: actingProfileKey)
+                remoteIndexService.snapshotCache.removeConfirmedMonth(month, profileKey: actingProfileKey)
             }
-            // The cache mutations above changed the browser-visible remote library. The sync path posts this on
-            // its own commits; the on-demand delete must too, so every LibraryPresenceIndex (not just the acting
-            // one) rebuilds instead of holding a stale fingerprint set.
-            NotificationCenter.default.post(name: .RemoteLibrarySnapshotDidChange, object: nil)
             await writeMode?.stopAndRelease()
             await client.disconnectSafely()
         } catch {
@@ -2130,6 +2108,7 @@ struct BackupRunPreparationService: Sendable {
 
     func makeMonthSeedLookup(
         from digest: RemoteIndexSyncDigest,
+        expectedProfileKey: String,
         eventStream: BackupEventStream
     ) -> MonthSeedLookup? {
         // Gate BEFORE materializing the flat-array snapshot — at 100K+ libraries the snapshot
@@ -2143,7 +2122,10 @@ struct BackupRunPreparationService: Sendable {
         }
 
         // Trusting seed names hides resources an interrupted run left remote-only: the upload then pays a 409.
-        let lookup = MonthSeedLookup(snapshot: remoteIndexService.fullSnapshot())
+        guard let snapshot = remoteIndexService.snapshotCache.snapshotForSeed(
+            profileKey: expectedProfileKey, entryLimit: Self.monthSeedLookupEntryThreshold
+        ) else { return nil }
+        let lookup = MonthSeedLookup(snapshot: snapshot)
         return lookup.isEmpty ? nil : lookup
     }
 

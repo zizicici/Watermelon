@@ -4,22 +4,48 @@ import os.log
 private let snapshotCacheLog = Logger(subsystem: "com.zizicici.watermelon", category: "RemoteLibrarySnapshotCache")
 
 final class RemoteLibrarySnapshotCache: @unchecked Sendable {
-    private struct LinkKey: Hashable {
-        let month: LibraryMonthKey
+    let changes = ChangeSignal<Void>()
+    let persistedSnapshotInvalidations = ChangeSignal<String>()
+    private struct LinkKey: Hashable, Sendable {
         let assetFingerprint: Data
         let role: Int
         let slot: Int
     }
 
     private typealias ResourceMap = [String: RemoteManifestResource]
-    private typealias AssetMap = [String: RemoteManifestAsset]
+    private typealias AssetMap = [Data: RemoteManifestAsset]
     private typealias LinkMap = [LinkKey: RemoteAssetResourceLink]
+
+    private enum Update: Sendable {
+        case month(LibraryMonthKey, PreparedMonth, remoteChanged: Bool)
+        case reset
+        case uncertain
+
+        var affectsRemote: Bool {
+            if case .month(_, _, let remoteChanged) = self { return remoteChanged }
+            return true
+        }
+    }
+
+    private static let committedUpdates = ChangeSignal<(UUID, String, Update)>()
+    private let identity = UUID()
+    private var committedUpdateObserverID: UUID?
+
+    init() {
+        committedUpdateObserverID = Self.committedUpdates.addObserver { [weak self] origin, key, update in
+            guard let self, origin != self.identity, self.currentProfileKey() == key else { return }
+            _ = self.receive(update, profileKey: key)
+        }
+    }
+
+    deinit {
+        if let committedUpdateObserverID { Self.committedUpdates.removeObserver(committedUpdateObserverID) }
+    }
 
     private let lock = NSLock()
     private var resourcesByMonth: [LibraryMonthKey: ResourceMap] = [:]
     private var assetsByMonth: [LibraryMonthKey: AssetMap] = [:]
     private var linksByMonth: [LibraryMonthKey: LinkMap] = [:]
-    private var linkKeysByAssetID: [String: Set<LinkKey>] = [:]
 
     private var revision: UInt64 = 0
     private var mutationGeneration: UInt64 = 0
@@ -33,16 +59,173 @@ final class RemoteLibrarySnapshotCache: @unchecked Sendable {
     // Profile whose data currently populates this cache; travels with the snapshot so readers can detect a
     // mid-switch mismatch (cache reset to a new profile before the session activates it).
     private var profileKey: String?
-    /// Forces the next delta read (non-nil base) to full snapshot — post-reset revision can collide
-    /// with the engine's old snapshotRevision and silently produce an empty delta. Nil-base reads
-    /// don't consume it (they get full snapshots regardless).
-    private var freshlyReset: Bool = false
+    private var fullSnapshotRevision: UInt64 = 0
+    private var needsReconciliation = false
+    private var refreshPending = false
+    private var contextGeneration: UInt64 = 0
+    private var sourceGeneration: UInt64 = 0
+    private var invalidationGeneration: UInt64 = 0
+    private var monthSourceGenerations: [LibraryMonthKey: UInt64] = [:]
+    private var manifestDigests: [LibraryMonthKey: RemoteMonthManifestDigest] = [:]
 
-    private struct ChangeKind {
-        let resources: Bool
-        let assets: Bool
-        let links: Bool
-        var any: Bool { resources || assets || links }
+    var requiresReconciliation: Bool { lock.withLock { needsReconciliation || refreshPending } }
+
+    struct Scan: Sendable {
+        let profileKey: String
+        let contextGeneration: UInt64
+        let sourceGeneration: UInt64
+        let digests: [LibraryMonthKey: RemoteMonthManifestDigest]
+        let requiresReconciliation: Bool
+        let isNewContext: Bool
+    }
+
+    func beginScan(profileKey key: String, allowContextSwitch: Bool) throws -> Scan {
+        try withMutation {
+            if !allowContextSwitch, let owner = profileKey, owner != key {
+                throw NSError(domain: "RemoteIndexSyncService", code: -40)
+            }
+            let changed = profileKey != key
+            if changed {
+                resetLocked()
+                profileKey = key
+            }
+            return Scan(profileKey: key, contextGeneration: contextGeneration,
+                sourceGeneration: sourceGeneration, digests: manifestDigests,
+                requiresReconciliation: needsReconciliation, isNewContext: changed)
+        }
+    }
+
+    func claimIfUnowned(profileKey key: String) -> Bool {
+        withMutation {
+            if let owner = profileKey { return owner == key }
+            profileKey = key
+            contextGeneration &+= 1
+            revision &+= 1
+            fullSnapshotRevision = revision
+            mutationGeneration &+= 1
+            return true
+        }
+    }
+
+    private func accepts(_ scan: Scan, month: LibraryMonthKey) -> Bool {
+        profileKey == scan.profileKey && contextGeneration == scan.contextGeneration
+            && invalidationGeneration <= scan.sourceGeneration
+            && (monthSourceGenerations[month] ?? 0) <= scan.sourceGeneration
+    }
+
+    @discardableResult
+    func applyScannedMonth(_ delta: RemoteLibraryMonthDelta, scan: Scan) -> Bool {
+        let prepared = prepareMonth(delta.month, resources: delta.resources, assets: delta.assets,
+            links: delta.assetResourceLinks)
+        return withMutation {
+            guard accepts(scan, month: delta.month) else { return false }
+            return replaceMonthLocked(delta.month, prepared: prepared)
+        }
+    }
+
+    func finishScan(_ scan: Scan, digests: [LibraryMonthKey: RemoteMonthManifestDigest],
+                    monthFilter: Set<LibraryMonthKey>?) throws {
+        try withMutation {
+            guard profileKey == scan.profileKey, contextGeneration == scan.contextGeneration else {
+                throw CancellationError()
+            }
+            let months = monthFilter ?? allKnownMonthsLocked().union(manifestDigests.keys).union(digests.keys)
+            var conflicted = invalidationGeneration > scan.sourceGeneration
+            for month in months {
+                guard accepts(scan, month: month) else { conflicted = true; continue }
+                manifestDigests[month] = digests[month]
+                if digests[month] == nil {
+                    _ = replaceMonthLocked(month, prepared: .empty)
+                }
+            }
+            if conflicted {
+                if !refreshPending { refreshPending = true; mutationGeneration &+= 1 }
+            } else {
+                if needsReconciliation, monthFilter == nil {
+                    needsReconciliation = false
+                    revision &+= 1
+                    fullSnapshotRevision = revision
+                }
+                if monthFilter == nil { refreshPending = false }
+                lastSyncedAt = Date()
+                healthDigestGeneration &+= 1
+                mutationGeneration &+= 1
+            }
+        }
+    }
+
+    func snapshotObserver(profileKey key: String) -> MonthManifestStore.SnapshotObserver {
+        { [self] event in
+            switch event {
+            case .confirmed(let delta, let remoteChanged):
+                let prepared = prepareMonth(delta.month, resources: delta.resources, assets: delta.assets,
+                    links: delta.assetResourceLinks)
+                _ = publish(.month(delta.month, prepared, remoteChanged: remoteChanged), profileKey: key)
+            case .removed(let month):
+                removeConfirmedMonth(month, profileKey: key)
+            case .uncertain:
+                invalidateIfOwned(by: key)
+            }
+        }
+    }
+
+    func removeConfirmedMonth(_ month: LibraryMonthKey, profileKey key: String) {
+        _ = publish(.month(month, .empty, remoteChanged: true), profileKey: key)
+    }
+
+    private func publish(_ update: Update, profileKey key: String) -> Bool {
+        let accepted = receive(update, profileKey: key)
+        if update.affectsRemote { Self.committedUpdates.publish((identity, key, update)) }
+        return accepted
+    }
+
+    private func receive(_ update: Update, profileKey key: String) -> Bool {
+        defer {
+            if update.affectsRemote { persistedSnapshotInvalidations.publish(key) }
+        }
+        return withMutation {
+            guard isOwnedLocked(by: key) else { return false }
+            switch update {
+            case .month(let month, let prepared, let remoteChanged):
+                sourceGeneration &+= 1
+                monthSourceGenerations[month] = sourceGeneration
+                if remoteChanged { manifestDigests[month] = nil }
+                _ = replaceMonthLocked(month, prepared: prepared)
+            case .reset:
+                resetLocked()
+                profileKey = key
+            case .uncertain:
+                sourceGeneration &+= 1
+                invalidationGeneration = sourceGeneration
+                if !needsReconciliation {
+                    needsReconciliation = true
+                    revision &+= 1
+                    fullSnapshotRevision = revision
+                    mutationGeneration &+= 1
+                }
+            }
+            return true
+        }
+    }
+
+    func scannedSnapshot(for scan: Scan) -> (digests: [LibraryMonthKey: RemoteMonthManifestDigest], months: [RemoteLibraryMonthDelta])? {
+        let capture = lock.withLock { () -> ([LibraryMonthKey: RemoteMonthManifestDigest], [LibraryMonthKey: ResourceMap], [LibraryMonthKey: AssetMap], [LibraryMonthKey: LinkMap])? in
+            guard profileKey == scan.profileKey, contextGeneration == scan.contextGeneration,
+                  sourceGeneration == scan.sourceGeneration, !needsReconciliation, !refreshPending else { return nil }
+            return (manifestDigests, resourcesByMonth, assetsByMonth, linksByMonth)
+        }
+        guard let (digests, resources, assets, links) = capture else { return nil }
+        return (digests, digests.keys.sorted().map { month in
+            RemoteLibraryMonthDelta(month: month, resources: Array((resources[month] ?? [:]).values),
+                assets: Array((assets[month] ?? [:]).values), assetResourceLinks: Array((links[month] ?? [:]).values))
+        })
+    }
+
+    func isCurrent(_ scan: Scan) -> Bool {
+        lock.withLock {
+            profileKey == scan.profileKey && contextGeneration == scan.contextGeneration
+                && sourceGeneration == scan.sourceGeneration
+        }
     }
 
     private struct CachedHealthDigest {
@@ -50,55 +233,67 @@ final class RemoteLibrarySnapshotCache: @unchecked Sendable {
         let digest: RemoteHealthDigest
     }
 
-    func current() -> RemoteLibrarySnapshot {
-        lock.withLock { rebuildFullSnapshotLocked() }
+    func snapshotForSeed(profileKey key: String, entryLimit: Int) -> RemoteLibrarySnapshot? {
+        let snapshot = lock.withLock { () -> ([LibraryMonthKey: ResourceMap], [LibraryMonthKey: AssetMap], [LibraryMonthKey: LinkMap])? in
+            guard profileKey == key, !needsReconciliation, !refreshPending else { return nil }
+            let entries = resourcesByMonth.values.reduce(0) { $0 + $1.count }
+                + assetsByMonth.values.reduce(0) { $0 + $1.count }
+                + linksByMonth.values.reduce(0) { $0 + $1.count }
+            guard entries <= entryLimit else { return nil }
+            return (resourcesByMonth, assetsByMonth, linksByMonth)
+        }
+        guard let (resources, assets, links) = snapshot else { return nil }
+        return RemoteLibrarySnapshot(resources: resources.values.flatMap { $0.values },
+            assets: assets.values.flatMap { $0.values }, assetResourceLinks: links.values.flatMap { $0.values })
     }
+
+    #if DEBUG
+    func current() -> RemoteLibrarySnapshot {
+        let snapshot = lock.withLock { (resourcesByMonth, assetsByMonth, linksByMonth) }
+        let months = Set(snapshot.0.keys).union(snapshot.1.keys).union(snapshot.2.keys).sorted()
+        return RemoteLibrarySnapshot(
+            resources: months.flatMap { Self.sortedResources(Array((snapshot.0[$0] ?? [:]).values)) },
+            assets: months.flatMap { Self.sortedAssets(Array((snapshot.1[$0] ?? [:]).values)) },
+            assetResourceLinks: months.flatMap { Self.sortedLinks(Array((snapshot.2[$0] ?? [:]).values)) })
+    }
+    #endif
 
     func state(since baseRevision: UInt64?) -> RemoteLibrarySnapshotState {
-        let (isFullSnapshot, responseRevision, ownerKey, monthEntries) = lock.withLock { () -> (Bool, UInt64, String?, [(month: LibraryMonthKey, resources: [RemoteManifestResource], assets: [RemoteManifestAsset], links: [RemoteAssetResourceLink])]) in
+        let capture = lock.withLock {
             let (isFullSnapshot, changedMonths) = changedMonthsLocked(since: baseRevision)
-            let sortedMonths = changedMonths.sorted()
-            let entries = sortedMonths.map { month in
-                (
-                    month: month,
-                    resources: Array((resourcesByMonth[month] ?? [:]).values),
-                    assets: Array((assetsByMonth[month] ?? [:]).values),
-                    links: Array((linksByMonth[month] ?? [:]).values)
-                )
-            }
-            return (isFullSnapshot, revision, profileKey, entries)
+            return (isFullSnapshot: isFullSnapshot, changedMonths: changedMonths, revision: revision,
+                profileKey: profileKey, isAuthoritative: !needsReconciliation,
+                resources: resourcesByMonth, assets: assetsByMonth, links: linksByMonth)
         }
-
-        let monthDeltas = monthEntries.map { entry in
-            RemoteLibraryMonthDelta(
-                month: entry.month,
-                resources: entry.resources,
-                assets: entry.assets,
-                assetResourceLinks: entry.links
-            )
+        let monthDeltas = capture.changedMonths.sorted().map { month in
+            RemoteLibraryMonthDelta(month: month,
+                resources: Array((capture.resources[month] ?? [:]).values),
+                assets: Array((capture.assets[month] ?? [:]).values),
+                assetResourceLinks: Array((capture.links[month] ?? [:]).values))
         }
-
-        return RemoteLibrarySnapshotState(
-            revision: responseRevision,
-            isFullSnapshot: isFullSnapshot,
-            monthDeltas: monthDeltas,
-            profileKey: ownerKey
-        )
+        return RemoteLibrarySnapshotState(revision: capture.revision, isFullSnapshot: capture.isFullSnapshot,
+            monthDeltas: monthDeltas, profileKey: capture.profileKey, isAuthoritative: capture.isAuthoritative)
     }
 
-    // Tags the cache with the profile whose data it now holds (set by the sync once a remote context is
-    // established). Kept separate from reset() so a same-profile re-sync re-asserts it too.
+    #if DEBUG
     func setProfileKey(_ key: String) {
-        lock.withLock { profileKey = key }
+        withMutation {
+            guard profileKey != key else { return }
+            profileKey = key
+            contextGeneration &+= 1
+            manifestDigests.removeAll()
+            revision &+= 1
+            fullSnapshotRevision = revision
+            mutationGeneration &+= 1
+        }
     }
+    #endif
 
     func currentProfileKey() -> String? {
         lock.withLock { profileKey }
     }
 
-    // Owner gate for out-of-band writers (browser delete write-back, backup flush upserts): a mutation
-    // prepared for one profile must never land after a cross-profile connect re-tagged the cache. A nil
-    // expectation bypasses the gate (the sync's own gate-held writes); a nil TAG fails closed (mid-reset).
+    // A late commit must not change a cache now owned by another profile.
     private func isOwnedLocked(by expectedProfileKey: String?) -> Bool {
         guard let expectedProfileKey else { return true }
         if profileKey == expectedProfileKey { return true }
@@ -106,49 +301,65 @@ final class RemoteLibrarySnapshotCache: @unchecked Sendable {
         return false
     }
 
+    #if DEBUG
     func reset() {
-        lock.withLock { resetLocked() }
+        withMutation { resetLocked() }
     }
+    #endif
 
-    // Wholesale drop on behalf of an acting profile (browser delete's repo-gone reconcile): skipped once a
-    // cross-profile connect owns the cache, so it can't wipe the other profile's freshly-synced view.
+    // A confirmed-empty repo still belongs to the connected profile.
     @discardableResult
     func resetIfOwned(by expectedProfileKey: String) -> Bool {
-        lock.withLock {
-            guard isOwnedLocked(by: expectedProfileKey) else { return false }
-            resetLocked()
-            return true
-        }
+        publish(.reset, profileKey: expectedProfileKey)
     }
 
     private func resetLocked() {
+        contextGeneration &+= 1
+        sourceGeneration &+= 1
+        invalidationGeneration = sourceGeneration
+        monthSourceGenerations.removeAll()
+        manifestDigests.removeAll()
+        refreshPending = false
         mutationGeneration &+= 1
         resourcesByMonth.removeAll()
         assetsByMonth.removeAll()
         linksByMonth.removeAll()
-        linkKeysByAssetID.removeAll()
         resourceHashesByMonth.removeAll()
         resourceBytesByMonth.removeAll()
         lastSyncedAt = nil
         cachedHealthDigest = nil
         healthDigestGeneration &+= 1
-        revision = 0
+        revision &+= 1
+        fullSnapshotRevision = revision
         monthLastChangedRevision.removeAll()
         profileKey = nil
-        freshlyReset = true
+        needsReconciliation = false
     }
 
-    func markSynced(_ at: Date) {
-        lock.withLock {
+    func invalidateIfOwned(by expectedProfileKey: String) {
+        _ = publish(.uncertain, profileKey: expectedProfileKey)
+    }
+
+    #if DEBUG
+    func markSynced(_ at: Date, fullyReconciled: Bool = true) {
+        withMutation {
+            if needsReconciliation, fullyReconciled {
+                needsReconciliation = false
+                revision &+= 1
+                fullSnapshotRevision = revision
+                mutationGeneration &+= 1
+            }
             guard lastSyncedAt != at else { return }
             lastSyncedAt = at
             healthDigestGeneration &+= 1
+            mutationGeneration &+= 1
         }
     }
 
     func currentLastSyncedAt() -> Date? {
         lock.withLock { lastSyncedAt }
     }
+    #endif
 
     /// Snapshots per-month dicts under the lock (cheap COW reference copy), then
     /// runs the SHA-256 fingerprint recompute outside the lock so writers aren't
@@ -206,121 +417,6 @@ final class RemoteLibrarySnapshotCache: @unchecked Sendable {
         let resourceHashesByMonth: [LibraryMonthKey: Set<Data>]
         let resourceBytesByMonth: [LibraryMonthKey: Int64]
         let lastSyncedAt: Date?
-    }
-
-    /// `precondition` is intentional in Release: violating the ChangeKind/nextX nil-ness
-    /// contract would silently desync reverse index and derived caches from main maps.
-    @discardableResult
-    private func applyMonthFullReplaceLocked(
-        _ month: LibraryMonthKey,
-        nextResources: ResourceMap?,
-        nextAssets: AssetMap?,
-        nextLinks: LinkMap?,
-        changeKind: ChangeKind,
-        bumpRevision: Bool = true
-    ) -> Bool {
-        precondition(
-            (changeKind.resources == (nextResources != nil)) &&
-            (changeKind.assets == (nextAssets != nil)) &&
-            (changeKind.links == (nextLinks != nil)),
-            "ChangeKind must match nil-ness of next* params"
-        )
-        guard changeKind.any else { return false }
-
-        if changeKind.links, let nextLinks {
-            let prevLinks = linksByMonth[month] ?? [:]
-            let removedKeys = Set(prevLinks.keys).subtracting(nextLinks.keys)
-            let addedKeys = Set(nextLinks.keys).subtracting(prevLinks.keys)
-            for key in removedKeys {
-                guard let link = prevLinks[key] else { continue }
-                if var ks = linkKeysByAssetID[link.assetID] {
-                    ks.remove(key)
-                    linkKeysByAssetID[link.assetID] = ks.isEmpty ? nil : ks
-                }
-            }
-            for key in addedKeys {
-                guard let link = nextLinks[key] else { continue }
-                linkKeysByAssetID[link.assetID, default: []].insert(key)
-            }
-        }
-
-        if changeKind.resources, let nextResources {
-            resourcesByMonth[month] = nextResources.isEmpty ? nil : nextResources
-        }
-        if changeKind.assets, let nextAssets {
-            assetsByMonth[month] = nextAssets.isEmpty ? nil : nextAssets
-        }
-        if changeKind.links, let nextLinks {
-            linksByMonth[month] = nextLinks.isEmpty ? nil : nextLinks
-        }
-
-        recomputeDerivedForMonthLocked(month, changeKind: changeKind)
-
-        if bumpRevision {
-            bumpRevisionLocked([month])
-        }
-        return true
-    }
-
-    /// A key may appear in BOTH `removedLinkKeys` and `addedLinks` (in-place value update);
-    /// remove-then-add yields the correct net state because `link.assetID` derives from
-    /// month + fingerprint, so both ops target the same `linkKeysByAssetID` entry.
-    @discardableResult
-    private func applyMonthLinkDeltaLocked(
-        _ month: LibraryMonthKey,
-        removedLinkKeys: Set<LinkKey>,
-        addedLinks: LinkMap,
-        assetUpsert: RemoteManifestAsset?,
-        bumpRevision: Bool = true
-    ) -> Bool {
-        let assetsChanged = assetUpsert != nil
-        let linksChanged = !removedLinkKeys.isEmpty || !addedLinks.isEmpty
-        if !assetsChanged && !linksChanged { return false }
-
-        if linksChanged {
-            for key in removedLinkKeys {
-                if let link = linksByMonth[month]?[key] {
-                    if var ks = linkKeysByAssetID[link.assetID] {
-                        ks.remove(key)
-                        linkKeysByAssetID[link.assetID] = ks.isEmpty ? nil : ks
-                    }
-                }
-                linksByMonth[month]?.removeValue(forKey: key)
-            }
-            for (key, link) in addedLinks {
-                linksByMonth[month, default: [:]][key] = link
-                linkKeysByAssetID[link.assetID, default: []].insert(key)
-            }
-            if linksByMonth[month]?.isEmpty == true {
-                linksByMonth[month] = nil
-            }
-        }
-
-        if let assetUpsert {
-            assetsByMonth[month, default: [:]][assetUpsert.id] = assetUpsert
-        }
-
-        let kind = ChangeKind(resources: false, assets: assetsChanged, links: linksChanged)
-        recomputeDerivedForMonthLocked(month, changeKind: kind)
-        if bumpRevision {
-            bumpRevisionLocked([month])
-        }
-        return true
-    }
-
-    /// Stats and resource-hash tables are cheap; incompleteness (SHA-256 recompute
-    /// per asset) is deferred to `healthDigest()` so writers aren't blocked.
-    private func recomputeDerivedForMonthLocked(_ month: LibraryMonthKey, changeKind: ChangeKind) {
-        if changeKind.resources {
-            let monthResources = resourcesByMonth[month] ?? [:]
-            if monthResources.isEmpty {
-                resourceHashesByMonth[month] = nil
-                resourceBytesByMonth[month] = nil
-            } else {
-                resourceHashesByMonth[month] = Set(monthResources.values.map(\.contentHash))
-                resourceBytesByMonth[month] = monthResources.values.reduce(Int64(0)) { $0 + $1.fileSize }
-            }
-        }
     }
 
     /// Iterates `assetsByMonth`, not `linksByMonth`, so phantom assets are surfaced.
@@ -385,177 +481,76 @@ final class RemoteLibrarySnapshotCache: @unchecked Sendable {
         return entries
     }
 
-    @discardableResult
-    func replaceMonth(
-        _ month: LibraryMonthKey,
-        resources: [RemoteManifestResource],
-        assets: [RemoteManifestAsset],
-        assetResourceLinks: [RemoteAssetResourceLink],
-        onlyIfOwnedBy expectedProfileKey: String? = nil
-    ) -> Bool {
-        lock.withLock {
-            guard isOwnedLocked(by: expectedProfileKey) else { return false }
-            let nextResources = Self.dedupedByKey(resources, key: \.id, scope: "resource", month: month) { $0.fileName }
-            let nextAssets = Self.dedupedByKey(assets, key: \.id, scope: "asset", month: month) { $0.assetFingerprintHex }
-            let nextLinks = Self.dedupedByKey(
-                assetResourceLinks,
-                key: { link in
-                    LinkKey(
-                        month: LibraryMonthKey(year: link.year, month: link.month),
-                        assetFingerprint: link.assetFingerprint,
-                        role: link.role,
-                        slot: link.slot
-                    )
-                },
-                scope: "link",
-                month: month
-            ) { "fp=\($0.assetFingerprint.hexString) r=\($0.role) s=\($0.slot)" }
+    private struct PreparedMonth: Sendable {
+        let resources: ResourceMap
+        let assets: AssetMap
+        let links: LinkMap
+        let hashes: Set<Data>
+        let bytes: Int64
+        static var empty: Self { Self(resources: [:], assets: [:], links: [:], hashes: [], bytes: 0) }
+    }
 
-            let previousResources = resourcesByMonth[month] ?? [:]
-            let previousAssets = assetsByMonth[month] ?? [:]
-            let previousLinks = linksByMonth[month] ?? [:]
-            let resourcesChanged = previousResources != nextResources
-            let assetsChanged = previousAssets != nextAssets
-            let linksChanged = previousLinks != nextLinks
-            return applyMonthFullReplaceLocked(
-                month,
-                nextResources: resourcesChanged ? nextResources : nil,
-                nextAssets: assetsChanged ? nextAssets : nil,
-                nextLinks: linksChanged ? nextLinks : nil,
-                changeKind: ChangeKind(
-                    resources: resourcesChanged,
-                    assets: assetsChanged,
-                    links: linksChanged
-                )
-            )
+    private func prepareMonth(_ month: LibraryMonthKey, resources: [RemoteManifestResource],
+                              assets: [RemoteManifestAsset], links: [RemoteAssetResourceLink]) -> PreparedMonth {
+        let resourceMap = Self.dedupedByKey(resources, key: \.fileName, scope: "resource", month: month) { $0.fileName }
+        let assetMap = Self.dedupedByKey(assets, key: \.assetFingerprint, scope: "asset", month: month) { $0.assetFingerprintHex }
+        let linkMap = Self.dedupedByKey(links, key: { link in
+            LinkKey(assetFingerprint: link.assetFingerprint, role: link.role, slot: link.slot)
+        }, scope: "link", month: month) { "fp=\($0.assetFingerprint.hexString) r=\($0.role) s=\($0.slot)" }
+        return PreparedMonth(resources: resourceMap, assets: assetMap, links: linkMap,
+            hashes: Set(resourceMap.values.map(\.contentHash)), bytes: resourceMap.values.reduce(0) { $0 + $1.fileSize })
+    }
+
+    #if DEBUG
+    @discardableResult
+    func replaceMonth(_ month: LibraryMonthKey, resources: [RemoteManifestResource], assets: [RemoteManifestAsset],
+                      assetResourceLinks: [RemoteAssetResourceLink], onlyIfOwnedBy expectedProfileKey: String? = nil) -> Bool {
+        let prepared = prepareMonth(month, resources: resources, assets: assets, links: assetResourceLinks)
+        return withMutation {
+            guard isOwnedLocked(by: expectedProfileKey) else { return false }
+            return replaceMonthLocked(month, prepared: prepared)
         }
     }
 
     @discardableResult
     func removeMonth(_ month: LibraryMonthKey) -> Bool {
-        lock.withLock {
-            guard resourcesByMonth[month] != nil
-                || assetsByMonth[month] != nil
-                || linksByMonth[month] != nil else { return false }
-            // Pass all three fields to guarantee full-state cleanup including derived caches.
-            return applyMonthFullReplaceLocked(
-                month,
-                nextResources: [:],
-                nextAssets: [:],
-                nextLinks: [:],
-                changeKind: ChangeKind(resources: true, assets: true, links: true)
-            )
+        withMutation { replaceMonthLocked(month, prepared: .empty) }
+    }
+    #endif
+
+    private func replaceMonthLocked(_ month: LibraryMonthKey, prepared: PreparedMonth) -> Bool {
+        let resourcesChanged = (resourcesByMonth[month] ?? [:]) != prepared.resources
+        let assetsChanged = (assetsByMonth[month] ?? [:]) != prepared.assets
+        let linksChanged = (linksByMonth[month] ?? [:]) != prepared.links
+        guard resourcesChanged || assetsChanged || linksChanged else { return false }
+        if resourcesChanged {
+            resourcesByMonth[month] = prepared.resources.isEmpty ? nil : prepared.resources
+            resourceHashesByMonth[month] = prepared.resources.isEmpty ? nil : prepared.hashes
+            resourceBytesByMonth[month] = prepared.resources.isEmpty ? nil : prepared.bytes
         }
+        if assetsChanged { assetsByMonth[month] = prepared.assets.isEmpty ? nil : prepared.assets }
+        if linksChanged { linksByMonth[month] = prepared.links.isEmpty ? nil : prepared.links }
+        revision &+= 1
+        mutationGeneration &+= 1
+        healthDigestGeneration &+= 1
+        monthLastChangedRevision[month] = revision
+        return true
     }
 
-    func upsertResource(_ item: RemoteManifestResource, onlyIfOwnedBy expectedProfileKey: String? = nil) {
-        lock.withLock {
-            guard isOwnedLocked(by: expectedProfileKey) else { return }
-            let month = LibraryMonthKey(year: item.year, month: item.month)
-            let existing = resourcesByMonth[month]?[item.id]
-            guard existing != item else { return }
-            // Incremental on the per-resource upload path; full recompute only on a true replace.
-            resourcesByMonth[month, default: [:]][item.id] = item
-            if existing == nil {
-                resourceHashesByMonth[month, default: []].insert(item.contentHash)
-                resourceBytesByMonth[month, default: 0] += item.fileSize
-            } else {
-                recomputeDerivedForMonthLocked(month, changeKind: ChangeKind(resources: true, assets: false, links: false))
-            }
-            bumpRevisionLocked([month])
+    private func withMutation<T>(_ body: () throws -> T) rethrows -> T {
+        let (result, changed) = try lock.withLock {
+            let previous = mutationGeneration
+            let result = try body()
+            return (result, mutationGeneration != previous)
         }
-    }
-
-    func upsertAsset(_ asset: RemoteManifestAsset, links: [RemoteAssetResourceLink]? = nil, onlyIfOwnedBy expectedProfileKey: String? = nil) {
-        lock.withLock {
-            guard isOwnedLocked(by: expectedProfileKey) else { return }
-            let assetMonth = LibraryMonthKey(year: asset.year, month: asset.month)
-            var changedMonths: Set<LibraryMonthKey> = []
-
-            let prevAsset = assetsByMonth[assetMonth]?[asset.id]
-            let assetChanged = (prevAsset != asset)
-            if assetChanged {
-                changedMonths.insert(assetMonth)
-            }
-
-            var perMonthRemoved: [LibraryMonthKey: Set<LinkKey>] = [:]
-            var perMonthAdded: [LibraryMonthKey: LinkMap] = [:]
-
-            if let links {
-                let assetID = asset.id
-                let oldKeys = linkKeysByAssetID[assetID] ?? []
-
-                var newLinksByKey: LinkMap = [:]
-                newLinksByKey.reserveCapacity(links.count)
-                for link in links {
-                    let key = LinkKey(
-                        month: LibraryMonthKey(year: link.year, month: link.month),
-                        assetFingerprint: link.assetFingerprint,
-                        role: link.role,
-                        slot: link.slot
-                    )
-                    newLinksByKey[key] = link
-                }
-
-                var oldLinksByKey: LinkMap = [:]
-                oldLinksByKey.reserveCapacity(oldKeys.count)
-                for key in oldKeys {
-                    if let existing = linksByMonth[key.month]?[key] {
-                        oldLinksByKey[key] = existing
-                    }
-                }
-
-                if oldLinksByKey != newLinksByKey {
-                    for k in oldKeys {
-                        perMonthRemoved[k.month, default: []].insert(k)
-                    }
-                    for (k, v) in newLinksByKey {
-                        perMonthAdded[k.month, default: [:]][k] = v
-                    }
-                    let touchedMonths = Set(perMonthRemoved.keys).union(perMonthAdded.keys)
-                    for m in touchedMonths {
-                        var removed = perMonthRemoved[m] ?? []
-                        var added = perMonthAdded[m] ?? [:]
-                        let intersect = removed.intersection(added.keys)
-                        for k in intersect where added[k] == linksByMonth[m]?[k] {
-                            removed.remove(k)
-                            added.removeValue(forKey: k)
-                        }
-                        perMonthRemoved[m] = removed
-                        perMonthAdded[m] = added
-                        if !removed.isEmpty || !added.isEmpty {
-                            changedMonths.insert(m)
-                        }
-                    }
-                }
-            }
-
-            for m in changedMonths {
-                let assetUpsertForMonth = (m == assetMonth && assetChanged) ? asset : nil
-                applyMonthLinkDeltaLocked(
-                    m,
-                    removedLinkKeys: perMonthRemoved[m] ?? [],
-                    addedLinks: perMonthAdded[m] ?? [:],
-                    assetUpsert: assetUpsertForMonth,
-                    bumpRevision: false
-                )
-            }
-
-            if !changedMonths.isEmpty {
-                bumpRevisionLocked(changedMonths)
-            }
+        if changed {
+            changes.publish()
         }
+        return result
     }
 
     private func changedMonthsLocked(since baseRevision: UInt64?) -> (Bool, Set<LibraryMonthKey>) {
-        // A nil-base read (browser presence/sources/actions, settings backfill) always gets a full snapshot
-        // and must not consume the one-shot flag — only the delta consumer it protects may.
-        guard let baseRevision else {
-            return (true, allKnownMonthsLocked())
-        }
-
-        if freshlyReset {
-            freshlyReset = false
+        guard let baseRevision, baseRevision >= fullSnapshotRevision else {
             return (true, allKnownMonthsLocked())
         }
 
@@ -575,45 +570,10 @@ final class RemoteLibrarySnapshotCache: @unchecked Sendable {
         return (false, changedMonths)
     }
 
-    private func computeChangedMonthsLocked(
-        nextResourcesByMonth: [LibraryMonthKey: ResourceMap],
-        nextAssetsByMonth: [LibraryMonthKey: AssetMap],
-        nextLinksByMonth: [LibraryMonthKey: LinkMap]
-    ) -> Set<LibraryMonthKey> {
-        let oldMonths = Set(resourcesByMonth.keys)
-            .union(assetsByMonth.keys)
-            .union(linksByMonth.keys)
-        let newMonths = Set(nextResourcesByMonth.keys)
-            .union(nextAssetsByMonth.keys)
-            .union(nextLinksByMonth.keys)
-
-        var changedMonths = Set<LibraryMonthKey>()
-        for month in oldMonths.union(newMonths) {
-            if resourcesByMonth[month] != nextResourcesByMonth[month] ||
-                assetsByMonth[month] != nextAssetsByMonth[month] ||
-                linksByMonth[month] != nextLinksByMonth[month] {
-                changedMonths.insert(month)
-            }
-        }
-
-        return changedMonths
-    }
-
     private func allKnownMonthsLocked() -> Set<LibraryMonthKey> {
         Set(resourcesByMonth.keys)
             .union(assetsByMonth.keys)
             .union(linksByMonth.keys)
-    }
-
-    private func bumpRevisionLocked(_ changedMonths: Set<LibraryMonthKey>) {
-        guard !changedMonths.isEmpty else { return }
-
-        revision &+= 1
-        mutationGeneration &+= 1
-        healthDigestGeneration &+= 1
-        for month in changedMonths {
-            monthLastChangedRevision[month] = revision
-        }
     }
 
     /// Includes resource-only and link-only residue months that the asset-keyed resolved view
@@ -622,24 +582,16 @@ final class RemoteLibrarySnapshotCache: @unchecked Sendable {
         lock.withLock { allKnownMonthsLocked() }
     }
 
-    /// Cheap revision read for staleness checks. Pure read — unlike state(since:), never consumes
-    /// `freshlyReset`, so it can't disturb the delta protocol.
     func currentRevision() -> UInt64 {
         lock.withLock { revision }
-    }
-
-    func currentMutationGeneration() -> UInt64 {
-        lock.withLock { mutationGeneration }
     }
 
     /// Point probe: is this fingerprint recorded in any cached month right now. Lets delete gates re-verify
     /// an absence read from a stale committed presence build against the live cache.
     func containsAssetFingerprint(_ fingerprint: Data) -> (contains: Bool, profileKey: String?) {
         lock.withLock {
-            let contains = assetsByMonth.values.contains { monthAssets in
-                monthAssets.values.contains { $0.assetFingerprint == fingerprint }
-            }
-            return (contains, profileKey)
+            let contains = assetsByMonth.values.contains { $0[fingerprint] != nil }
+            return (contains, needsReconciliation ? nil : profileKey)
         }
     }
 
@@ -657,73 +609,15 @@ final class RemoteLibrarySnapshotCache: @unchecked Sendable {
     }
 
     func monthRawData(for month: LibraryMonthKey) -> RemoteLibraryMonthDelta? {
-        lock.withLock {
-            let monthAssets = assetsByMonth[month] ?? [:]
-            guard !monthAssets.isEmpty else { return nil }
-            return RemoteLibraryMonthDelta(
-                month: month,
-                resources: Array((resourcesByMonth[month] ?? [:]).values),
-                assets: Array(monthAssets.values),
-                assetResourceLinks: Array((linksByMonth[month] ?? [:]).values)
-            )
+        let snapshot = lock.withLock {
+            (resourcesByMonth[month] ?? [:], assetsByMonth[month] ?? [:], linksByMonth[month] ?? [:])
         }
+        guard !snapshot.1.isEmpty else { return nil }
+        return RemoteLibraryMonthDelta(month: month, resources: Array(snapshot.0.values),
+            assets: Array(snapshot.1.values), assetResourceLinks: Array(snapshot.2.values))
     }
 
-    func allMonthRawData() -> [RemoteLibraryMonthDelta] {
-        lock.withLock {
-            allKnownMonthsLocked().sorted().map { month in
-                RemoteLibraryMonthDelta(
-                    month: month,
-                    resources: Array((resourcesByMonth[month] ?? [:]).values),
-                    assets: Array((assetsByMonth[month] ?? [:]).values),
-                    assetResourceLinks: Array((linksByMonth[month] ?? [:]).values)
-                )
-            }
-        }
-    }
-
-    func fileNames(for month: LibraryMonthKey) -> Set<String> {
-        lock.withLock {
-            Set((resourcesByMonth[month] ?? [:]).values.map(\.fileName))
-        }
-    }
-
-    private func rebuildFullSnapshotLocked() -> RemoteLibrarySnapshot {
-        let sortedMonths = allKnownMonthsLocked().sorted()
-
-        var resources: [RemoteManifestResource] = []
-        var assets: [RemoteManifestAsset] = []
-        var links: [RemoteAssetResourceLink] = []
-
-        resources.reserveCapacity(resourcesByMonth.values.reduce(0) { $0 + $1.count })
-        assets.reserveCapacity(assetsByMonth.values.reduce(0) { $0 + $1.count })
-        links.reserveCapacity(linksByMonth.values.reduce(0) { $0 + $1.count })
-
-        for month in sortedMonths {
-            resources.append(contentsOf: sortedResourcesLocked(for: month))
-            assets.append(contentsOf: sortedAssetsLocked(for: month))
-            links.append(contentsOf: sortedLinksLocked(for: month))
-        }
-
-        return RemoteLibrarySnapshot(
-            resources: resources,
-            assets: assets,
-            assetResourceLinks: links
-        )
-    }
-
-    private func sortedResourcesLocked(for month: LibraryMonthKey) -> [RemoteManifestResource] {
-        Self.sortedResources(Array((resourcesByMonth[month] ?? [:]).values))
-    }
-
-    private func sortedAssetsLocked(for month: LibraryMonthKey) -> [RemoteManifestAsset] {
-        Self.sortedAssets(Array((assetsByMonth[month] ?? [:]).values))
-    }
-
-    private func sortedLinksLocked(for month: LibraryMonthKey) -> [RemoteAssetResourceLink] {
-        Self.sortedLinks(Array((linksByMonth[month] ?? [:]).values))
-    }
-
+    #if DEBUG
     private static func sortedResources(_ resources: [RemoteManifestResource]) -> [RemoteManifestResource] {
         resources.sorted { lhs, rhs in
             let lhsCreationDateMs = LibraryCreationDate.normalized(milliseconds: lhs.creationDateMs).milliseconds
@@ -756,6 +650,7 @@ final class RemoteLibrarySnapshotCache: @unchecked Sendable {
             return lhs.resourceHash.lexicographicallyPrecedes(rhs.resourceHash)
         }
     }
+    #endif
 
     // Callers' SQL PK should make duplicates unreachable; defensive first-seen + assert.
     private static func dedupedByKey<Element, Key: Hashable>(

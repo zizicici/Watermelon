@@ -89,7 +89,6 @@ extension AssetProcessor {
             try recordSkippedResource(
                 prepared: prepared,
                 monthStore: monthStore,
-                profile: profile,
                 targetFileName: preparation.targetFileName
             )
             let dbSeconds = Self.elapsedSeconds(since: dbStart)
@@ -144,7 +143,6 @@ extension AssetProcessor {
         try recordUploadedResource(
             prepared: prepared,
             monthStore: monthStore,
-            profile: profile,
             targetFileName: uploadedFileName
         )
         let dbSeconds = Self.elapsedSeconds(since: dbStart)
@@ -236,7 +234,6 @@ extension AssetProcessor {
     func recordSkippedResource(
         prepared: PreparedResource,
         monthStore: MonthManifestStore,
-        profile: ServerProfileRecord,
         targetFileName: String
     ) throws {
         let local = prepared.local
@@ -254,8 +251,7 @@ extension AssetProcessor {
         )
 
         if monthStore.findResourceByHash(localHash) == nil {
-            let inserted = try monthStore.upsertResource(manifestItem)
-            remoteIndexService.upsertCachedResource(inserted, expectedProfileKey: RemoteIndexSyncService.remoteProfileKey(profile))
+            try monthStore.upsertResource(manifestItem)
         }
 
         monthStore.markRemoteFile(name: targetFileName, size: localFileSize)
@@ -496,7 +492,6 @@ extension AssetProcessor {
     func recordUploadedResource(
         prepared: PreparedResource,
         monthStore: MonthManifestStore,
-        profile: ServerProfileRecord,
         targetFileName: String
     ) throws {
         let local = prepared.local
@@ -513,9 +508,8 @@ extension AssetProcessor {
             creationDateMs: LibraryCreationDate.optionalMilliseconds(prepared.shotDate),
             backedUpAtMs: backedUpAtMs
         )
-        let inserted = try monthStore.upsertResource(manifestItem)
+        try monthStore.upsertResource(manifestItem)
         monthStore.markRemoteFile(name: targetFileName, size: localFileSize)
-        remoteIndexService.upsertCachedResource(inserted, expectedProfileKey: RemoteIndexSyncService.remoteProfileKey(profile))
     }
 
     func downloadAndHashRemoteFile(

@@ -185,7 +185,7 @@ struct MediaBrowserItem: Hashable, Sendable {
     let kind: AlbumMediaKind
     let creationDateMs: Int64
     var fileSize: Int64?
-    private(set) var backing: MediaBrowserBacking
+    let backing: MediaBrowserBacking
 
     var presence: MediaPresence {
         switch backing {
@@ -289,27 +289,6 @@ struct MediaBrowserItem: Hashable, Sendable {
             local: localIdentifier.map { LocalMediaReference(identifier: $0, fingerprint: remote.fingerprint) }
         )
     }
-
-    mutating func attachLocalIdentifier(_ identifier: String) {
-        switch backing {
-        case .local:
-            return
-        case .remote(let remote, _):
-            backing = .remote(
-                remote,
-                local: LocalMediaReference(identifier: identifier, fingerprint: remote.fingerprint)
-            )
-        }
-    }
-
-    mutating func removeLocalIdentifier() {
-        switch backing {
-        case .remote(let remote, _):
-            backing = .remote(remote, local: nil)
-        case .local:
-            return
-        }
-    }
 }
 
 // Which batch actions a grid multi-selection offers, decided purely from the selected items. Kept out of the
@@ -400,13 +379,56 @@ struct MediaBrowserSnapshot: Sendable {
     private let sections: [Section]
     private let sectionOffsets: [Int]
     private let itemIndexByID: [MediaBrowserItemID: Int]
+    fileprivate let pageReferences: [MediaBrowserPageReference]
+    private struct ItemLocation: Sendable {
+        let section: Int
+        let item: Int
+    }
+    private let sourceSections: [MediaBrowserSection]
+    private let sourceLocations: [MediaBrowserItemID: ItemLocation]
+    private let localFingerprintAliases: [String: Data]
+    private let remoteLocationsByFingerprint: [Data: ItemLocation]
+    private let localLocationsByFingerprint: [Data: ItemLocation]
 
     init(
         sections: [MediaBrowserSection],
+        localFingerprintAliases: [String: Data] = [:],
         filter: MediaBrowserFilter = .all,
         mediaFilter: MediaBrowserMediaFilter = .all,
         sortOrder: MediaBrowserSortOrder = .month
     ) {
+        sourceSections = sections
+        var locations: [MediaBrowserItemID: ItemLocation] = [:]
+        var aliases = localFingerprintAliases
+        var remoteByFingerprint: [Data: ItemLocation] = [:]
+        var localByFingerprint: [Data: ItemLocation] = [:]
+        for (sectionIndex, section) in sections.enumerated() {
+            for (itemIndex, item) in section.items.enumerated() {
+                let location = ItemLocation(section: sectionIndex, item: itemIndex)
+                locations[item.id] = location
+                switch item.backing {
+                case .remote(let remote, let local):
+                    let previous = remoteByFingerprint[remote.fingerprint]
+                    if previous.map({ item.id < sections[$0.section].items[$0.item].id }) ?? true {
+                        remoteByFingerprint[remote.fingerprint] = location
+                    }
+                    if let local {
+                        if aliases[local.identifier] == nil { aliases[local.identifier] = remote.fingerprint }
+                    }
+                case .local(let local, _):
+                    if let fingerprint = local.fingerprint {
+                        let previous = localByFingerprint[fingerprint]
+                        if previous.map({ item.id < sections[$0.section].items[$0.item].id }) ?? true {
+                            localByFingerprint[fingerprint] = location
+                        }
+                    }
+                }
+            }
+        }
+        sourceLocations = locations
+        self.localFingerprintAliases = aliases
+        remoteLocationsByFingerprint = remoteByFingerprint
+        localLocationsByFingerprint = localByFingerprint
         let sourceSections = filter == .all && mediaFilter == .all ? sections : sections.compactMap { section in
             let items = section.items.filter { filter.includes($0) && mediaFilter.includes($0) }
             return items.isEmpty ? nil : MediaBrowserSection(month: section.month, items: items)
@@ -450,14 +472,16 @@ struct MediaBrowserSnapshot: Sendable {
 
         var indexesByID: [MediaBrowserItemID: Int] = [:]
         indexesByID.reserveCapacity(itemCount)
-        var flatIndex = 0
+        var references: [MediaBrowserPageReference] = []
+        references.reserveCapacity(itemCount)
         for section in sections {
             for item in section.items {
-                indexesByID[item.id] = flatIndex
-                flatIndex += 1
+                indexesByID[item.id] = references.count
+                references.append(MediaBrowserPageReference(item.id))
             }
         }
         itemIndexByID = indexesByID
+        pageReferences = references
     }
 
     var itemCount: Int { sectionOffsets.last ?? 0 }
@@ -468,6 +492,41 @@ struct MediaBrowserSnapshot: Sendable {
 
     var itemIDs: some Collection<MediaBrowserItemID> {
         itemIndexByID.keys
+    }
+
+    var orderedItemIDs: [MediaBrowserItemID] {
+        sections.flatMap { $0.items.map(\.id) }
+    }
+
+    func resolve(_ id: MediaBrowserItemID, preferring preferredID: MediaBrowserItemID? = nil) -> MediaBrowserItem? {
+        let location: ItemLocation?
+        if let exact = sourceLocations[id] {
+            location = exact
+        } else {
+            switch id {
+            case .local(let identifier):
+                guard let fingerprint = localFingerprintAliases[identifier],
+                      var remote = remoteLocationsByFingerprint[fingerprint] else { return nil }
+                if let preferredID, case .remote(let preferredFingerprint, _) = preferredID,
+                   preferredFingerprint == fingerprint,
+                   let preferred = sourceLocations[preferredID] {
+                    remote = preferred
+                }
+                let item = sourceSections[remote.section].items[remote.item]
+                guard case .remote(let reference, _) = item.backing else { return nil }
+                return MediaBrowserItem(
+                    kind: item.kind,
+                    creationDateMs: item.creationDateMs,
+                    localIdentifier: identifier,
+                    remote: reference,
+                    fileSize: item.fileSize
+                )
+            case .remote(let fingerprint, _):
+                location = localLocationsByFingerprint[fingerprint]
+            }
+        }
+        guard let location else { return nil }
+        return sourceSections[location.section].items[location.item]
     }
 
     func itemIDs(inSection sectionIndex: Int) -> [MediaBrowserItemID] {
@@ -549,20 +608,65 @@ struct MediaBrowserSnapshot: Sendable {
     }
 }
 
+struct MediaBrowserPageReference: Sendable {
+    private var resolvedID: MediaBrowserItemID
+    private let localIdentifier: String?
+
+    init(_ id: MediaBrowserItemID) {
+        resolvedID = id
+        if case .local(let identifier) = id { localIdentifier = identifier } else { localIdentifier = nil }
+    }
+
+    mutating func resolve(in snapshot: MediaBrowserSnapshot) -> MediaBrowserItem? {
+        let local = localIdentifier.flatMap { snapshot.resolve(.local($0), preferring: resolvedID) }
+        if let local { resolvedID = local.id }
+        return local ?? snapshot.resolve(resolvedID)
+    }
+}
+
+struct MediaBrowserPageOrder: Sendable {
+    let id = UUID()
+    private var references: [MediaBrowserPageReference]
+    var count: Int { references.count }
+
+    init(snapshot: MediaBrowserSnapshot) {
+        references = snapshot.pageReferences
+    }
+
+    func reconciling(with snapshot: MediaBrowserSnapshot) -> MediaBrowserPageOrder {
+        var next = self
+        for index in next.references.indices { _ = next.references[index].resolve(in: snapshot) }
+        return next
+    }
+
+    func item(at index: Int, in snapshot: MediaBrowserSnapshot) -> MediaBrowserItem? {
+        guard references.indices.contains(index) else { return nil }
+        var reference = references[index]
+        return reference.resolve(in: snapshot)
+    }
+}
+
 @MainActor
 final class MediaBrowserSession {
     private(set) var revision: UInt64 = 0
+    private(set) var isCurrent = false
     let selection = MediaBrowserSelection()
     var snapshot: MediaBrowserSnapshot { selection.snapshot }
 
     func replace(with snapshot: MediaBrowserSnapshot) {
         revision &+= 1
         selection.replaceSnapshot(snapshot)
+        isCurrent = true
+    }
+
+    func invalidate() {
+        isCurrent = false
     }
 
     func reset() {
         selection.exit()
         replace(with: .empty)
+        invalidate()
     }
 }
 
@@ -597,6 +701,4 @@ enum MediaBrowserActionKind: Hashable, Sendable {
         case .deleteRemote: return String(localized: "mediaBrowser.action.deleteRemote")
         }
     }
-
-    var isDestructive: Bool { self == .deleteLocal || self == .deleteRemote }
 }

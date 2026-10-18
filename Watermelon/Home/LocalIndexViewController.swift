@@ -18,12 +18,14 @@ final class LocalIndexViewController: UIViewController {
         case actionRebuild
     }
 
-    private struct ScopeSnapshot {
+    struct ScopeSnapshot: Sendable {
         let total: Int
         let indexed: Int
         let totalSizeBytes: Int64
         let lastUpdatedAt: Date?
     }
+
+    typealias SnapshotLoader = @Sendable () async -> ScopeSnapshot?
 
     private final class DiffableDataSource: UITableViewDiffableDataSource<SectionID, ItemID> {
         var headerTitle: ((SectionID) -> String?)?
@@ -41,8 +43,7 @@ final class LocalIndexViewController: UIViewController {
     }
 
     private let coordinator: LocalIndexBuildCoordinator
-    private let photoLibraryService: PhotoLibraryService
-    private let hashIndexRepository: ContentHashIndexRepository
+    private let snapshotLoader: SnapshotLoader
 
     private let tableView = UITableView(frame: .zero, style: .insetGrouped)
     private var dataSource: DiffableDataSource!
@@ -57,6 +58,15 @@ final class LocalIndexViewController: UIViewController {
     private var coordinatorObserverID: UUID?
     private let notificationObservers = NotificationObserverBag()
     private var lastObservedRunning = false
+    private var pendingBuildError: Error?
+    private lazy var foregroundActivity = AppForegroundActivity() { [weak self] active in
+        guard let self else { return }
+        if active {
+            self.applyCoordinatorState()
+            self.executionAvailabilityChanged()
+        }
+        else { self.cancelStatsLoad() }
+    }
 
     private lazy var closeBarButtonItem = UIBarButtonItem(
         systemItem: .close,
@@ -88,11 +98,13 @@ final class LocalIndexViewController: UIViewController {
     init(
         coordinator: LocalIndexBuildCoordinator,
         photoLibraryService: PhotoLibraryService,
-        hashIndexRepository: ContentHashIndexRepository
+        hashIndexRepository: ContentHashIndexRepository,
+        snapshotLoader: SnapshotLoader? = nil
     ) {
         self.coordinator = coordinator
-        self.photoLibraryService = photoLibraryService
-        self.hashIndexRepository = hashIndexRepository
+        self.snapshotLoader = snapshotLoader ?? {
+            await Self.loadGlobalSnapshot(repository: hashIndexRepository, photoLibraryService: photoLibraryService)
+        }
         super.init(nibName: nil, bundle: nil)
     }
 
@@ -134,14 +146,7 @@ final class LocalIndexViewController: UIViewController {
                 self?.executionAvailabilityChanged()
             }
         })
-        applyCoordinatorState()
-    }
-
-    override func viewWillAppear(_ animated: Bool) {
-        super.viewWillAppear(animated)
-        if !coordinator.isRunning {
-            reloadStats()
-        }
+        foregroundActivity.start()
     }
 
     private func configureTableView() {
@@ -284,6 +289,12 @@ final class LocalIndexViewController: UIViewController {
         let didFinish = lastObservedRunning && !nowRunning
         let isEdge = nowRunning != lastObservedRunning
         lastObservedRunning = nowRunning
+        if isEdge, nowRunning {
+            cancelStatsLoad()
+            pendingBuildError = nil
+        }
+        if didFinish { pendingBuildError = coordinator.lastError }
+        guard foregroundActivity.isActive else { return }
 
         navigationItem.rightBarButtonItem = nowRunning ? stopBarButtonItem : nil
 
@@ -299,16 +310,16 @@ final class LocalIndexViewController: UIViewController {
             if isEdge {
                 reconfigure([.actionIncremental, .actionRebuild])
             }
-            if isViewLoaded {
-                reloadStats()
-            }
-            if didFinish, let error = coordinator.lastError {
+            if let error = pendingBuildError {
+                pendingBuildError = nil
                 presentError(error)
             }
+            reloadStats()
         }
     }
 
     private func executionAvailabilityChanged() {
+        guard foregroundActivity.isActive else { return }
         reconfigure([.actionIncremental, .actionRebuild])
     }
 
@@ -323,17 +334,23 @@ final class LocalIndexViewController: UIViewController {
     }
 
     private func reloadStats() {
-        loadTask?.cancel()
-        let repository = hashIndexRepository
-        let photoLibraryService = photoLibraryService
+        guard foregroundActivity.isActive, !coordinator.isRunning else { return }
+        cancelStatsLoad()
+        let loader = snapshotLoader
+        hasLoadedStats = false
+        reconfigure([.actionIncremental, .actionRebuild])
         loadTask = Task { [weak self] in
-            let snapshot = await Self.loadGlobalSnapshot(
-                repository: repository,
-                photoLibraryService: photoLibraryService
-            )
-            guard !Task.isCancelled else { return }
-            self?.applyLoaded(snapshot: snapshot)
+            let snapshot = await loader()
+            guard !Task.isCancelled, let self,
+                  self.foregroundActivity.isActive, !self.coordinator.isRunning, let snapshot else { return }
+            self.loadTask = nil
+            self.applyLoaded(snapshot: snapshot)
         }
+    }
+
+    private func cancelStatsLoad() {
+        loadTask?.cancel()
+        loadTask = nil
     }
 
     private func applyLoaded(snapshot: ScopeSnapshot) {
@@ -348,16 +365,19 @@ final class LocalIndexViewController: UIViewController {
     private nonisolated static func loadGlobalSnapshot(
         repository: ContentHashIndexRepository,
         photoLibraryService: PhotoLibraryService
-    ) async -> ScopeSnapshot {
-        await withCancellableDetachedValue(priority: .userInitiated) {
+    ) async -> ScopeSnapshot? {
+        await withCancellableDetachedValue(priority: .userInitiated) { () -> ScopeSnapshot? in
+            guard !Task.isCancelled else { return nil }
             let allIDs = photoLibraryService.collectAssetIDs(query: .library(.all))
+            guard !Task.isCancelled else { return nil }
             let validRaw = (try? repository.fetchValidIndexedRows(assetIDs: allIDs)) ?? [:]
-
+            guard !Task.isCancelled else { return nil }
             let phAssets = photoLibraryService.fetchAssets(localIdentifiers: Set(validRaw.keys))
             var totalSize: Int64 = 0
             var indexedCount = 0
             var newest: Date?
             for asset in phAssets {
+                guard !Task.isCancelled else { return nil }
                 guard let row = validRaw[asset.localIdentifier] else { continue }
                 if let mtime = asset.modificationDate, mtime > row.updatedAt {
                     continue
@@ -401,16 +421,16 @@ final class LocalIndexViewController: UIViewController {
         alert.addAction(UIAlertAction(
             title: String(localized: "home.localIndex.confirmRebuildAction"),
             style: .destructive
-        ) { [weak self] _ in
-            guard let self else { return }
-            guard self.coordinator.start(mode: .rebuild, initialIndexed: self.indexedCount) else {
-                Task { @MainActor [weak self, weak alert] in
-                    await PresentationDismissalSequencer.waitUntilDismissed {
-                        alert?.presentingViewController != nil || alert?.viewIfLoaded?.window != nil
-                    }
-                    self?.presentStartUnavailable()
+        ) { [weak self, weak alert] _ in
+            Task { @MainActor [weak self, weak alert] in
+                await PresentationDismissalSequencer.waitUntilDismissed {
+                    alert?.presentingViewController != nil || alert?.viewIfLoaded?.window != nil
                 }
-                return
+                guard let self else { return }
+                guard self.coordinator.start(mode: .rebuild, initialIndexed: self.indexedCount) else {
+                    self.presentStartUnavailable()
+                    return
+                }
             }
         })
         present(alert, animated: ConsideringUser.animated)

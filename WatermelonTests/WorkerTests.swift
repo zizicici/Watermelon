@@ -78,7 +78,7 @@ final class WorkerTests: XCTestCase {
             forAssetIDs: ["a"],
             expectedScope: .albums(["x"])
         )
-        XCTAssertTrue(result.isEmpty)
+        XCTAssertTrue(result.changedMonths.isEmpty)
     }
 
     func testBrowserLocalSeedRequiresLoadedAllPhotosScope() async {
@@ -105,6 +105,25 @@ final class WorkerTests: XCTestCase {
 
     // MARK: - File-size scan write-back gate (Critical Invariant #2)
 
+    func testBrowserSeedRejectsCommittedIndexChangesBeforeNotificationDelivery() async throws {
+        let worker = makeWorker()
+        worker._testSeed(scope: .device(.all), payload: TestFixtures.initialPayload([
+            [TestFixtures.snapshot(id: "absent-from-photos")]
+        ]))
+        let before = await worker.browserLocalSeed(expectedScope: .device(.all))
+        XCTAssertNotNil(before)
+        let repository = ContentHashIndexRepository(databaseManager: databaseManager)
+        try repository.upsertAssetFingerprint(assetLocalIdentifier: "absent-from-photos",
+            assetFingerprint: Data([1]), resourceCount: 1, totalFileSizeBytes: 1, modificationDateMs: nil)
+        let stale = await worker.browserLocalSeed(expectedScope: .device(.all))
+        XCTAssertNil(stale)
+
+        _ = await worker.refreshLocalIndex(forAssetIDs: [], expectedScope: .device(.all))
+        let reconciled = await worker.browserLocalSeed(expectedScope: .device(.all))
+        XCTAssertNotNil(reconciled)
+        XCTAssertTrue(reconciled?.assets.isEmpty == true)
+    }
+
     func testWriteFileSizeIfIndexStable_writesWhenIndexUnchanged() async {
         let worker = makeWorker()
         let key = LibraryMonthKey(year: 2024, month: 5)
@@ -118,6 +137,7 @@ final class WorkerTests: XCTestCase {
             12345,
             for: key,
             sampledScope: sample.scope,
+            sampledGeneration: sample.generation,
             sampledAssetIDs: sample.ids
         )
         XCTAssertTrue(didWrite)
@@ -149,7 +169,8 @@ final class WorkerTests: XCTestCase {
         worker._testSeed(scope: .device(.videos), payload: TestFixtures.initialPayload([[]]))
         XCTAssertTrue(worker.localAssetIDs(for: month, expectedScope: .device(.photos)).isEmpty)
         let didWrite = await worker.writeFileSizeIfIndexStable(
-            12345, for: month, sampledScope: sample.scope, sampledAssetIDs: sample.ids
+            12345, for: month, sampledScope: sample.scope,
+            sampledGeneration: sample.generation, sampledAssetIDs: sample.ids
         )
         XCTAssertFalse(didWrite)
         XCTAssertNil(worker._testMonthFileSize(for: month))
@@ -239,6 +260,7 @@ final class WorkerTests: XCTestCase {
             999_999,
             for: key,
             sampledScope: sample.scope,
+            sampledGeneration: sample.generation,
             sampledAssetIDs: sample.ids
         )
         XCTAssertFalse(didWrite, "write-back must be skipped when scope changed mid-scan")
@@ -272,6 +294,7 @@ final class WorkerTests: XCTestCase {
             999_999,
             for: key,
             sampledScope: sample.scope,
+            sampledGeneration: sample.generation,
             sampledAssetIDs: sample.ids
         )
         XCTAssertTrue(didWrite, "unrelated month changes must not drop a stable month write-back")
@@ -299,6 +322,7 @@ final class WorkerTests: XCTestCase {
             999_999,
             for: key,
             sampledScope: sample.scope,
+            sampledGeneration: sample.generation,
             sampledAssetIDs: sample.ids
         )
         XCTAssertFalse(didWrite, "write-back must be skipped when this month's membership changed mid-scan")

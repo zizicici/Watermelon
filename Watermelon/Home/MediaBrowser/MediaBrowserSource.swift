@@ -61,6 +61,12 @@ struct MediaBrowserContent: Sendable {
     static let empty = MediaBrowserContent(sections: [])
 
     let sections: [MediaBrowserSection]
+    let localFingerprintAliases: [String: Data]
+
+    init(sections: [MediaBrowserSection], localFingerprintAliases: [String: Data] = [:]) {
+        self.sections = sections
+        self.localFingerprintAliases = localFingerprintAliases
+    }
 
     var itemCount: Int {
         sections.reduce(0) { $0 + $1.items.count }

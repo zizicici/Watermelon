@@ -25,8 +25,7 @@ enum LocalDownloadIndexPreflight {
     static func run(
         assetIDs: Set<String>,
         buildService: any LocalHashIndexBuilding,
-        iCloudPhotoBackupMode: ICloudPhotoBackupMode,
-        onReady: (Set<String>) -> Void
+        iCloudPhotoBackupMode: ICloudPhotoBackupMode
     ) async throws {
         try Task.checkCancellation()
         guard !assetIDs.isEmpty else { return }
@@ -34,7 +33,6 @@ enum LocalDownloadIndexPreflight {
             for: assetIDs, workerCount: 2, allowNetworkAccess: false,
             progressHandler: nil, tickHandler: nil
         )
-        onReady(initial.readyAssetIDs)
         try Task.checkCancellation()
         var result = initial
         if !initial.unavailableAssetIDs.isEmpty, iCloudPhotoBackupMode == .enable {
@@ -42,7 +40,6 @@ enum LocalDownloadIndexPreflight {
                 for: initial.unavailableAssetIDs, workerCount: 1, allowNetworkAccess: true,
                 progressHandler: nil, tickHandler: nil
             )
-            onReady(recovery.readyAssetIDs)
             try Task.checkCancellation()
             result = LocalHashIndexBuildResult(
                 requestedAssetIDs: initial.requestedAssetIDs,

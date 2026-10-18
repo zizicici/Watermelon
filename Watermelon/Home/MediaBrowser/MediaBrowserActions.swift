@@ -42,7 +42,6 @@ final class MediaBrowserActionRunner {
         let photoLibraryService: PhotoLibraryService
         let hashIndexRepository: ContentHashIndexRepository
         let localHashIndexBuildService: any LocalHashIndexBuilding
-        let localIndexChangePublisher: LocalIndexChangePublisher
         let allAccessibleAssetIDs: () async -> Set<String>
         // Single source of truth for local/remote/both — invalidated after a library change, queried for
         // upload success. Shared with every source so a mutation is reflected everywhere on the next reload.
@@ -68,6 +67,7 @@ final class MediaBrowserActionRunner {
     // True while a browser-initiated action/batch is mid-flight (distinct from a Home task via `isTaskActive`).
     // Lets the grid block a mode switch that would strand a running batch's HUD over unrelated content.
     var isActionRunning: Bool { isRunningAction }
+    var isLibraryTaskActive: Bool { env.appRuntimeFlags.isExecuting || env.isTaskActive() }
 
     // A live remote session is a hard prerequisite for upload/download; without one the action can only end in
     // a "not connected" error. Availability (viewer bar + batch bar) hides those actions when disconnected so
@@ -96,11 +96,7 @@ final class MediaBrowserActionRunner {
         }
     }
 
-    // `onChanged(dismiss:downloadedLocalID:)` reloads the grid; `dismiss: true` also closes the viewer
-    // (delete/upload jump back to the grid; download stays so the user keeps viewing the now-saved item).
-    // `downloadedLocalID` (download only) lets the still-open viewer flip the acted item to on-device so
-    // it stops offering Download.
-    func run(_ kind: MediaBrowserActionKind, item: MediaBrowserItem, source: MediaBrowserSource, from presenter: UIViewController, onChanged: @escaping @MainActor (_ dismiss: Bool, _ downloadedLocalID: String?) -> Void) {
+    func run(_ kind: MediaBrowserActionKind, item: MediaBrowserItem, source: MediaBrowserSource, from presenter: UIViewController, onChanged: @escaping @MainActor (_ dismiss: Bool) -> Void) {
         guard canRun(kind) else {
             // The action sheet was built when this action was runnable, but a task started (or another action
             // began) while it was open — tell the user instead of silently no-op'ing. (.share is always runnable.)
@@ -111,9 +107,9 @@ final class MediaBrowserActionRunner {
         case .share:
             beginShare(item, source: source, from: presenter)
         case .download:
-            runGated { await self.download(item, source: source, from: presenter, onChanged: onChanged) }
+            runGated { await self.download(item, from: presenter, onChanged: onChanged) }
         case .deleteLocal:
-            runGated { await self.deleteLocal(item, source: source, from: presenter, onChanged: onChanged) }
+            runGated { await self.deleteLocal(item, from: presenter, onChanged: onChanged) }
         case .upload:
             runGated { await self.upload(item, from: presenter, onChanged: onChanged) }
         case .deleteRemote:
@@ -210,7 +206,7 @@ final class MediaBrowserActionRunner {
 
     // MARK: - Download (save a remote-only item into the Photos library)
 
-    private func download(_ item: MediaBrowserItem, source: MediaBrowserSource, from presenter: UIViewController, onChanged: @escaping @MainActor (Bool, String?) -> Void) async {
+    private func download(_ item: MediaBrowserItem, from presenter: UIViewController, onChanged: @escaping @MainActor (Bool) -> Void) async {
         let status = await env.photoLibraryService.requestAuthorization()
         guard status == .authorized || status == .limited else {
             presentError(String(localized: "mediaBrowser.action.noPhotoAccess"), on: presenter); return
@@ -255,9 +251,8 @@ final class MediaBrowserActionRunner {
                 self.presentError(String(localized: "mediaBrowser.action.notConnected"), on: presenter)
                 return
             }
-            if let localID = currentLocal[fingerprint] {
-                self.env.presenceIndex.invalidate()
-                onChanged(false, localID)
+            if currentLocal[fingerprint] != nil {
+                onChanged(false)
                 return
             }
             let hud = HUD.show(String(localized: "mediaBrowser.action.saving"), on: presenter)
@@ -265,39 +260,19 @@ final class MediaBrowserActionRunner {
             // full set; for an incomplete one it's the resolvable subset (consent already given) → a new asset
             // with a different fingerprint. writeHashIndex records the actually-imported instances honestly.
             let instances = resolved.instances
-            let repo = self.env.hashIndexRepository
             do {
                 let restored = try await self.env.restoreService.restoreItems(
-                    items: [RestoreService.RestoreItemDescriptor(instances: instances, identity: fingerprint, creationDate: resolved.creationDate, isIncomplete: resolved.isIncomplete)],
+                    items: [RestoreService.RestoreItemDescriptor(instances: instances, identity: fingerprint, creationDate: resolved.creationDate)],
                     profile: profile,
                     password: password,
-                    onItemCompleted: { _, _, restoredItem in
-                        guard let restoredItem, !restoredItem.asset.indexWriteHandled else { return }
-                        // The asset is already imported into Photos here. A hash-index write failure must NOT
-                        // abort the restore or surface as a download failure — that would leave an unindexed
-                        // duplicate the user re-imports on a retry. Log and continue; the local hash-index
-                        // rebuild re-derives the row from the imported asset.
-                        do {
-                            try await Task.detached(priority: .utility) {
-                                try repo.writeHashIndex(
-                                    assetLocalIdentifier: restoredItem.asset.localIdentifier,
-                                    instances: restoredItem.asset.importedInstances
-                                )
-                            }.value
-                        } catch {
-                            actionLog.error("download: hash-index write failed for \(restoredItem.asset.localIdentifier, privacy: .public) (asset imported; index self-heals on next rebuild): \(String(describing: error), privacy: .public)")
-                        }
-                    }
+                    onItemCompleted: { _, _, _ in }
                 )
-                guard let localID = restored.first?.asset.localIdentifier else {
+                guard !restored.isEmpty else {
                     hud.dismiss(); self.presentError(String(localized: "mediaBrowser.action.error"), on: presenter); return
                 }
-                self.env.presenceIndex.invalidate()
+
                 hud.dismiss()
-                // A complete download flips the viewed item to on-device (it IS the same asset). An incomplete
-                // one imported a different asset (F′), so DON'T flip the remote record's badge — let the grid
-                // reload re-derive (a new local item appears; the remote record stays as-is).
-                onChanged(false, restored.first?.asset.isCompleteRestore == true ? localID : nil)
+                onChanged(false)
                 if self.isAlive(presenter) { HUD.flash(String(localized: "mediaBrowser.action.saved"), on: presenter) }
             } catch {
                 hud.dismiss()
@@ -310,17 +285,11 @@ final class MediaBrowserActionRunner {
     private func prepareDownloadIndex(on presenter: UIViewController) async -> Bool {
         let hud = HUD.show(String(localized: "home.execution.log.indexStatus"), on: presenter)
         defer { hud.dismiss() }
+        let assetIDs = await env.allAccessibleAssetIDs()
         do {
-            let assetIDs = await env.allAccessibleAssetIDs()
             try await LocalDownloadIndexPreflight.run(
-                assetIDs: assetIDs,
-                buildService: env.localHashIndexBuildService,
-                iCloudPhotoBackupMode: env.iCloudPhotoBackupMode(),
-                onReady: { assetIDs in
-                    guard !assetIDs.isEmpty else { return }
-                    self.env.localIndexChangePublisher.publish(.touched(assetIDs: assetIDs))
-                    self.env.presenceIndex.invalidate()
-                }
+                assetIDs: assetIDs, buildService: env.localHashIndexBuildService,
+                iCloudPhotoBackupMode: env.iCloudPhotoBackupMode()
             )
             return true
         } catch is CancellationError {
@@ -351,7 +320,7 @@ final class MediaBrowserActionRunner {
         let coordinator = env.backupCoordinator
         return await withCancellableDetachedValue(priority: .userInitiated) {
             let state = coordinator.currentRemoteSnapshotState(since: nil)
-            guard RemoteSnapshotOwnership.matches(
+            guard state.isAuthoritative, RemoteSnapshotOwnership.matches(
                 ownerProfileKey: state.profileKey,
                 expectedProfileKey: expectedProfileKey
             ) else { return nil }
@@ -434,7 +403,7 @@ final class MediaBrowserActionRunner {
     // legacy no-hash manifest leaves `resourceHash` empty, so a hash-only key would collapse distinct roles and
     // drop a complementary side (RestoreService avoids the same empty-hash trap). Pure + unit-testable.
     nonisolated static func dedupeResolvedDescriptors(_ descriptors: [RestoreService.RestoreItemDescriptor]) -> [RestoreService.RestoreItemDescriptor] {
-        struct Cluster { var identity: Data; var ids: Set<String>; var instances: [RemoteAssetResourceInstance]; var creationDate: Date?; var isIncomplete: Bool }
+        struct Cluster { var identity: Data; var ids: Set<String>; var instances: [RemoteAssetResourceInstance]; var creationDate: Date? }
         var clusters: [Cluster] = []
         for descriptor in descriptors {
             let ids = Set(descriptor.instances.map(\.id))
@@ -442,29 +411,27 @@ final class MediaBrowserActionRunner {
             if let keep = overlapping.first {
                 clusters[keep].ids.formUnion(ids)
                 clusters[keep].instances += descriptor.instances
-                clusters[keep].isIncomplete = clusters[keep].isIncomplete || descriptor.isIncomplete
                 clusters[keep].creationDate = clusters[keep].creationDate ?? descriptor.creationDate
                 for idx in overlapping.dropFirst().reversed() {   // a descriptor bridging two clusters folds them together
                     clusters[keep].ids.formUnion(clusters[idx].ids)
                     clusters[keep].instances += clusters[idx].instances
-                    clusters[keep].isIncomplete = clusters[keep].isIncomplete || clusters[idx].isIncomplete
                     clusters[keep].creationDate = clusters[keep].creationDate ?? clusters[idx].creationDate
                     clusters.remove(at: idx)
                 }
             } else {
-                clusters.append(Cluster(identity: descriptor.identity, ids: ids, instances: descriptor.instances, creationDate: descriptor.creationDate, isIncomplete: descriptor.isIncomplete))
+                clusters.append(Cluster(identity: descriptor.identity, ids: ids, instances: descriptor.instances, creationDate: descriptor.creationDate))
             }
         }
         return clusters.map { cluster in
             var seen = Set<String>()
             let instances = cluster.instances.filter { seen.insert($0.id).inserted }
-            return RestoreService.RestoreItemDescriptor(instances: instances, identity: cluster.identity, creationDate: cluster.creationDate, isIncomplete: cluster.isIncomplete)
+            return RestoreService.RestoreItemDescriptor(instances: instances, identity: cluster.identity, creationDate: cluster.creationDate)
         }
     }
 
     // MARK: - Delete from device (PhotoKit shows its own system confirmation)
 
-    private func deleteLocal(_ item: MediaBrowserItem, source: MediaBrowserSource, from presenter: UIViewController, onChanged: @escaping @MainActor (Bool, String?) -> Void) async {
+    private func deleteLocal(_ item: MediaBrowserItem, from presenter: UIViewController, onChanged: @escaping @MainActor (Bool) -> Void) async {
         guard let localID = item.localIdentifier else { return }
         // App-wide mutex (scope): a local delete mutates the library + hash index, so exclude a concurrent backup.
         await withExecutionLease(on: presenter) {
@@ -488,8 +455,7 @@ final class MediaBrowserActionRunner {
                 // Genuinely gone from the library: still purge the stale hash-index row so presence reverts
                 // to remote-only (re-offering Download) instead of forever reporting `.both`.
                 try? self.env.hashIndexRepository.deleteIndexEntries(assetIDs: [localID])
-                self.env.presenceIndex.invalidate()
-                onChanged(true, nil)
+                onChanged(true)
                 return
             }
             // `.both` justified Delete-from-Device by "the backup holds these bytes" — re-prove that at the
@@ -502,7 +468,7 @@ final class MediaBrowserActionRunner {
                 }
                 guard matches else {
                     self.presentError(String(localized: "mediaBrowser.action.error"), on: presenter)
-                    onChanged(false, nil)
+                    onChanged(false)
                     return
                 }
             }
@@ -514,11 +480,9 @@ final class MediaBrowserActionRunner {
             }
             do {
                 try await self.performLibraryChange { PHAssetChangeRequest.deleteAssets(assets) }
-                // The local hash index isn't purged on PHAsset deletion — drop the row now so presence doesn't
-                // keep reporting `.both`, and invalidate the browser's fp→localID map.
+                // Keep persistent fingerprints from referring to deleted Photos assets.
                 try? self.env.hashIndexRepository.deleteIndexEntries(assetIDs: [localID])
-                self.env.presenceIndex.invalidate()
-                onChanged(true, nil)
+                onChanged(true)
             } catch {
                 // The system delete sheet handles cancellation; only surface genuine failures.
                 let ns = error as NSError
@@ -540,7 +504,7 @@ final class MediaBrowserActionRunner {
 
     // MARK: - Upload (back up an on-device-only item to the connected remote)
 
-    private func upload(_ item: MediaBrowserItem, from presenter: UIViewController, onChanged: @escaping @MainActor (Bool, String?) -> Void) async {
+    private func upload(_ item: MediaBrowserItem, from presenter: UIViewController, onChanged: @escaping @MainActor (Bool) -> Void) async {
         guard let localID = item.localIdentifier else { return }
         let remoteSession = env.appSession.snapshot
         guard let profile = remoteSession.activeProfile,
@@ -574,20 +538,14 @@ final class MediaBrowserActionRunner {
                     // non-authoritatively), or no post-upload presence build could commit: the captured profile's
                     // backup can't be confirmed. Reload instead of misreporting it — the positive branch must NOT
                     // trust an `isBackedUp` that a profile switch repointed at another node (mirrors the batch guard).
-                    onChanged(true, nil)
+                    onChanged(true)
                 } else if backedUp == true {
-                    // The upload added the asset to the remote — announce it so Home (and any other presence index)
-                    // reconciles its rows/counts, not just this browser (Home defers until the execution lease releases).
-                    NotificationCenter.default.post(name: .RemoteLibrarySnapshotDidChange, object: nil)
-                    onChanged(true, nil)   // now on the remote → reload grid + return
+                    onChanged(true)   // now on the remote → reload grid + return
                 } else {
                     self.presentError(String(localized: "mediaBrowser.action.uploadSkipped"), on: presenter)
                 }
             } catch {
                 hud.dismiss()
-                // backupAssets may have committed month flushes into the shared cache before failing (the
-                // upload pipeline itself posts nothing) — announce them so Home's remote view isn't left stale.
-                NotificationCenter.default.post(name: .RemoteLibrarySnapshotDidChange, object: nil)
                 self.presentError(String(localized: "mediaBrowser.action.error"), on: presenter)
             }
         }
@@ -621,7 +579,6 @@ final class MediaBrowserActionRunner {
     // mid-build — the committed sets/flag would then still describe the PRE-upload build and misreport the
     // verdict as skipped. Retry so the verdict reads a build that postdates the upload; false = bail.
     private func refreshPresenceForVerdict() async -> Bool {
-        env.presenceIndex.invalidateRemoteFacts()
         for _ in 0..<3 {
             if await env.presenceIndex.refresh(notifyOnCommit: false) { return true }
         }
@@ -657,7 +614,7 @@ final class MediaBrowserActionRunner {
 
     // MARK: - Delete from backup (irreversible; requires confirmation)
 
-    private func deleteRemote(_ item: MediaBrowserItem, from presenter: UIViewController, onChanged: @escaping @MainActor (Bool, String?) -> Void) async {
+    private func deleteRemote(_ item: MediaBrowserItem, from presenter: UIViewController, onChanged: @escaping @MainActor (Bool) -> Void) async {
         guard let fingerprint = item.fingerprint, let month = item.remoteMonth else {
             presentError(String(localized: "mediaBrowser.action.error"), on: presenter); return
         }
@@ -688,7 +645,7 @@ final class MediaBrowserActionRunner {
         // not a confirmed absence — fail visibly rather than reconcile an un-executed delete as done.
         switch await env.presenceIndex.remoteLivePresence(fingerprint) {
         case .absent:
-            onChanged(true, nil)
+            onChanged(true)
             return
         case .unknown:
             presentError(String(localized: "mediaBrowser.action.notConnected"), on: presenter)
@@ -705,10 +662,8 @@ final class MediaBrowserActionRunner {
             let hud = HUD.show(String(localized: "mediaBrowser.action.deletingRemote"), on: presenter)
             do {
                 try await self.env.backupCoordinator.deleteRemoteAsset(profile: profile, password: password, month: month, assetFingerprint: fingerprint)
-                // The asset left the remote — rebuild presence so local/merged views drop `.both`/stale actions.
-                self.env.presenceIndex.invalidateRemoteFacts()
                 hud.dismiss()
-                onChanged(true, nil)
+                onChanged(true)
             } catch {
                 hud.dismiss()
                 self.presentError(String(localized: "mediaBrowser.action.error"), on: presenter)
@@ -719,10 +674,7 @@ final class MediaBrowserActionRunner {
     // MARK: - Batch / multi-target operations (grid multi-select + viewer "delete all")
 
     // Delete-all for a single viewer item (removes it from every place it lives). Same core as the batch delete.
-    // `onChanged` receives whether a remote delete failed (so the viewer can stay open, keeping the error visible)
-    // plus the local IDs whose device copies committed — the kept-open viewer must reproject those remote-only
-    // instead of re-offering Delete Local for an asset this very action already removed.
-    func runDeleteAll(_ item: MediaBrowserItem, from presenter: UIViewController, onChanged: @escaping @MainActor (_ hadFailures: Bool, _ deletedDeviceIDs: Set<String>) -> Void) {
+    func runDeleteAll(_ item: MediaBrowserItem, from presenter: UIViewController, onChanged: @escaping @MainActor (_ hadFailures: Bool) -> Void) {
         guard canRun(.deleteRemote) else {
             presentError(String(localized: "mediaBrowser.action.taskInProgress"), on: presenter); return
         }
@@ -738,7 +690,7 @@ final class MediaBrowserActionRunner {
         switch action {
         case .upload: runGated { await self.batchUpload(items, from: presenter, onChanged: onChanged) }
         case .download: runGated { await self.batchDownload(items, from: presenter, onChanged: onChanged) }
-        case .delete: runGated { await self.performDeletion(items: items, from: presenter, onChanged: { _, _ in onChanged() }) }
+        case .delete: runGated { await self.performDeletion(items: items, from: presenter, onChanged: { _ in onChanged() }) }
         }
     }
 
@@ -746,7 +698,7 @@ final class MediaBrowserActionRunner {
     // purge), on-remote ones from the backup (looped — no batch delete API). A backup removal is involved → confirm
     // first (device-only deletes are confirmed by PhotoKit's own system sheet). Device is deleted first so a cancel
     // at the system sheet leaves the backup intact.
-    private func performDeletion(items: [MediaBrowserItem], from presenter: UIViewController, onChanged: @escaping @MainActor (_ hadFailures: Bool, _ deletedDeviceIDs: Set<String>) -> Void) async {
+    private func performDeletion(items: [MediaBrowserItem], from presenter: UIViewController, onChanged: @escaping @MainActor (_ hadFailures: Bool) -> Void) async {
         let deviceItems = items.filter(\.isDeviceDeletable)
         let remoteItems = items.filter(\.isRemoteDeletable)
         guard !deviceItems.isEmpty || !remoteItems.isEmpty else { return }
@@ -767,9 +719,6 @@ final class MediaBrowserActionRunner {
         await withExecutionLease(on: presenter) {
             let hud = HUD.show(String(localized: "mediaBrowser.action.deletingRemote"), on: presenter)
             defer { hud.dismiss() }
-            // The remote loop emits many snapshot changes; coalesce their observer notifications until resume.
-            self.env.presenceIndex.suspendUpstreamRefresh()
-            defer { self.env.presenceIndex.resumeUpstreamRefresh() }
             let retainedFingerprints = Self.retainedDeviceDeleteFingerprints(deviceItems)
             var acceptedRiskFingerprints = Set<Data>()
             if !retainedFingerprints.isEmpty {
@@ -791,9 +740,6 @@ final class MediaBrowserActionRunner {
             }
             // `.both` device copies a limited-access fetch couldn't reach — their backup must be preserved (below).
             var unresolvedDeviceIDs = Set<String>()
-            // Device copies this action removed (or confirmed gone) — reported to the caller so a kept-open
-            // viewer reprojects them even when the remote leg fails.
-            var deletedDeviceIDs = Set<String>()
             if !deviceItems.isEmpty {
                 let localIDs = deviceItems.compactMap(\.localIdentifier)
                 let assets = PHAsset.fetchAssets(withLocalIdentifiers: localIDs, options: PhotoLibraryService.makeAssetFetchOptions())
@@ -812,7 +758,7 @@ final class MediaBrowserActionRunner {
                         guard matches else {
                             self.presentError(String(localized: "mediaBrowser.action.error"), on: presenter)
                             // hadFailures: a delete-all viewer must stay open with the error; the reload reprojects.
-                            onChanged(true, [])
+                            onChanged(true)
                             return
                         }
                     }
@@ -856,7 +802,6 @@ final class MediaBrowserActionRunner {
                     }
                 }
                 try? self.env.hashIndexRepository.deleteIndexEntries(assetIDs: purgeIDs)
-                deletedDeviceIDs = Set(purgeIDs)
             }
 
             // Any device deletions above already happened; still fall through to the final reconcile so the grid
@@ -911,7 +856,6 @@ final class MediaBrowserActionRunner {
                         completed += 1
                         hud.update(self.deletingProgressText(completed, remoteItems.count))
                     }
-                    NotificationCenter.default.post(name: .RemoteLibrarySnapshotDidChange, object: nil)
                     // Surface a partial failure (the single-item delete does too) so the user isn't left thinking
                     // every backup item was removed when some remote deletes errored.
                     if failed > 0 {
@@ -928,12 +872,7 @@ final class MediaBrowserActionRunner {
                 }
             }
 
-            if deviceItems.isEmpty {
-                self.env.presenceIndex.invalidateRemoteFacts()
-            } else {
-                self.env.presenceIndex.invalidateAllFacts()
-            }
-            onChanged(remoteDeleteFailed, deletedDeviceIDs)
+            onChanged(remoteDeleteFailed)
         }
     }
 
@@ -976,9 +915,6 @@ final class MediaBrowserActionRunner {
                 self.presentError(String(localized: "mediaBrowser.action.notConnected"), on: presenter)
                 return
             }
-            // Coalesce presence invalidation notifications from lease lifecycle and snapshot posts.
-            self.env.presenceIndex.suspendUpstreamRefresh()
-            defer { self.env.presenceIndex.resumeUpstreamRefresh() }
             let hud = HUD.show(String.localizedStringWithFormat(String(localized: "mediaBrowser.batch.uploading"), localIDs.count), on: presenter)
             do {
                 _ = try await self.env.backupCoordinator.backupAssets(
@@ -998,13 +934,11 @@ final class MediaBrowserActionRunner {
                     return
                 }
                 if backedUp == localIDs.count {
-                    NotificationCenter.default.post(name: .RemoteLibrarySnapshotDidChange, object: nil)
                     onChanged()
                     if self.isAlive(presenter) {
                         HUD.flash(String.localizedStringWithFormat(String(localized: "mediaBrowser.batch.uploaded"), backedUp), on: presenter)
                     }
                 } else if backedUp > 0 {
-                    NotificationCenter.default.post(name: .RemoteLibrarySnapshotDidChange, object: nil)
                     onChanged()
                     // Skipped items are NOT on the backup — an alert, not a success flash.
                     self.presentError(
@@ -1016,9 +950,6 @@ final class MediaBrowserActionRunner {
                 }
             } catch {
                 hud.dismiss()
-                // Months committed by incremental flush before the failure are already in the shared cache; the
-                // upload pipeline posts nothing, so announce them here — else Home stays stale until the next sync.
-                NotificationCenter.default.post(name: .RemoteLibrarySnapshotDidChange, object: nil)
                 self.presentError(String(localized: "mediaBrowser.action.error"), on: presenter)
             }
         }
@@ -1061,7 +992,7 @@ final class MediaBrowserActionRunner {
         // racing the batch must not resolve another node's paths against these creds (see manifestInstances).
         let resolved: [(fingerprint: Data, instances: [RemoteAssetResourceInstance], isIncomplete: Bool, creationDate: Date?)] = await withCancellableDetachedValue(priority: .userInitiated) {
             let state = coordinator.currentRemoteSnapshotState(since: nil)
-            guard RemoteSnapshotOwnership.matches(
+            guard state.isAuthoritative, RemoteSnapshotOwnership.matches(
                 ownerProfileKey: state.profileKey,
                 expectedProfileKey: expectedProfileKey
             ) else { return [] }
@@ -1110,18 +1041,16 @@ final class MediaBrowserActionRunner {
             }
             let pendingRestore = toRestore.filter { currentLocal[$0.fingerprint] == nil }
             guard !pendingRestore.isEmpty else {
-                self.env.presenceIndex.invalidate()
                 onChanged()
                 return
             }
             let hud = HUD.show(self.downloadingProgressText(0, pendingRestore.count), on: presenter)
             // Selection was deduped from stale item metadata; collapse any descriptors that the fresh snapshot
             // resolved to the same (or a subsumed) resource set so a snapshot change can't import one asset twice.
-            let descriptors = Self.dedupeResolvedDescriptors(pendingRestore.map { RestoreService.RestoreItemDescriptor(instances: $0.instances, identity: $0.fingerprint, creationDate: $0.creationDate, isIncomplete: $0.isIncomplete) })
+            let descriptors = Self.dedupeResolvedDescriptors(pendingRestore.map { RestoreService.RestoreItemDescriptor(instances: $0.instances, identity: $0.fingerprint, creationDate: $0.creationDate) })
             guard !descriptors.isEmpty else {
                 hud.dismiss(); self.presentError(String(localized: "mediaBrowser.action.error"), on: presenter); return
             }
-            let repo = self.env.hashIndexRepository
             let total = descriptors.count
             let savedCount = Counter()
             do {
@@ -1129,34 +1058,16 @@ final class MediaBrowserActionRunner {
                     items: descriptors, profile: profile, password: password,
                     onItemCompleted: { index, _, restoredItem in
                         await MainActor.run { hud.update(self.downloadingProgressText(index, total)) }
-                        guard let restoredItem else { return }
-                        savedCount.increment()
-                        guard !restoredItem.asset.indexWriteHandled else { return }
-                        // As in the single download: a hash-index write failure must not fail the restore (the
-                        // asset is already imported; the index self-heals on the next rebuild).
-                        do {
-                            try await Task.detached(priority: .utility) {
-                                try repo.writeHashIndex(
-                                    assetLocalIdentifier: restoredItem.asset.localIdentifier,
-                                    instances: restoredItem.asset.importedInstances
-                                )
-                            }.value
-                        } catch {
-                            actionLog.error("batch download: hash-index write failed for \(restoredItem.asset.localIdentifier, privacy: .public): \(String(describing: error), privacy: .public)")
-                        }
+                        if restoredItem != nil { savedCount.increment() }
                     }
                 )
-                self.env.presenceIndex.invalidate()
                 hud.dismiss()
-                // No .RemoteLibrarySnapshotDidChange here: a download adds LOCAL assets and changes no remote facts
-                // (matches the single-download path). Grid refresh comes via onChanged; presence via invalidate().
                 onChanged()
                 if self.isAlive(presenter) { HUD.flash(String(localized: "mediaBrowser.action.saved"), on: presenter) }
             } catch {
                 // restoreItems is fail-fast: items before the failing one are already imported and indexed.
                 // Reconcile the grid (their tiles must flip, the stale selection must clear) and report the
                 // partial count — a bare "error" would read as nothing saved and invite a duplicating retry.
-                self.env.presenceIndex.invalidate()
                 hud.dismiss()
                 let saved = savedCount.current
                 if saved > 0 {

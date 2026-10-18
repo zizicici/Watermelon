@@ -32,7 +32,7 @@ final class MergedMediaSource: MediaBrowserSource, @unchecked Sendable {
             return .cancelled
         }
         async let remote = remoteSource.load(projection: projection)
-        async let local = localSource.loadUsingCurrentPresence(
+        async let local = localSource.loadLocalProjection(
             excludingBackedUpFingerprints: projection.backedUpFingerprints,
             monthGroupingTimeZone: projection.monthGroupingTimeZone,
             includeFileSizes: includeFileSizes
@@ -64,7 +64,7 @@ final class MergedMediaSource: MediaBrowserSource, @unchecked Sendable {
             startedAt: childrenStartedAt,
             details: "localOnly=\(localCount) remote=\(remoteCount) output=\(sections.reduce(0) { $0 + $1.items.count }) monthCalcs=0 childrenMs=\(String(format: "%.1f", childrenMs)) mergeMs=\(String(format: "%.1f", mergeMs))"
         )
-        return .loaded(MediaBrowserContent(sections: sections))
+        return .loaded(MediaBrowserContent(sections: sections, localFingerprintAliases: localContent.localFingerprintAliases))
     }
 
     static func mergePrepared(

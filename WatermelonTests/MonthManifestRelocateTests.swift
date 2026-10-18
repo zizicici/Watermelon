@@ -172,10 +172,11 @@ final class MonthManifestRelocateTests: XCTestCase {
         let service = RemoteIndexSyncService()
 
         do {
-            try await service.verifyMonth(
+            _ = service.snapshotCache.claimIfUnowned(profileKey: service.snapshotCache.currentProfileKey() ?? "verify-test")
+            try await MonthManifestStore.verifyMonth(
                 client: client, basePath: basePath, month: LibraryMonthKey(year: year, month: month),
-                layout: .lite, assertOwnership: .uniform({})
-            )
+                layout: .lite, assertOwnership: .uniform({}),
+                snapshotObserver: service.snapshotCache.snapshotObserver(profileKey: service.snapshotCache.currentProfileKey() ?? "verify-test"))
             XCTFail("an owned verify on a directory-valued canonical slot must fail closed")
         } catch let error as LiteRepoError {
             XCTAssertEqual(error, .existingLiteManifestConflict(month: "2024-03"))
@@ -193,10 +194,11 @@ final class MonthManifestRelocateTests: XCTestCase {
         await client.seedDirectory(litePath)
         let service = RemoteIndexSyncService()
 
-        try await service.verifyMonth(
+        _ = service.snapshotCache.claimIfUnowned(profileKey: service.snapshotCache.currentProfileKey() ?? "verify-test")
+        try await MonthManifestStore.verifyMonth(
             client: client, basePath: basePath, month: LibraryMonthKey(year: year, month: month),
-            layout: .lite, assertOwnership: nil
-        )
+            layout: .lite, assertOwnership: nil,
+            snapshotObserver: service.snapshotCache.snapshotObserver(profileKey: service.snapshotCache.currentProfileKey() ?? "verify-test"))
         let uploaded = await client.uploadedPaths
         XCTAssertTrue(uploaded.isEmpty, "a read-only verify performs no remote mutation over the directory slot")
     }
@@ -553,7 +555,6 @@ final class MonthManifestRelocateTests: XCTestCase {
             TestFixtures.remoteResource(year: year, month: month, contentHash: Data([0xEF]), fileName: "c.jpg")
         )
 
-        let finalPath = liteLayout.manifestAbsolutePath(basePath: basePath, year: year, month: month)
         await client.enqueueDownloadError(RemoteErrorFixtures.notFound)
         await client.enqueueDownloadError(RemoteErrorFixtures.notFound)
 
@@ -1524,10 +1525,11 @@ final class MonthManifestRelocateTests: XCTestCase {
         await client.seedFile(path: litePath, data: try makeLegacyManifestData())
 
         let service = RemoteIndexSyncService()
-        try await service.verifyMonth(
+        _ = service.snapshotCache.claimIfUnowned(profileKey: service.snapshotCache.currentProfileKey() ?? "verify-test")
+        try await MonthManifestStore.verifyMonth(
             client: client, basePath: basePath, month: LibraryMonthKey(year: year, month: month),
-            layout: .lite, assertOwnership: .uniform({})
-        )
+            layout: .lite, assertOwnership: .uniform({}),
+            snapshotObserver: service.snapshotCache.snapshotObserver(profileKey: service.snapshotCache.currentProfileKey() ?? "verify-test"))
 
         let flushedData = await client.fileData(path: litePath)
         let flushed = try XCTUnwrap(
@@ -1544,10 +1546,11 @@ final class MonthManifestRelocateTests: XCTestCase {
         await client.seedFile(path: litePath, data: try makeLegacyManifestData())
 
         let service = RemoteIndexSyncService()
-        try await service.verifyMonth(
+        _ = service.snapshotCache.claimIfUnowned(profileKey: service.snapshotCache.currentProfileKey() ?? "verify-test")
+        try await MonthManifestStore.verifyMonth(
             client: client, basePath: basePath, month: LibraryMonthKey(year: year, month: month),
-            layout: .lite, assertOwnership: nil
-        )
+            layout: .lite, assertOwnership: nil,
+            snapshotObserver: service.snapshotCache.snapshotObserver(profileKey: service.snapshotCache.currentProfileKey() ?? "verify-test"))
 
         let uploaded = await client.uploadedPaths
         XCTAssertTrue(uploaded.isEmpty, "a read-only Lite verify must never push a schema upgrade")
@@ -1572,19 +1575,20 @@ final class MonthManifestRelocateTests: XCTestCase {
 
         let service = RemoteIndexSyncService()
         // Seed a STALE cache (A) for the month holding a different resource than the current manifest.
-        service.replaceCachedMonth(
+        service.snapshotCache.replaceMonth(
             monthKey,
             resources: [TestFixtures.remoteResource(year: year, month: month, contentHash: Data([0xA1]), fileName: "stale.jpg")],
             assets: [],
-            links: [],
-            expectedProfileKey: nil
+            assetResourceLinks: [],
+            onlyIfOwnedBy: nil
         )
 
-        try await service.verifyMonth(
-            client: client, basePath: basePath, month: monthKey, layout: .lite, assertOwnership: .uniform({})
-        )
+        _ = service.snapshotCache.claimIfUnowned(profileKey: service.snapshotCache.currentProfileKey() ?? "verify-test")
+        try await MonthManifestStore.verifyMonth(
+            client: client, basePath: basePath, month: monthKey, layout: .lite, assertOwnership: .uniform({}),
+            snapshotObserver: service.snapshotCache.snapshotObserver(profileKey: service.snapshotCache.currentProfileKey() ?? "verify-test"))
 
-        let resources = service.fullSnapshot().resources
+        let resources = service.snapshotCache.current().resources
         XCTAssertTrue(
             resources.contains { $0.fileName == "bB.jpg" },
             "a verify that prunes nothing must still publish the current manifest to the cache"
@@ -1602,19 +1606,20 @@ final class MonthManifestRelocateTests: XCTestCase {
         let monthKey = LibraryMonthKey(year: year, month: month)
         let service = RemoteIndexSyncService()
         let fp = Data([0xFA])
-        service.replaceCachedMonth(
+        service.snapshotCache.replaceMonth(
             monthKey,
             resources: [TestFixtures.remoteResource(year: year, month: month, contentHash: Data([0xAA]), fileName: "a.jpg")],
             assets: [TestFixtures.remoteAsset(year: year, month: month, fingerprint: fp)],
-            links: [TestFixtures.remoteLink(year: year, month: month, assetFingerprint: fp, resourceHash: Data([0xAA]))],
-            expectedProfileKey: nil
+            assetResourceLinks: [TestFixtures.remoteLink(year: year, month: month, assetFingerprint: fp, resourceHash: Data([0xAA]))],
+            onlyIfOwnedBy: nil
         )
-        XCTAssertNotNil(service.remoteMonthRawData(for: monthKey), "precondition: the stale cache holds the month")
+        XCTAssertNotNil(service.snapshotCache.monthRawData(for: monthKey), "precondition: the stale cache holds the month")
 
         do {
-            try await service.verifyMonth(
-                client: client, basePath: basePath, month: monthKey, layout: .lite, assertOwnership: .uniform({})
-            )
+            _ = service.snapshotCache.claimIfUnowned(profileKey: service.snapshotCache.currentProfileKey() ?? "verify-test")
+            try await MonthManifestStore.verifyMonth(
+                client: client, basePath: basePath, month: monthKey, layout: .lite, assertOwnership: .uniform({}),
+                snapshotObserver: service.snapshotCache.snapshotObserver(profileKey: service.snapshotCache.currentProfileKey() ?? "verify-test"))
             XCTFail("an owned verify of an absent canonical must fail closed")
         } catch {
             let ns = error as NSError
@@ -1622,7 +1627,7 @@ final class MonthManifestRelocateTests: XCTestCase {
         }
 
         XCTAssertNil(
-            service.remoteMonthRawData(for: monthKey),
+            service.snapshotCache.monthRawData(for: monthKey),
             "owned verify proving the canonical absent must evict the stale cached month"
         )
     }
@@ -1637,19 +1642,20 @@ final class MonthManifestRelocateTests: XCTestCase {
         await client.seedFile(path: litePath, data: Data([0x00, 0x01, 0x02, 0x03]))
         let service = RemoteIndexSyncService()
         let fp = Data([0xFB])
-        service.replaceCachedMonth(
+        service.snapshotCache.replaceMonth(
             monthKey,
             resources: [TestFixtures.remoteResource(year: year, month: month, contentHash: Data([0xBB]), fileName: "b.jpg")],
             assets: [TestFixtures.remoteAsset(year: year, month: month, fingerprint: fp)],
-            links: [TestFixtures.remoteLink(year: year, month: month, assetFingerprint: fp, resourceHash: Data([0xBB]))],
-            expectedProfileKey: nil
+            assetResourceLinks: [TestFixtures.remoteLink(year: year, month: month, assetFingerprint: fp, resourceHash: Data([0xBB]))],
+            onlyIfOwnedBy: nil
         )
-        XCTAssertNotNil(service.remoteMonthRawData(for: monthKey), "precondition: the stale cache holds the month")
+        XCTAssertNotNil(service.snapshotCache.monthRawData(for: monthKey), "precondition: the stale cache holds the month")
 
         do {
-            try await service.verifyMonth(
-                client: client, basePath: basePath, month: monthKey, layout: .lite, assertOwnership: .uniform({})
-            )
+            _ = service.snapshotCache.claimIfUnowned(profileKey: service.snapshotCache.currentProfileKey() ?? "verify-test")
+            try await MonthManifestStore.verifyMonth(
+                client: client, basePath: basePath, month: monthKey, layout: .lite, assertOwnership: .uniform({}),
+                snapshotObserver: service.snapshotCache.snapshotObserver(profileKey: service.snapshotCache.currentProfileKey() ?? "verify-test"))
             XCTFail("an owned verify of an invalid canonical must fail closed")
         } catch {
             let ns = error as NSError
@@ -1658,7 +1664,7 @@ final class MonthManifestRelocateTests: XCTestCase {
         }
 
         XCTAssertNil(
-            service.remoteMonthRawData(for: monthKey),
+            service.snapshotCache.monthRawData(for: monthKey),
             "owned verify proving the canonical invalid must evict the stale cached month"
         )
     }
@@ -1673,19 +1679,20 @@ final class MonthManifestRelocateTests: XCTestCase {
         await client.enqueueDownloadError(RemoteErrorFixtures.notFound)
         let service = RemoteIndexSyncService()
         let fp = Data([0xFC])
-        service.replaceCachedMonth(
+        service.snapshotCache.replaceMonth(
             monthKey,
             resources: [TestFixtures.remoteResource(year: year, month: month, contentHash: Data([0xBB]), fileName: "b.jpg")],
             assets: [TestFixtures.remoteAsset(year: year, month: month, fingerprint: fp)],
-            links: [TestFixtures.remoteLink(year: year, month: month, assetFingerprint: fp, resourceHash: Data([0xBB]))],
-            expectedProfileKey: nil
+            assetResourceLinks: [TestFixtures.remoteLink(year: year, month: month, assetFingerprint: fp, resourceHash: Data([0xBB]))],
+            onlyIfOwnedBy: nil
         )
-        XCTAssertNotNil(service.remoteMonthRawData(for: monthKey), "precondition: the stale cache holds the month")
+        XCTAssertNotNil(service.snapshotCache.monthRawData(for: monthKey), "precondition: the stale cache holds the month")
 
         do {
-            try await service.verifyMonth(
-                client: client, basePath: basePath, month: monthKey, layout: .lite, assertOwnership: .uniform({})
-            )
+            _ = service.snapshotCache.claimIfUnowned(profileKey: service.snapshotCache.currentProfileKey() ?? "verify-test")
+            try await MonthManifestStore.verifyMonth(
+                client: client, basePath: basePath, month: monthKey, layout: .lite, assertOwnership: .uniform({}),
+                snapshotObserver: service.snapshotCache.snapshotObserver(profileKey: service.snapshotCache.currentProfileKey() ?? "verify-test"))
             XCTFail("an owned verify whose canonical download not-founds must fail closed")
         } catch {
             let ns = error as NSError
@@ -1693,7 +1700,7 @@ final class MonthManifestRelocateTests: XCTestCase {
         }
 
         XCTAssertNil(
-            service.remoteMonthRawData(for: monthKey),
+            service.snapshotCache.monthRawData(for: monthKey),
             "a clear download not-found must evict the stale cached month like a metadata-nil canonical"
         )
     }
@@ -1708,19 +1715,20 @@ final class MonthManifestRelocateTests: XCTestCase {
         await client.enqueueDownloadError(RemoteErrorFixtures.retryable)
         let service = RemoteIndexSyncService()
         let fp = Data([0xFD])
-        service.replaceCachedMonth(
+        service.snapshotCache.replaceMonth(
             monthKey,
             resources: [TestFixtures.remoteResource(year: year, month: month, contentHash: Data([0xBB]), fileName: "b.jpg")],
             assets: [TestFixtures.remoteAsset(year: year, month: month, fingerprint: fp)],
-            links: [TestFixtures.remoteLink(year: year, month: month, assetFingerprint: fp, resourceHash: Data([0xBB]))],
-            expectedProfileKey: nil
+            assetResourceLinks: [TestFixtures.remoteLink(year: year, month: month, assetFingerprint: fp, resourceHash: Data([0xBB]))],
+            onlyIfOwnedBy: nil
         )
-        XCTAssertNotNil(service.remoteMonthRawData(for: monthKey), "precondition: the stale cache holds the month")
+        XCTAssertNotNil(service.snapshotCache.monthRawData(for: monthKey), "precondition: the stale cache holds the month")
 
         do {
-            try await service.verifyMonth(
-                client: client, basePath: basePath, month: monthKey, layout: .lite, assertOwnership: .uniform({})
-            )
+            _ = service.snapshotCache.claimIfUnowned(profileKey: service.snapshotCache.currentProfileKey() ?? "verify-test")
+            try await MonthManifestStore.verifyMonth(
+                client: client, basePath: basePath, month: monthKey, layout: .lite, assertOwnership: .uniform({}),
+                snapshotObserver: service.snapshotCache.snapshotObserver(profileKey: service.snapshotCache.currentProfileKey() ?? "verify-test"))
             XCTFail("a transient download fault still throws the missing-manifest signal")
         } catch {
             let ns = error as NSError
@@ -1728,7 +1736,7 @@ final class MonthManifestRelocateTests: XCTestCase {
         }
 
         XCTAssertNotNil(
-            service.remoteMonthRawData(for: monthKey),
+            service.snapshotCache.monthRawData(for: monthKey),
             "a transient download fault must keep last-known-good cache, not evict it"
         )
     }
@@ -1768,9 +1776,10 @@ final class MonthManifestRelocateTests: XCTestCase {
 
         let service = RemoteIndexSyncService()
         do {
-            try await service.verifyMonth(
-                client: client, basePath: basePath, month: monthKey, layout: .lite, assertOwnership: .uniform({})
-            )
+            _ = service.snapshotCache.claimIfUnowned(profileKey: service.snapshotCache.currentProfileKey() ?? "verify-test")
+            try await MonthManifestStore.verifyMonth(
+                client: client, basePath: basePath, month: monthKey, layout: .lite, assertOwnership: .uniform({}),
+                snapshotObserver: service.snapshotCache.snapshotObserver(profileKey: service.snapshotCache.currentProfileKey() ?? "verify-test"))
             XCTFail("a reconcile prune whose corrective flush failed must fail the month closed")
         } catch {
             let ns = error as NSError
@@ -1819,9 +1828,10 @@ final class MonthManifestRelocateTests: XCTestCase {
 
         let service = RemoteIndexSyncService()
         do {
-            try await service.verifyMonth(
-                client: client, basePath: basePath, month: monthKey, layout: .lite, assertOwnership: .uniform({})
-            )
+            _ = service.snapshotCache.claimIfUnowned(profileKey: service.snapshotCache.currentProfileKey() ?? "verify-test")
+            try await MonthManifestStore.verifyMonth(
+                client: client, basePath: basePath, month: monthKey, layout: .lite, assertOwnership: .uniform({}),
+                snapshotObserver: service.snapshotCache.snapshotObserver(profileKey: service.snapshotCache.currentProfileKey() ?? "verify-test"))
             XCTFail("a reconcile prune whose data-directory listing then faulted must fail the month closed")
         } catch {
             let ns = error as NSError
@@ -1850,19 +1860,20 @@ final class MonthManifestRelocateTests: XCTestCase {
         await client.enqueueDownloadError(RemoteErrorFixtures.notFound)  // schema-flush read-back attempt 2
         let service = RemoteIndexSyncService()
         let fp = Data([0xFE])
-        service.replaceCachedMonth(
+        service.snapshotCache.replaceMonth(
             monthKey,
             resources: [TestFixtures.remoteResource(year: year, month: month, contentHash: Data([0xBB]), fileName: "b.jpg")],
             assets: [TestFixtures.remoteAsset(year: year, month: month, fingerprint: fp)],
-            links: [TestFixtures.remoteLink(year: year, month: month, assetFingerprint: fp, resourceHash: Data([0xBB]))],
-            expectedProfileKey: nil
+            assetResourceLinks: [TestFixtures.remoteLink(year: year, month: month, assetFingerprint: fp, resourceHash: Data([0xBB]))],
+            onlyIfOwnedBy: nil
         )
-        XCTAssertNotNil(service.remoteMonthRawData(for: monthKey), "precondition: the cache holds the month")
+        XCTAssertNotNil(service.snapshotCache.monthRawData(for: monthKey), "precondition: the cache holds the month")
 
         do {
-            try await service.verifyMonth(
-                client: client, basePath: basePath, month: monthKey, layout: .lite, assertOwnership: .uniform({})
-            )
+            _ = service.snapshotCache.claimIfUnowned(profileKey: service.snapshotCache.currentProfileKey() ?? "verify-test")
+            try await MonthManifestStore.verifyMonth(
+                client: client, basePath: basePath, month: monthKey, layout: .lite, assertOwnership: .uniform({}),
+                snapshotObserver: service.snapshotCache.snapshotObserver(profileKey: service.snapshotCache.currentProfileKey() ?? "verify-test"))
             XCTFail("a schema-flush read-back failure must surface, not be masked as continuable missing")
         } catch {
             XCTAssertTrue(
@@ -1877,7 +1888,7 @@ final class MonthManifestRelocateTests: XCTestCase {
         }
 
         XCTAssertNotNil(
-            service.remoteMonthRawData(for: monthKey),
+            service.snapshotCache.monthRawData(for: monthKey),
             "a later schema-flush/read-back failure must not evict the valid month's cache"
         )
     }

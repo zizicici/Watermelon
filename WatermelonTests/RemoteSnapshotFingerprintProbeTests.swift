@@ -26,7 +26,12 @@ final class RemoteSnapshotFingerprintProbeTests: XCTestCase {
         XCTAssertEqual(probe.profileKey, "profile-a")
         XCTAssertNotEqual(cache.currentRevision(), builtRevision)
 
+        let otherMonth = LibraryMonthKey(year: 2024, month: 4)
+        cache.replaceMonth(otherMonth, resources: [],
+            assets: [TestFixtures.remoteAsset(year: 2024, month: 4, fingerprint: fingerprint)], assetResourceLinks: [])
         cache.removeMonth(monthKey)
+        XCTAssertTrue(cache.containsAssetFingerprint(fingerprint).contains)
+        cache.removeMonth(otherMonth)
         XCTAssertFalse(cache.containsAssetFingerprint(fingerprint).contains)
     }
 
@@ -36,8 +41,7 @@ final class RemoteSnapshotFingerprintProbeTests: XCTestCase {
         let before = cache.state(since: nil)
         cache.reset()
         seed(cache)
-        // Pure reads: neither probe may consume freshlyReset — the next delta pull must still get the
-        // full snapshot despite the post-reset revision colliding with the pre-reset one.
+        // Probes cannot consume another reader's full-rebuild boundary.
         _ = cache.currentRevision()
         _ = cache.containsAssetFingerprint(fingerprint)
         let after = cache.state(since: before.revision)
@@ -50,9 +54,7 @@ final class RemoteSnapshotFingerprintProbeTests: XCTestCase {
         let before = cache.state(since: nil)
         cache.reset()
         seed(cache)
-        // Browser reads (presence build, source load, action resolution) pull with a nil base; they must
-        // not consume freshlyReset — Home's delta read below still needs the forced full snapshot when
-        // the post-reset revision collides with its old base.
+        // A Browser full read cannot consume Home's rebuild boundary.
         let browserRead = cache.state(since: nil)
         XCTAssertTrue(browserRead.isFullSnapshot)
         let after = cache.state(since: before.revision)

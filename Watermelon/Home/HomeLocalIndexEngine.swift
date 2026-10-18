@@ -33,9 +33,6 @@ final class HomeLocalIndexEngine: @unchecked Sendable {
     // In-memory mirror of `local_assets.assetFingerprint` so recomputeAggregates can
     // compute backed-up counts without hitting the DB.
     private var fingerprintByAssetID: [String: Data] = [:]
-    // Mirrors each tracked asset's modificationDate so refreshFingerprintsFromDB can apply the
-    // same staleness gate as reload without re-fetching PhotoKit.
-    private var mtimeByAssetID: [String: Date] = [:]
     private var monthAggregates: [LibraryMonthKey: MonthAggregate] = [:]
     private(set) var monthFileSizes: [LibraryMonthKey: Int64] = [:]
     private var monthCalendar = LibraryMonthKey.currentPreferenceMonthCalendar()
@@ -140,7 +137,6 @@ final class HomeLocalIndexEngine: @unchecked Sendable {
         mediaKindByAssetID.removeAll()
         creationDateMsByAssetID.removeAll()
         fingerprintByAssetID.removeAll()
-        mtimeByAssetID.removeAll(keepingCapacity: true)
         monthAggregates.removeAll(keepingCapacity: true)
         // Wipe sizes on a full reload: prior values may have been computed against a
         // different scope and would mislead the UI until startFileSizeScan repopulates.
@@ -150,7 +146,6 @@ final class HomeLocalIndexEngine: @unchecked Sendable {
         assetIDToMonth.reserveCapacity(assetCountHint)
         mediaKindByAssetID.reserveCapacity(assetCountHint)
         creationDateMsByAssetID.reserveCapacity(assetCountHint)
-        mtimeByAssetID.reserveCapacity(assetCountHint)
         fingerprintByAssetID.reserveCapacity(min(fingerprintByAsset.count, assetCountHint))
         assetMembershipCount.reserveCapacity(assetCountHint)
         trackedCollections.reserveCapacity(payload.collections.count)
@@ -173,8 +168,7 @@ final class HomeLocalIndexEngine: @unchecked Sendable {
                         assetID,
                         month: month,
                         mediaKind: snapshot.mediaKind,
-                        creationDateMs: creationDate.milliseconds,
-                        modificationDate: snapshot.modificationDate
+                        creationDateMs: creationDate.milliseconds
                     )
                     // Orphans (DB entry whose PHAsset no longer exists) are dropped
                     // implicitly by only copying fingerprints for IDs we actually saw.
@@ -206,7 +200,6 @@ final class HomeLocalIndexEngine: @unchecked Sendable {
         mediaKindByAssetID.removeAll()
         creationDateMsByAssetID.removeAll()
         fingerprintByAssetID.removeAll()
-        mtimeByAssetID.removeAll()
         monthAggregates.removeAll()
         monthFileSizes.removeAll()
         return changedMonths
@@ -239,6 +232,27 @@ final class HomeLocalIndexEngine: @unchecked Sendable {
         return changedMonths
     }
 
+    func removeAssets(
+        _ assetIDs: Set<String>,
+        remoteFingerprintsForMonth: (LibraryMonthKey) -> Set<Data>
+    ) -> Set<LibraryMonthKey> {
+        guard !assetIDs.isEmpty else { return [] }
+        var changedMonths = Set<LibraryMonthKey>()
+        for id in assetIDs {
+            if let month = monthForAsset(id) {
+                removeFromIDSets(id, month: month)
+                changedMonths.insert(month)
+                monthFileSizes[month] = nil
+            }
+            assetMembershipCount[id] = nil
+        }
+        for index in trackedCollections.indices {
+            trackedCollections[index].assetIDs.subtract(assetIDs)
+        }
+        recomputeAggregates(for: changedMonths, remoteFingerprintsForMonth: remoteFingerprintsForMonth)
+        return changedMonths
+    }
+
     /// Insert assets the engine doesn't yet track. Membership count is left at zero
     /// so the next PHChange's `insertedIndexes` ratifies them via
     /// `applyMembershipDelta` (0→1). Caller is responsible for ensuring such a
@@ -266,10 +280,10 @@ final class HomeLocalIndexEngine: @unchecked Sendable {
                 id,
                 month: month,
                 mediaKind: snapshot.mediaKind,
-                creationDateMs: creationDate.milliseconds,
-                modificationDate: snapshot.modificationDate
+                creationDateMs: creationDate.milliseconds
             )
             changedMonths.insert(month)
+            monthFileSizes[month] = nil
         }
 
         refreshFingerprintCache(for: insertedIDs, using: fingerprintsForIDs)
@@ -397,31 +411,6 @@ final class HomeLocalIndexEngine: @unchecked Sendable {
         return knownMonths
     }
 
-    /// Re-read DB fingerprints for tracked assets without re-scanning PhotoKit, applying the
-    /// same mtime-staleness gate as `reload` from the in-memory mtime mirror, then recompute
-    /// aggregates. Used on connect to pick up background-written fingerprints cheaply.
-    @discardableResult
-    func refreshFingerprintsFromDB(
-        allFingerprints: [String: LocalAssetFingerprintRecord],
-        remoteFingerprintsForMonth: (LibraryMonthKey) -> Set<Data>
-    ) -> Set<LibraryMonthKey> {
-        guard hasLoadedIndex else { return [] }
-        // Empty here almost always means fetchAllFingerprints swallowed a DB-read error; skip rather than
-        // wipe every backed-up fingerprint (a real all-empty library is a no-op; mass-orphan waits for reload).
-        guard !allFingerprints.isEmpty else { return [] }
-        for id in assetIDToMonth.keys {
-            if let record = allFingerprints[id],
-               !isStaleFingerprint(record: record, modificationDate: mtimeByAssetID[id]) {
-                fingerprintByAssetID[id] = record.fingerprint
-            } else {
-                fingerprintByAssetID[id] = nil
-            }
-        }
-        let months = allMonths
-        recomputeAggregates(for: months, remoteFingerprintsForMonth: remoteFingerprintsForMonth)
-        return months
-    }
-
     private func applyMembershipDelta(
         removedIDs: Set<String>,
         addedIDs: Set<String>,
@@ -473,8 +462,7 @@ final class HomeLocalIndexEngine: @unchecked Sendable {
                 id,
                 month: newMonth,
                 mediaKind: snapshot.mediaKind,
-                creationDateMs: creationDate.milliseconds,
-                modificationDate: snapshot.modificationDate
+                creationDateMs: creationDate.milliseconds
             )
             changedMonths.insert(newMonth)
             representedIDs.insert(id)
@@ -544,14 +532,12 @@ final class HomeLocalIndexEngine: @unchecked Sendable {
         _ id: String,
         month: LibraryMonthKey,
         mediaKind: AlbumMediaKind,
-        creationDateMs: Int64,
-        modificationDate: Date?
+        creationDateMs: Int64
     ) {
         localAssetIDsByMonth[month, default: []].insert(id)
         assetIDToMonth[id] = month
         mediaKindByAssetID[id] = mediaKind
         creationDateMsByAssetID[id] = creationDateMs
-        mtimeByAssetID[id] = modificationDate
     }
 
     private func removeFromIDSets(_ id: String, month: LibraryMonthKey) {
@@ -563,6 +549,5 @@ final class HomeLocalIndexEngine: @unchecked Sendable {
         mediaKindByAssetID[id] = nil
         creationDateMsByAssetID[id] = nil
         fingerprintByAssetID[id] = nil
-        mtimeByAssetID[id] = nil
     }
 }

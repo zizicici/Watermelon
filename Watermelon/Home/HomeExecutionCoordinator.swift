@@ -301,7 +301,7 @@ final class HomeExecutionCoordinator {
     struct DataAccess {
         let localAssetIDs: (LibraryMonthKey) -> Set<String>
         let localMonthGroupingTimeZone: () -> MonthGroupingTimeZonePreference
-        let remoteOnlyItems: (LibraryMonthKey) async -> [RemoteAlbumItem]
+        let remoteOnlyItems: (LibraryMonthKey) async throws -> [RemoteAlbumItem]
         let syncRemoteData: () async -> Set<LibraryMonthKey>
         let refreshLocalIndex: (Set<String>) async -> Set<LibraryMonthKey>
     }
@@ -917,10 +917,11 @@ final class HomeExecutionCoordinator {
         var totalBytes: Int64 = 0
         for month in months {
             guard !Task.isCancelled else { return nil }
-            let items = downloadRunProgress.pendingItems(await dataAccess.remoteOnlyItems(month), in: month)
+            guard let remoteItems = try? await dataAccess.remoteOnlyItems(month) else { return nil }
+            let items = downloadRunProgress.pendingItems(remoteItems, in: month)
             totalBytes += DownloadWorkflowHelper.estimatedDownloadBytes(for: items, incompletePolicy: incompleteDownloadPolicy) ?? 0
         }
-        return totalBytes > 0 ? totalBytes : nil
+        return totalBytes
     }
 
     private func runDownloadMonth(
@@ -1293,7 +1294,7 @@ final class HomeExecutionCoordinator {
         resume()
     }
 
-    private func downloadRemoteMonth(
+    func downloadRemoteMonth(
         _ month: LibraryMonthKey,
         assetIDs: Set<String>,
         context: DownloadWorkflowHelper.Context,
@@ -1346,22 +1347,27 @@ final class HomeExecutionCoordinator {
         }
         if Task.isCancelled || terminationControl?.shouldDrain == true { return .cancelled }
 
-        let remoteItems = downloadRunProgress.pendingItems(await dataAccess.remoteOnlyItems(month), in: month)
+        let remoteItems: [RemoteAlbumItem]
+        do {
+            remoteItems = downloadRunProgress.pendingItems(try await dataAccess.remoteOnlyItems(month), in: month)
+        } catch {
+            if error is CancellationError || Task.isCancelled || terminationControl?.shouldDrain == true {
+                return .cancelled
+            }
+            return .failed(error.localizedDescription)
+        }
         appendDebugLog(String(format: String(localized: "home.execution.log.pendingDownload"), month.displayText, remoteItems.count))
         guard let downloadHelper else { return .cancelled }
         if !usesExistingTransferPlan, estimatedDownloadTotalBytes == nil {
             let plannedMonths = plannedDownloadMonthsForTransferMetrics()
             if plannedMonths.isEmpty {
-                updateEstimatedDownloadTotalBytes(DownloadWorkflowHelper.estimatedDownloadBytes(for: remoteItems))
+                updateEstimatedDownloadTotalBytes(DownloadWorkflowHelper.estimatedDownloadBytes(for: remoteItems) ?? 0)
             } else {
                 updateEstimatedDownloadTotalBytes(await estimatedDownloadBytes(for: plannedMonths))
             }
         }
         if let executionID {
             setExecutionWorkStage(.download, for: executionID)
-        }
-        let refreshBatcher = HomeLocalIndexRefreshBatcher { [dataRefresher] ids in
-            await dataRefresher.refreshLocalIndexAndNotify(ids)
         }
         let result = await downloadHelper.downloadItems(
             remoteItems,
@@ -1377,9 +1383,7 @@ final class HomeExecutionCoordinator {
         ) { [weak self] restoredItem in
             guard let self else { return }
             self.downloadRunProgress.recordRestored(restoredItem.identity, in: month)
-            refreshBatcher.enqueue(restoredItem.asset.localIdentifier)
         }
-        await refreshBatcher.flush()
         return result
     }
 
@@ -1529,7 +1533,7 @@ final class HomeExecutionCoordinator {
             let totalBytes = await self.estimatedDownloadBytes(for: months)
             guard !Task.isCancelled else { return }
             guard self.transferMetricsActive, self.transferPlanGeneration == generation else { return }
-            self.estimatedDownloadTotalBytes = totalBytes ?? 0
+            self.estimatedDownloadTotalBytes = totalBytes
             self.refreshExecutionTransferTotal()
         }
     }
@@ -1567,7 +1571,7 @@ final class HomeExecutionCoordinator {
 
     private func updateEstimatedDownloadTotalBytes(_ totalBytes: Int64?) {
         guard transferMetricsActive else { return }
-        estimatedDownloadTotalBytes = totalBytes ?? 0
+        estimatedDownloadTotalBytes = totalBytes
         refreshExecutionTransferTotal()
     }
 

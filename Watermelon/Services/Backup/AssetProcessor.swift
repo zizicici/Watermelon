@@ -12,18 +12,15 @@ final class AssetProcessor: Sendable {
 
     private let photoLibraryService: PhotoLibraryService
     private let hashIndexRepository: ContentHashIndexRepository
-    let remoteIndexService: RemoteIndexSyncService
     private let thumbnailRenderer: ThumbnailRenderer?
 
     init(
         photoLibraryService: PhotoLibraryService,
         hashIndexRepository: ContentHashIndexRepository,
-        remoteIndexService: RemoteIndexSyncService,
         thumbnailRenderer: ThumbnailRenderer? = nil
     ) {
         self.photoLibraryService = photoLibraryService
         self.hashIndexRepository = hashIndexRepository
-        self.remoteIndexService = remoteIndexService
         self.thumbnailRenderer = thumbnailRenderer
     }
 
@@ -243,7 +240,6 @@ final class AssetProcessor: Sendable {
         let manifestWriteStart = CFAbsoluteTimeGetCurrent()
         try context.monthStore.upsertAsset(manifestAsset, links: links)
         timing.databaseSeconds += Self.elapsedSeconds(since: manifestWriteStart)
-        remoteIndexService.upsertCachedAsset(manifestAsset, links: links, expectedProfileKey: RemoteIndexSyncService.remoteProfileKey(context.profile))
 
         let snapshotWriteStart = CFAbsoluteTimeGetCurrent()
         try hashIndexRepository.upsertAssetHashSnapshot(
@@ -530,7 +526,6 @@ final class AssetProcessor: Sendable {
             totalFileSizeBytes: links.reduce(0) { $0 + max(context.monthStore.findResourceByHash($1.resourceHash)?.fileSize ?? 0, 0) })
         let start = CFAbsoluteTimeGetCurrent()
         try context.monthStore.upsertAsset(updated, links: links)
-        remoteIndexService.upsertCachedAsset(updated, links: links, expectedProfileKey: RemoteIndexSyncService.remoteProfileKey(context.profile))
         timing.databaseSeconds += Self.elapsedSeconds(since: start)
         return AssetProcessResult(status: .success, reason: Self.assetResourcesUpdatedReason,
             displayName: displayName, assetFingerprint: fingerprint, timing: timing,
@@ -597,7 +592,6 @@ final class AssetProcessor: Sendable {
         let manifestWriteStart = CFAbsoluteTimeGetCurrent()
         try context.monthStore.upsertAsset(manifestAsset, links: links)
         timing.databaseSeconds += Self.elapsedSeconds(since: manifestWriteStart)
-        remoteIndexService.upsertCachedAsset(manifestAsset, links: links, expectedProfileKey: RemoteIndexSyncService.remoteProfileKey(context.profile))
 
         let dbStart = CFAbsoluteTimeGetCurrent()
         try hashIndexRepository.upsertAssetFingerprint(
@@ -621,9 +615,7 @@ final class AssetProcessor: Sendable {
     }
 
     private func updateBackedUpAssetDate(_ fingerprint: Data, context: AssetProcessContext) throws -> Bool {
-        guard let updated = try context.monthStore.updateAssetCreationDate(context.asset.creationDate, for: fingerprint) else { return false }
-        remoteIndexService.upsertCachedAsset(updated, expectedProfileKey: RemoteIndexSyncService.remoteProfileKey(context.profile))
-        return true
+        try context.monthStore.updateAssetCreationDate(context.asset.creationDate, for: fingerprint) != nil
     }
 
     static func cachedRoleSlotHashes(

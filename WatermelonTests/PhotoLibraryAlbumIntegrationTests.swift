@@ -44,6 +44,37 @@ final class PhotoLibraryAlbumIntegrationTests: XCTestCase {
         return (ids, albums)
     }
 
+    func testCommittedIndexReconciliationUsesPhotosBeforeChangeDelivery() async throws {
+        let (directory, service, repository) = try setup()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let file = try makeBurstFrame(index: 0, burstID: nil, directory: directory)
+        let (ids, _) = try await create(files: [file], dates: [Date()], albumCount: 0)
+        let id = try XCTUnwrap(ids.first)
+        let worker = HomeDataProcessingWorker(photoLibraryService: service,
+            contentHashIndexRepository: repository, remoteMonthSnapshot: { _ in nil })
+        _ = await worker.reloadLocalIndex(scope: .device(.all))
+        let fingerprint = Data(repeating: 0x55, count: 32)
+        try repository.upsertAssetFingerprint(assetLocalIdentifier: id, assetFingerprint: fingerprint,
+            resourceCount: 1, totalFileSizeBytes: 100, modificationDateMs: nil)
+        let stale = await worker.browserLocalSeed(expectedScope: .device(.all))
+        XCTAssertNil(stale)
+        let indexed = await worker.refreshLocalIndex(forAssetIDs: [], expectedScope: .device(.all))
+        guard case .incremental(_, let membershipChangedMonths) = indexed else {
+            return XCTFail("A retained delta must stay incremental")
+        }
+        XCTAssertTrue(membershipChangedMonths.isEmpty)
+        let seed = await worker.browserLocalSeed(expectedScope: .device(.all))
+        XCTAssertEqual(seed?.localIDByFingerprint[fingerprint], id)
+
+        try repository.deleteIndexEntries(assetIDs: ids)
+        _ = await worker.refreshLocalIndex(forAssetIDs: [], expectedScope: .device(.all))
+        let unindexed = await worker.browserLocalSeed(expectedScope: .device(.all))
+        XCTAssertTrue(unindexed?.assets.contains { $0.localIdentifier == id } == true)
+        XCTAssertNil(unindexed?.localIDByFingerprint[fingerprint])
+
+
+    }
+
     func testOrdinaryAlbumChangeKeepsUnrelatedMonthSize() async throws {
         let (directory, service, repository) = try setup()
         let dates = [Date(timeIntervalSince1970: 978_350_400), Date(timeIntervalSince1970: 982_065_600)]
@@ -54,7 +85,7 @@ final class PhotoLibraryAlbumIntegrationTests: XCTestCase {
         try await Task.sleep(for: .seconds(1))
         let scope = HomeLocalLibraryScope.albums(Set(albums))
         let worker = HomeDataProcessingWorker(photoLibraryService: service, contentHashIndexRepository: repository, remoteMonthSnapshot: { _ in nil })
-        _ = await worker.loadLocalIndex(forceReload: true, scope: scope)
+        _ = await worker.reloadLocalIndex(scope: scope)
         let months = dates.map { LibraryMonthKey.from(date: $0, calendar: LibraryMonthKey.currentPreferenceMonthCalendar()) }
         for month in months { _ = await worker.updateFileSize(for: month, sizeCache: [:]) }
         XCTAssertNotNil(worker.monthRow(for: months[1]).local?.totalSizeBytes)
@@ -107,7 +138,7 @@ final class PhotoLibraryAlbumIntegrationTests: XCTestCase {
         for album in albums { XCTAssertEqual(counts.first { $0.localIdentifier == album }?.assetCount, 3) }
         let scope = HomeLocalLibraryScope.albums(Set(albums))
         let worker = HomeDataProcessingWorker(photoLibraryService: service, contentHashIndexRepository: repository, remoteMonthSnapshot: { _ in nil })
-        _ = await worker.loadLocalIndex(forceReload: true, scope: scope)
+        _ = await worker.reloadLocalIndex(scope: scope)
         let months = dates.map { LibraryMonthKey.from(date: $0, calendar: LibraryMonthKey.currentPreferenceMonthCalendar()) }
         for (i, month) in months.enumerated() {
             XCTAssertEqual(worker.localAssetIDs(for: month, expectedScope: scope), [ids[i]])
@@ -172,8 +203,6 @@ final class PhotoLibraryAlbumIntegrationTests: XCTestCase {
             let service = RestoreService(makeClient: { _, _ in client }, hashIndexRepository: repository)
             let result = try await service.restoreItems(items: [.init(instances: [instance], identity: fp, creationDate: Date(timeIntervalSince1970: 978_350_400))], profile: profile, password: "", onItemCompleted: { _, _, _ in })
             let asset = try XCTUnwrap(result.first?.asset)
-            XCTAssertTrue(asset.isCompleteRestore)
-            XCTAssertTrue(asset.indexWriteHandled)
             ids.insert(asset.localIdentifier)
             fingerprints.insert(fp)
             XCTAssertEqual(try repository.fetchAssetFingerprintRecords(assetIDs: [asset.localIdentifier])[asset.localIdentifier]?.fingerprint, fp)

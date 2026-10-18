@@ -15,10 +15,6 @@ protocol RestoreItemsServing: Sendable {
 
 extension RestoreService: RestoreItemsServing {}
 
-/// Pure domain executor for download operations.
-/// Knows only how to restore remote items and write hash index entries.
-/// Does NOT know about Home's data cache (syncRemoteData/refreshLocalIndex) or BSC upload/scoped-backup control.
-/// The coordinator decides when and how to sequence scoped backup, remote sync and local refresh.
 @MainActor
 final class DownloadWorkflowHelper {
     struct Context: Sendable {
@@ -28,22 +24,17 @@ final class DownloadWorkflowHelper {
     }
 
     private let restoreService: any RestoreItemsServing
-    private let hashIndexRepository: ContentHashIndexRepository
 
     init(dependencies: DependencyContainer) {
         restoreService = dependencies.restoreService
-        hashIndexRepository = dependencies.hashIndexRepository
     }
 
     init(
-        hashIndexRepository: ContentHashIndexRepository,
         restoreService: any RestoreItemsServing
     ) {
-        self.hashIndexRepository = hashIndexRepository
         self.restoreService = restoreService
     }
 
-    /// Downloads remote-only items via RestoreService and writes hash index per item.
     func downloadItems(
         _ remoteItems: [RemoteAlbumItem],
         context: Context,
@@ -75,8 +66,7 @@ final class DownloadWorkflowHelper {
                 RestoreService.RestoreItemDescriptor(
                     instances: item.instances,
                     identity: item.assetFingerprint,
-                    creationDate: item.creationDate,
-                    isIncomplete: item.isIncomplete
+                    creationDate: item.creationDate
                 )
             }
             let restored = try await restoreService.restoreItems(
@@ -89,15 +79,8 @@ final class DownloadWorkflowHelper {
                     await onTransferState(state)
                 },
                 onItemFailed: onItemFailed,
-                onItemCompleted: { [hashIndexRepository] _, _, restoredItem in
+                onItemCompleted: { _, _, restoredItem in
                     if let restoredItem {
-                        if !restoredItem.asset.indexWriteHandled {
-                            try await Self.writeHashIndex(
-                                assetLocalIdentifier: restoredItem.asset.localIdentifier,
-                                instances: restoredItem.asset.importedInstances,
-                                repository: hashIndexRepository
-                            )
-                        }
                         await onItemRestored(restoredItem)
                     }
                 }
@@ -120,19 +103,6 @@ final class DownloadWorkflowHelper {
             totalBytes = RestoreDownloadPolicy.adding(totalBytes, RestoreDownloadPolicy.estimatedBytes(for: item.instances))
         }
         return totalBytes > 0 ? totalBytes : nil
-    }
-
-    private static func writeHashIndex(
-        assetLocalIdentifier: String,
-        instances: [RemoteAssetResourceInstance],
-        repository: ContentHashIndexRepository
-    ) async throws {
-        try await Task.detached(priority: .utility) {
-            try repository.writeHashIndex(
-                assetLocalIdentifier: assetLocalIdentifier,
-                instances: instances
-            )
-        }.value
     }
 }
 

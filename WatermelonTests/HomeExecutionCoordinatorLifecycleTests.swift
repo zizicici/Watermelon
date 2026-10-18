@@ -3,6 +3,30 @@ import XCTest
 
 @MainActor
 final class HomeExecutionCoordinatorLifecycleTests: XCTestCase {
+    func testDownloadMonthReportsLocalIndexFailureInsteadOfCompletingAnEmptyPlan() async throws {
+        var queriedMonths: [LibraryMonthKey] = []
+        let harness = try makeHarness(remoteOnlyItems: { month in
+            queriedMonths.append(month)
+            throw HomeLocalIndexReadError()
+        })
+        defer {
+            try? harness.dependencies.databaseManager.dbQueue.close()
+            try? FileManager.default.removeItem(at: harness.directory)
+        }
+        let month = LibraryMonthKey(year: 2026, month: 1)
+        let profile = ServerProfileRecord(id: nil, name: "test", storageType: StorageType.webdav.rawValue,
+            connectionParams: nil, sortOrder: 0, host: "fixture.local", port: 0, shareName: "test", basePath: "/p",
+            username: "test", domain: nil, credentialRef: "test", backgroundBackupEnabled: false,
+            createdAt: Date(), updatedAt: Date(), writerID: nil)
+        let result = await harness.coordinator.downloadRemoteMonth(month, assetIDs: [],
+            context: .init(profile: profile, password: ""), terminationControl: nil, verifyMonth: { _ in })
+        guard case .failed(let message) = result else {
+            return XCTFail("An unreadable local index must not produce a successful or skipped download")
+        }
+        XCTAssertEqual(queriedMonths, [month])
+        XCTAssertEqual(message, HomeLocalIndexReadError().localizedDescription)
+    }
+
     func testImmediateStopPreventsDownloadPreflightFromStarting() async throws {
         let harness = try makeHarness()
         defer {
@@ -230,7 +254,9 @@ final class HomeExecutionCoordinatorLifecycleTests: XCTestCase {
         XCTAssertFalse(flags.isExecuting)
     }
 
-    private func makeHarness() throws -> (
+    private func makeHarness(
+        remoteOnlyItems: @escaping (LibraryMonthKey) async throws -> [RemoteAlbumItem] = { _ in [] }
+    ) throws -> (
         coordinator: HomeExecutionCoordinator,
         dependencies: DependencyContainer,
         builder: BlockingLocalHashIndexBuilder,
@@ -249,7 +275,7 @@ final class HomeExecutionCoordinatorLifecycleTests: XCTestCase {
         let dataAccess = HomeExecutionCoordinator.DataAccess(
             localAssetIDs: { _ in ["asset"] },
             localMonthGroupingTimeZone: { .fixedUTC() },
-            remoteOnlyItems: { _ in [] },
+            remoteOnlyItems: remoteOnlyItems,
             syncRemoteData: { [] },
             refreshLocalIndex: { _ in [] }
         )

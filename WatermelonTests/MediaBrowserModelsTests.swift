@@ -27,30 +27,17 @@ final class MediaBrowserModelsTests: XCTestCase {
         XCTAssertFalse(item.isRemoteDeletable)
     }
 
-    func testRemoteBackingOwnsLocalAttachmentTransition() {
-        var item = MediaBrowserItem(
-            kind: .photo,
-            creationDateMs: 1,
-            localIdentifier: nil,
-            remote: RemoteMediaReference(
-                fingerprint: Data([2]),
-                photoRelativePath: "2024/01/a.jpg",
-                videoRelativePath: nil,
-                photoContentHash: nil,
-                videoContentHash: nil,
-                storageMonth: month,
-                isIncomplete: false
-            )
-        )
+    func testRemoteBackingDerivesPresenceFromLocalReference() {
+        let remote = remoteItem(fingerprint: Data([2]), localIdentifier: nil)
+        let downloaded = remoteItem(fingerprint: Data([2]), localIdentifier: "local")
 
-        XCTAssertEqual(item.presence, .remoteOnly)
-        XCTAssertTrue(item.isRemoteDeletable)
-        item.attachLocalIdentifier("local")
-        XCTAssertEqual(item.presence, .both)
-        XCTAssertEqual(item.localIdentifier, "local")
-        item.removeLocalIdentifier()
-        XCTAssertEqual(item.presence, .remoteOnly)
-        XCTAssertNil(item.localIdentifier)
+        XCTAssertEqual(remote.presence, .remoteOnly)
+        XCTAssertTrue(remote.isRemoteDeletable)
+        XCTAssertNil(remote.localIdentifier)
+        XCTAssertEqual(downloaded.presence, .both)
+        XCTAssertTrue(downloaded.isRemoteDeletable)
+        XCTAssertEqual(downloaded.localIdentifier, "local")
+        XCTAssertEqual(remote.id, downloaded.id)
     }
 
     func testTypedIDsKeepLocalAndRemoteNamespacesSeparate() {
@@ -271,6 +258,13 @@ final class MediaBrowserModelsTests: XCTestCase {
             let empty = MediaBrowserSnapshot(sections: sections, filter: .remoteOnly, mediaFilter: .photos, sortOrder: order)
             XCTAssertTrue(empty.isEmpty)
             XCTAssertTrue(empty.sectionIDs.isEmpty)
+            for snapshot in [photos, videos, backedPhotos, localVideos, remoteVideos, empty] {
+                let pages = MediaBrowserPageOrder(snapshot: snapshot)
+                XCTAssertEqual(pages.count, snapshot.itemCount)
+                XCTAssertEqual((0..<pages.count).compactMap { pages.item(at: $0, in: snapshot)?.id }, snapshot.orderedItemIDs)
+                XCTAssertNil(pages.item(at: -1, in: snapshot))
+                XCTAssertNil(pages.item(at: pages.count, in: snapshot))
+            }
         }
         let photosByMonth = MediaBrowserSnapshot(sections: sections, mediaFilter: .photos)
         XCTAssertEqual(photosByMonth.months, [.init(year: 2024, month: 2)])
@@ -369,12 +363,171 @@ final class MediaBrowserModelsTests: XCTestCase {
         XCTAssertNil(beforeDownload.item(id: local.id))
         XCTAssertNil(beforeDownload.item(id: merged.id))
 
-        remote.attachLocalIdentifier("downloaded")
+        remote = remoteItem(fingerprint: Data([2]), localIdentifier: "downloaded")
         XCTAssertTrue(snapshot().isEmpty)
         XCTAssertTrue(snapshot().months.isEmpty)
 
-        remote.removeLocalIdentifier()
+        remote = remoteItem(fingerprint: Data([2]), localIdentifier: nil)
         XCTAssertEqual(snapshot().itemIDs(inSection: 0), [remote.id])
+    }
+
+    @MainActor
+    func testViewerResolvesDownloadedItemOutsideFilteredGridWithoutAnOverride() throws {
+        let original = remoteItem(fingerprint: Data([2]), localIdentifier: nil)
+        let session = MediaBrowserSession()
+        session.replace(with: MediaBrowserSnapshot(sections: [.init(month: month, items: [original])], filter: .remoteOnly))
+        let pageIDs = session.snapshot.orderedItemIDs
+        session.invalidate()
+        XCTAssertFalse(session.isCurrent)
+        let downloaded = remoteItem(fingerprint: Data([2]), localIdentifier: "downloaded")
+        session.replace(with: MediaBrowserSnapshot(sections: [.init(month: month, items: [downloaded])], filter: .remoteOnly))
+
+        XCTAssertTrue(session.isCurrent)
+        XCTAssertTrue(session.snapshot.isEmpty)
+        let resolved = try XCTUnwrap(session.snapshot.resolve(pageIDs[0]))
+        XCTAssertEqual(resolved, downloaded)
+        XCTAssertEqual(MediaBrowserActionPolicy.actions(for: resolved, scope: .unified), [.share, .deleteLocal, .deleteRemote])
+        session.replace(with: MediaBrowserSnapshot(sections: [.init(month: month, items: [original])], filter: .remoteOnly))
+        XCTAssertNil(session.snapshot.resolve(pageIDs[0])?.localIdentifier)
+        session.reset()
+        XCTAssertFalse(session.isCurrent)
+        XCTAssertNil(session.snapshot.resolve(pageIDs[0]))
+    }
+
+    func testViewerResolvesLocalToRemoteIdentityAfterBackupAndKeepsPageOrder() {
+        let first = localItem("first", isBackedUp: false)
+        let second = localItem("second", isBackedUp: false)
+        let original = MediaBrowserSnapshot(sections: [.init(month: month, items: [first, second])])
+        let remote = remoteItem(fingerprint: Data([8]), localIdentifier: "first")
+        let updated = MediaBrowserSnapshot(sections: [.init(month: month, items: [second, remote])], filter: .localOnly)
+
+        XCTAssertEqual(updated.orderedItemIDs, [second.id])
+        XCTAssertEqual(original.orderedItemIDs.compactMap { updated.resolve($0) }, [remote, second])
+        XCTAssertEqual(updated.resolve(first.id)?.remoteMonth, month)
+    }
+
+    func testViewerDoesNotResolveDeletedOrEditedContentAsItsOldRemoteIdentity() {
+        let original = remoteItem(fingerprint: Data([1]), localIdentifier: "edited")
+        let edited = MediaBrowserItem(kind: .photo, creationDateMs: 1, localIdentifier: "edited",
+                                      fingerprint: Data([2]), isBackedUp: false)
+        let updated = MediaBrowserSnapshot(sections: [.init(month: month, items: [edited])])
+        XCTAssertNil(updated.resolve(original.id))
+        XCTAssertEqual(updated.resolve(.local("edited")), edited)
+        XCTAssertNil(MediaBrowserSnapshot.empty.resolve(.local("edited")))
+    }
+
+    func testViewerResolvesRemainingLocalBytesWhenRemoteCopyIsRemoved() {
+        let original = remoteItem(fingerprint: Data([1]), localIdentifier: "retained")
+        let local = MediaBrowserItem(kind: .photo, creationDateMs: 1, localIdentifier: "retained",
+                                    fingerprint: Data([1]), isBackedUp: false)
+        let updated = MediaBrowserSnapshot(sections: [.init(month: month, items: [local])], filter: .remoteOnly)
+        XCTAssertTrue(updated.isEmpty)
+        XCTAssertEqual(updated.resolve(original.id), local)
+        XCTAssertFalse(updated.resolve(original.id)?.isRemoteDeletable ?? true)
+    }
+
+    func testViewerDoesNotSubstituteAnotherRemoteMonthAndChoosesAliasesDeterministically() {
+        let january = remoteItem(fingerprint: Data([1]), localIdentifier: "local")
+        let february = MediaBrowserItem(kind: .photo, creationDateMs: 1, localIdentifier: "local",
+            remote: .init(fingerprint: Data([1]), photoRelativePath: "2024/02/a.jpg", videoRelativePath: nil,
+                          photoContentHash: nil, videoContentHash: nil, storageMonth: .init(year: 2024, month: 2), isIncomplete: false))
+        for items in [[january, february], [february, january]] {
+            let updated = MediaBrowserSnapshot(sections: [.init(month: month, items: items)])
+            XCTAssertEqual(updated.resolve(.local("local")), january)
+            XCTAssertEqual(updated.resolve(february.id), february)
+        }
+        let remaining = MediaBrowserSnapshot(sections: [.init(month: month, items: [february])])
+        XCTAssertNil(remaining.resolve(january.id))
+    }
+
+    func testViewerResolutionIsIndependentOfMediaFilterAndSizeSort() {
+        let video = MediaBrowserItem(kind: .video, creationDateMs: 1, localIdentifier: "video",
+                                    fingerprint: nil, isBackedUp: false, fileSize: 20_000_000)
+        let snapshot = MediaBrowserSnapshot(sections: [.init(month: month, items: [video])],
+                                            mediaFilter: .photos, sortOrder: .fileSize)
+        XCTAssertTrue(snapshot.isEmpty)
+        XCTAssertEqual(snapshot.resolve(video.id), video)
+    }
+
+    func testViewerKeepsConfirmedRemoteIdentityAfterDeletingOriginalLocalCopy() {
+        let fingerprint = Data([1])
+        let representative = remoteItem(fingerprint: fingerprint, localIdentifier: "B")
+        let remoteOnly = remoteItem(fingerprint: fingerprint, localIdentifier: nil)
+        var page = MediaBrowserPageReference(.local("A"))
+        let backedUp = MediaBrowserSnapshot(sections: [.init(month: month, items: [representative])],
+            localFingerprintAliases: ["A": fingerprint, "B": fingerprint], filter: .localOnly)
+        XCTAssertEqual(page.resolve(in: backedUp)?.localIdentifier, "A")
+        XCTAssertEqual(page.resolve(in: backedUp)?.id, representative.id)
+        let removedLocal = MediaBrowserSnapshot(sections: [.init(month: month, items: [remoteOnly])], filter: .localOnly)
+        XCTAssertEqual(page.resolve(in: removedLocal), remoteOnly)
+        XCTAssertNil(page.resolve(in: .empty))
+    }
+
+    func testLocalPageForgetsPriorBackupIdentityAfterAnEdit() {
+        for fingerprint: Data? in [Data([2]), nil] {
+            var page = MediaBrowserPageReference(.local("A"))
+            let remote = remoteItem(fingerprint: Data([1]), localIdentifier: "A")
+            XCTAssertEqual(page.resolve(in: MediaBrowserSnapshot(sections: [.init(month: month, items: [remote])])), remote)
+            let edited = localItem("A", fingerprint: fingerprint, isBackedUp: false)
+            let oldRemote = remoteItem(fingerprint: Data([1]), localIdentifier: nil)
+            XCTAssertEqual(page.resolve(in: MediaBrowserSnapshot(sections: [.init(month: month, items: [edited, oldRemote])])), edited)
+            XCTAssertNil(page.resolve(in: MediaBrowserSnapshot(sections: [.init(month: month, items: [oldRemote])])))
+        }
+    }
+
+    func testRemotePageDoesNotFollowEditsAfterFallingBackToLocalBytes() {
+        let remote = remoteItem(fingerprint: Data([1]), localIdentifier: "A")
+        var page = MediaBrowserPageReference(remote.id)
+        let local = localItem("A", fingerprint: Data([1]), isBackedUp: false)
+        XCTAssertEqual(page.resolve(in: MediaBrowserSnapshot(sections: [.init(month: month, items: [local])])), local)
+        let edited = localItem("A", fingerprint: Data([2]), isBackedUp: false)
+        XCTAssertNil(page.resolve(in: MediaBrowserSnapshot(sections: [.init(month: month, items: [edited])])))
+    }
+
+    func testLocalPagePreservesConfirmedMonthWhenAnotherRemoteTwinAppears() {
+        let january = remoteItem(fingerprint: Data([1]), localIdentifier: "A")
+        let february = MediaBrowserItem(kind: .photo, creationDateMs: 1, localIdentifier: "A",
+            remote: .init(fingerprint: Data([1]), photoRelativePath: "2024/02/a.jpg", videoRelativePath: nil,
+                          photoContentHash: nil, videoContentHash: nil, storageMonth: .init(year: 2024, month: 2), isIncomplete: false))
+        var page = MediaBrowserPageReference(.local("A"))
+        XCTAssertEqual(page.resolve(in: MediaBrowserSnapshot(sections: [.init(month: month, items: [february])])), february)
+        XCTAssertEqual(page.resolve(in: MediaBrowserSnapshot(sections: [.init(month: month, items: [january, february])])), february)
+    }
+
+    func testLocalPageDoesNotAdoptAnotherDuplicatesIdentityAfterFallback() {
+        let remote = remoteItem(fingerprint: Data([1]), localIdentifier: "A")
+        var page = MediaBrowserPageReference(.local("A"))
+        XCTAssertEqual(page.resolve(in: MediaBrowserSnapshot(sections: [.init(month: month, items: [remote])])), remote)
+        let duplicate = localItem("B", fingerprint: Data([1]), isBackedUp: false)
+        XCTAssertEqual(page.resolve(in: MediaBrowserSnapshot(sections: [.init(month: month, items: [duplicate])])), duplicate)
+        let edited = localItem("B", fingerprint: Data([2]), isBackedUp: false)
+        XCTAssertNil(page.resolve(in: MediaBrowserSnapshot(sections: [.init(month: month, items: [edited])])))
+    }
+
+    func testPageOrderConsumesIntermediateVersionsWithoutRenderingAnyPage() {
+        let local = localItem("A", fingerprint: nil, isBackedUp: false)
+        let neighbour = localItem("B", fingerprint: nil, isBackedUp: false)
+        let initial = MediaBrowserSnapshot(sections: [.init(month: month, items: [local, neighbour])])
+        var pages = MediaBrowserPageOrder(snapshot: initial)
+        let originalPages = pages
+        let independentPages = MediaBrowserPageOrder(snapshot: initial)
+        XCTAssertNotEqual(pages.id, independentPages.id)
+        let remote = remoteItem(fingerprint: Data([1]), localIdentifier: "A")
+        pages = pages.reconciling(with: MediaBrowserSnapshot(sections: [.init(month: month, items: [remote, neighbour])]))
+        let remoteOnly = remoteItem(fingerprint: Data([1]), localIdentifier: nil)
+        let removed = MediaBrowserSnapshot(sections: [.init(month: month, items: [remoteOnly, neighbour])])
+        pages = pages.reconciling(with: removed)
+        XCTAssertEqual(pages.item(at: 0, in: removed), remoteOnly)
+        XCTAssertEqual(pages.id, originalPages.id)
+        XCTAssertNil(originalPages.item(at: 0, in: removed))
+        XCTAssertNil(independentPages.item(at: 0, in: removed))
+        XCTAssertNil(MediaBrowserPageOrder(snapshot: initial).item(at: 0, in: removed))
+        let edited = localItem("A", fingerprint: Data([2]), isBackedUp: false)
+        pages = pages.reconciling(with: MediaBrowserSnapshot(sections: [.init(month: month, items: [edited, remoteOnly, neighbour])]))
+        pages = pages.reconciling(with: removed)
+        XCTAssertNil(pages.item(at: 0, in: removed))
+        XCTAssertEqual(pages.item(at: 1, in: removed), neighbour)
+        XCTAssertEqual(pages.count, 2)
     }
 
     func testSelectAllKeepsDisplayOrderAcrossMonthsAndRemoteTwins() {

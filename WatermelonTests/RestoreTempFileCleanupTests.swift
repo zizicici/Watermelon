@@ -406,11 +406,9 @@ final class RestoreTempFileCleanupTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
 
-        let database = try DatabaseManager(databaseURL: directory.appendingPathComponent("test.sqlite"))
         let drainObservation = RestoreDrainFlag()
         let restoreService = DrainObservingRestoreService(observation: drainObservation)
         let helper = DownloadWorkflowHelper(
-            hashIndexRepository: ContentHashIndexRepository(databaseManager: database),
             restoreService: restoreService
         )
         let remoteResource = RemoteManifestResource(

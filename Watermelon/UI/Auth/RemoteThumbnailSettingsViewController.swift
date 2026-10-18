@@ -154,6 +154,17 @@ final class RemoteThumbnailSettingsViewController: UIViewController {
 
     // MARK: - Maintenance
 
+    nonisolated static func backfillFingerprints(
+        from state: RemoteLibrarySnapshotState,
+        expectedProfileKey: String
+    ) -> [Data]? {
+        guard state.isAuthoritative, RemoteSnapshotOwnership.matches(
+            ownerProfileKey: state.profileKey,
+            expectedProfileKey: expectedProfileKey
+        ) else { return nil }
+        return state.monthDeltas.flatMap { $0.assets.map(\.assetFingerprint) }
+    }
+
     private func makeMaintenanceService(password: String) -> RemoteThumbnailService {
         // Backfill only needs the fingerprint→localIdentifier map; a private index is sufficient.
         let presenceIndex = LibraryPresenceIndex(
@@ -195,20 +206,23 @@ final class RemoteThumbnailSettingsViewController: UIViewController {
 
         maintenanceTask = Task { [weak self] in
             defer { flags.exitExecution(executionClaim) }
-            // Build the fingerprint list off the main thread — the snapshot can be very large — and
-            // decide empty-vs-work BEFORE presenting any alert (avoids a present-then-dismiss flash). Gate on
-            // the snapshot belonging to THIS settings profile: a profile-switch/reconnect window could
-            // otherwise backfill another profile's fingerprints as orphan thumbnails.
+            // Large snapshots must be resolved off the main thread.
             let fingerprints = await withCancellableDetachedValue {
-                let state = coordinator.currentRemoteSnapshotState(since: nil)
-                guard RemoteSnapshotOwnership.matches(
-                    ownerProfileKey: state.profileKey,
+                Self.backfillFingerprints(
+                    from: coordinator.currentRemoteSnapshotState(since: nil),
                     expectedProfileKey: expectedKey
-                ) else { return [Data]() }
-                return state.monthDeltas.flatMap { $0.assets.map(\.assetFingerprint) }
+                )
             }
             guard let self, !cancelFlag.isCancelled else {
                 await service.shutdown()
+                return
+            }
+            guard let fingerprints else {
+                await service.shutdown()
+                self.presentSimpleAlert(
+                    title: String(localized: "common.error"),
+                    message: String(localized: "mediaBrowser.action.error")
+                )
                 return
             }
             guard !fingerprints.isEmpty else {

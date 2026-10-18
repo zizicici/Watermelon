@@ -87,10 +87,11 @@ final class LocalMediaSourceTests: XCTestCase {
             monthGroupingTimeZone: .frozenCurrent()
         )
 
-        let sections = try XCTUnwrap(LocalMediaSource.sections(
+        let content = try XCTUnwrap(LocalMediaSource.content(
             from: seed,
             backedUpFingerprints: [backedUp]
         ))
+        let sections = content.sections
 
         XCTAssertEqual(sections.map(\.month), [february, january])
         XCTAssertEqual(sections[1].items.map(\.testLabel), ["jan-new", "jan-old"])
@@ -126,10 +127,11 @@ final class LocalMediaSourceTests: XCTestCase {
             monthGroupingTimeZone: .frozenCurrent()
         )
 
-        let sections = try XCTUnwrap(LocalMediaSource.sections(
+        let content = try XCTUnwrap(LocalMediaSource.content(
             from: seed,
             backedUpFingerprints: []
         ))
+        let sections = content.sections
 
         XCTAssertEqual(sections[0].items.map(\.testLabel), ["a", "z"])
     }
@@ -162,14 +164,16 @@ final class LocalMediaSourceTests: XCTestCase {
             monthGroupingTimeZone: .frozenCurrent()
         )
 
-        let sections = try XCTUnwrap(LocalMediaSource.sections(
+        let content = try XCTUnwrap(LocalMediaSource.content(
             from: seed,
             backedUpFingerprints: [backedUp],
             excludingBackedUpFingerprints: [backedUp]
         ))
+        let sections = content.sections
 
         XCTAssertEqual(sections.flatMap(\.items).map(\.testLabel), ["local-only"])
         XCTAssertEqual(sections[0].items[0].presence, .localOnly)
+        XCTAssertEqual(content.localFingerprintAliases, ["remote-twin": backedUp])
     }
 
     func testMonthMemoMatchesCanonicalGroupingAcrossBoundaries() throws {

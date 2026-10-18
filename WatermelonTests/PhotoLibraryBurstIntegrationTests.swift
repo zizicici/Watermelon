@@ -93,7 +93,7 @@ final class PhotoLibraryBurstIntegrationTests: XCTestCase {
         let month = LibraryMonthKey.from(date: date, calendar: LibraryMonthKey.currentPreferenceMonthCalendar())
         let worker = HomeDataProcessingWorker(photoLibraryService: service, contentHashIndexRepository: repository,
             remoteMonthSnapshot: { _ in nil })
-        _ = await worker.loadLocalIndex(forceReload: true, scope: scope)
+        _ = await worker.reloadLocalIndex(scope: scope)
         XCTAssertEqual(worker.localAssetIDs(for: month, expectedScope: scope), ids)
         let members = PHAsset.fetchAssets(in: collection, options: nil)
         for shouldAdd in [false, true] {

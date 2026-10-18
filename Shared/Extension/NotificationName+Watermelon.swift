@@ -13,11 +13,6 @@ extension Notification.Name {
     static let BackgroundBackupRunMarkerDidChange = Notification.Name(rawValue: "com.zizicici.watermelon.background.runMarker.changed")
     // Posted when LibraryPresenceIndex facts become stale or a requested rebuild commits.
     static let LibraryPresenceDidChange = Notification.Name(rawValue: "com.zizicici.watermelon.library.presence.changed")
-    // Posted by RemoteIndexSyncService once a sync commits changes to the cached snapshot — the single
-    // authoritative "the browser-visible remote library changed" signal. Fires AFTER the cache is updated, so
-    // a presence rebuild off it can't read a pre-reload snapshot (closes the background-reload race). Coarse:
-    // one post per changed sync, never per uploaded asset (the upload hot path does not post).
-    static let RemoteLibrarySnapshotDidChange = Notification.Name(rawValue: "com.zizicici.watermelon.remote.library.snapshot.changed")
     // Posted when the browser's fingerprint-keyed L1 thumbnail cache gets a fresh image, so visible tiles that
     // previously showed the load affordance can swap in the thumbnail without a full browser reload.
     static let MediaBrowserThumbnailDidStore = Notification.Name(rawValue: "com.zizicici.watermelon.mediaBrowser.thumbnail.stored")

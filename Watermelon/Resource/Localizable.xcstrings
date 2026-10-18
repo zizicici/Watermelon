@@ -66251,6 +66251,29 @@
         }
       }
     },
+    "mediaBrowser.viewer.unavailable" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This item is no longer available."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此资源已不可用。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此資源已無法使用。"
+          }
+        }
+      }
+    },
     "more.item.backgroundBackup" : {
       "localizations" : {
         "de" : {

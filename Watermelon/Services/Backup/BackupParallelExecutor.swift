@@ -43,7 +43,7 @@ private actor BackupThermalThrottle {
 struct BackupParallelExecutor: Sendable {
     private let hashIndexRepository: ContentHashIndexRepository
     private let assetProcessor: AssetProcessor
-    private let remoteIndexService: RemoteIndexSyncService
+    private let remoteSnapshotCache: RemoteLibrarySnapshotCache
 
     enum RecoveryOutcome {
         case recovered(any RemoteStorageClientProtocol)
@@ -94,11 +94,11 @@ struct BackupParallelExecutor: Sendable {
     init(
         hashIndexRepository: ContentHashIndexRepository,
         assetProcessor: AssetProcessor,
-        remoteIndexService: RemoteIndexSyncService
+        remoteSnapshotCache: RemoteLibrarySnapshotCache
     ) {
         self.hashIndexRepository = hashIndexRepository
         self.assetProcessor = assetProcessor
-        self.remoteIndexService = remoteIndexService
+        self.remoteSnapshotCache = remoteSnapshotCache
     }
 
     static func shouldContinueAfterManifestFlushFailure(_ error: Error) -> Bool {
@@ -924,8 +924,7 @@ struct BackupParallelExecutor: Sendable {
                         let store = try await MonthManifestStore.loadOrCreate(
                             client: client,
                             basePath: profile.basePath,
-                            year: monthKey.year,
-                            month: monthKey.month,
+                            year: monthKey.year, month: monthKey.month,
                             seed: snapshotSeedLookup?.seed(for: monthKey),
                             layout: writeMode.manifestLayout,
                             stepLogger: { message in
@@ -934,7 +933,8 @@ struct BackupParallelExecutor: Sendable {
                             // Read-only lease gate: parallel workers must never write the lock (concurrent
                             // reclaims corrupt it). The session's refresh task is the sole lock writer.
                             assertOwnership: writeMode.ownershipGates,
-                            liteMonthsListing: writeMode.liteMonthsListing
+                            liteMonthsListing: writeMode.liteMonthsListing,
+                            snapshotObserver: remoteSnapshotCache.snapshotObserver(profileKey: RemoteIndexSyncService.remoteProfileKey(profile))
                         )
                         loadedMonthStore = store
                     } catch {
@@ -989,17 +989,6 @@ struct BackupParallelExecutor: Sendable {
                     workerState.paused = true
                 }
                 recoveryDeadline = nil   // load succeeded
-
-                // loadOrCreate may have cleaned manifest rows; sync to snapshotCache so consumers don't see stale state.
-                // Mutable: an incremental flush durably commits progress, so the rollback baseline advances to it.
-                var loadedSnapshot = monthStore.unsortedSnapshot()
-                remoteIndexService.replaceCachedMonth(
-                    monthKey,
-                    resources: loadedSnapshot.resources,
-                    assets: loadedSnapshot.assets,
-                    links: loadedSnapshot.links,
-                    expectedProfileKey: RemoteIndexSyncService.remoteProfileKey(profile)
-                )
 
                 eventStream.emitLog(
                     String.localizedStringWithFormat(
@@ -1420,11 +1409,6 @@ struct BackupParallelExecutor: Sendable {
                                     do {
                                         // Re-asserts the run's write lease inside flushToRemote (store-owned gate).
                                         try await monthStore.flushToRemote(ignoreCancellation: true)
-                                        // Progress is now durable; advance the rollback baseline so a later
-                                        // failure can't revert the cache below what was committed here, and bank
-                                        // the committed segment: a later final-flush failure must only un-mark /
-                                        // count assets uploaded SINCE this checkpoint, not these.
-                                        loadedSnapshot = monthStore.unsortedSnapshot()
                                         monthDirtyAssetIDs.removeAll(keepingCapacity: true)
                                         monthProgressCounts = BackupMonthProgressCounts()
                                         recoveryDeadline = nil   // incremental flush committed
@@ -1548,7 +1532,6 @@ struct BackupParallelExecutor: Sendable {
                 let finalizeDisposition = await finalizeMonth(
                     monthStore: monthStore,
                     monthKey: monthKey,
-                    loadedSnapshot: loadedSnapshot,
                     monthDirtyAssetIDs: monthDirtyAssetIDs,
                     monthProgressCounts: monthProgressCounts,
                     monthDeferredAssetIDs: monthDeferredAssetIDs,
@@ -1607,7 +1590,6 @@ struct BackupParallelExecutor: Sendable {
     func finalizeMonth(
         monthStore: MonthManifestStore,
         monthKey: LibraryMonthKey,
-        loadedSnapshot: (resources: [RemoteManifestResource], assets: [RemoteManifestAsset], links: [RemoteAssetResourceLink]),
         monthDirtyAssetIDs: Set<String>,
         monthProgressCounts: BackupMonthProgressCounts,
         monthDeferredAssetIDs: Set<String> = [],
@@ -1626,21 +1608,12 @@ struct BackupParallelExecutor: Sendable {
     ) async -> MonthFinalizeDisposition {
         let hadDirtyManifestBeforeFinalize = monthStore.dirty
         let resumableAssetIDs = monthDirtyAssetIDs.union(monthDeferredAssetIDs)
-        // A month already fatal skips the flush and rolls back — never re-enter recovery for a flush we know fails.
+        // A fatal month must not publish its uncommitted changes.
         let skipFlushDueToMonthFatal = state.monthFatalError != nil
         var readBackVerificationFailed = false
         var flushSucceeded = false
 
         if skipFlushDueToMonthFatal {
-            // The month did not commit, so roll back optimistic cache mutations to the last
-            // committed month state.
-            remoteIndexService.replaceCachedMonth(
-                monthKey,
-                resources: loadedSnapshot.resources,
-                assets: loadedSnapshot.assets,
-                links: loadedSnapshot.links,
-                expectedProfileKey: RemoteIndexSyncService.remoteProfileKey(profile)
-            )
             eventStream.emitLog(
                 String.localizedStringWithFormat(
                     String(localized: "backup.parallel.skipManifestFlush"),
@@ -1712,15 +1685,6 @@ struct BackupParallelExecutor: Sendable {
                         state.monthFatalError = BackupNetworkRecoveryExhausted(underlying: error)
                     }
                 }
-                // Flush failed: roll back optimistic cache mutations so the cache
-                // reflects the last committed month state, not uncommitted upserts.
-                remoteIndexService.replaceCachedMonth(
-                    monthKey,
-                    resources: loadedSnapshot.resources,
-                    assets: loadedSnapshot.assets,
-                    links: loadedSnapshot.links,
-                    expectedProfileKey: RemoteIndexSyncService.remoteProfileKey(profile)
-                )
                 eventStream.emitErrorLog(
                     String.localizedStringWithFormat(
                         String(localized: "backup.parallel.flushManifestFailed"),

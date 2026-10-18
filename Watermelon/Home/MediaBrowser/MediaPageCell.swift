@@ -22,6 +22,7 @@ final class MediaPageCell: UICollectionViewCell {
         case videoPoster   // still poster + play button (also the Live-fallback state)
         case videoPlaying  // embedded AVPlayerViewController
         case failed
+        case unavailable
     }
 
     private let scrollView = UIScrollView()
@@ -30,6 +31,7 @@ final class MediaPageCell: UICollectionViewCell {
     private let videoContainer = UIView()
     private let playButton = UIButton(type: .system)
     private let activityIndicator = UIActivityIndicatorView(style: .large)
+    private let unavailableLabel = UILabel()
 
     private var display: Display = .idle
     private var item: MediaBrowserItem?
@@ -79,6 +81,7 @@ final class MediaPageCell: UICollectionViewCell {
         livePhotoView.isHidden = next != .livePhoto
         videoContainer.isHidden = next != .videoPlaying
         playButton.isHidden = next != .videoPoster
+        unavailableLabel.isHidden = next != .unavailable
         if next == .loading { activityIndicator.startAnimating() } else { activityIndicator.stopAnimating() }
 
         // Only real photos zoom; posters are shown 1:1.
@@ -172,6 +175,12 @@ final class MediaPageCell: UICollectionViewCell {
 
     func isConfigured(with item: MediaBrowserItem) -> Bool {
         self.item == item
+    }
+
+    func showUnavailable() {
+        reset()
+        onZoomChanged?(false)
+        apply(.unavailable)
     }
 
     // Marks this page as the centered one. Drives Live playback and pauses inline video when leaving.
@@ -351,7 +360,16 @@ final class MediaPageCell: UICollectionViewCell {
         activityIndicator.hidesWhenStopped = true
         contentView.addSubview(activityIndicator)
 
-        for v in [scrollView, livePhotoView, videoContainer, playButton, activityIndicator] {
+        unavailableLabel.text = String(localized: "mediaBrowser.viewer.unavailable")
+        unavailableLabel.font = .preferredFont(forTextStyle: .body)
+        unavailableLabel.adjustsFontForContentSizeCategory = true
+        unavailableLabel.textColor = .mediaBrowserOnSurface
+        unavailableLabel.textAlignment = .center
+        unavailableLabel.numberOfLines = 0
+        unavailableLabel.isHidden = true
+        contentView.addSubview(unavailableLabel)
+
+        for v in [scrollView, livePhotoView, videoContainer, playButton, activityIndicator, unavailableLabel] {
             v.translatesAutoresizingMaskIntoConstraints = false
         }
         NSLayoutConstraint.activate([
@@ -371,6 +389,9 @@ final class MediaPageCell: UICollectionViewCell {
             playButton.centerYAnchor.constraint(equalTo: contentView.centerYAnchor),
             activityIndicator.centerXAnchor.constraint(equalTo: contentView.centerXAnchor),
             activityIndicator.centerYAnchor.constraint(equalTo: contentView.centerYAnchor),
+            unavailableLabel.centerYAnchor.constraint(equalTo: contentView.centerYAnchor),
+            unavailableLabel.leadingAnchor.constraint(equalTo: contentView.safeAreaLayoutGuide.leadingAnchor, constant: 24),
+            unavailableLabel.trailingAnchor.constraint(equalTo: contentView.safeAreaLayoutGuide.trailingAnchor, constant: -24),
         ])
 
         // Constrained zoom pattern: image view fills the scroll viewport (edges + size == scrollView) and

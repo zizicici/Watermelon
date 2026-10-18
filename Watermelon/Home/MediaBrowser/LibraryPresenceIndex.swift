@@ -9,10 +9,30 @@ actor PresenceRefreshSingleFlight {
         let remoteRevision: UInt64
     }
 
-    enum Outcome: Equatable {
-        case current
-        case committed
+    enum Outcome: Sendable {
+        case current(LibraryPresenceIndex.BrowserLocalProjectionInput)
+        case committed(LibraryPresenceIndex.BrowserLocalProjectionInput)
+        case captured(LibraryPresenceIndex.BrowserLocalProjectionInput)
         case failed
+
+        var projection: LibraryPresenceIndex.BrowserLocalProjectionInput? {
+            switch self {
+            case .current(let input), .committed(let input), .captured(let input): input
+            case .failed: nil
+            }
+        }
+
+        var isCurrent: Bool {
+            switch self {
+            case .current, .committed: true
+            case .captured, .failed: false
+            }
+        }
+
+        var didCommit: Bool {
+            if case .committed = self { return true }
+            return false
+        }
     }
 
     private struct Flight {
@@ -40,31 +60,8 @@ actor PresenceRefreshSingleFlight {
         flights[key] = Flight(task: task, wantsNotification: notifyOnCommit)
         let outcome = await task.value
         guard let flight = flights.removeValue(forKey: key) else { return (outcome, false) }
-        let shouldNotify = outcome == .committed && flight.wantsNotification
+        let shouldNotify = outcome.didCommit && flight.wantsNotification
         return (outcome, shouldNotify)
-    }
-}
-
-struct PresenceInvalidationGate {
-    private(set) var suspendDepth = 0
-    private(set) var hasPendingInvalidation = false
-
-    mutating func suspend() {
-        suspendDepth += 1
-    }
-
-    mutating func recordInvalidation() -> Bool {
-        guard suspendDepth > 0 else { return true }
-        hasPendingInvalidation = true
-        return false
-    }
-
-    mutating func resume() -> Bool {
-        guard suspendDepth > 0 else { return false }
-        suspendDepth -= 1
-        guard suspendDepth == 0, hasPendingInvalidation else { return false }
-        hasPendingInvalidation = false
-        return true
     }
 }
 
@@ -83,10 +80,10 @@ final class LibraryPresenceIndex: @unchecked Sendable {
     private enum InvalidationScope {
         case local
         case remote
-        case all
     }
 
     struct BrowserLocalProjectionInput: Sendable {
+        let profileKey: String?
         let seed: HomeBrowserLocalSeed?
         let backedUpFingerprints: Set<Data>
     }
@@ -115,9 +112,9 @@ final class LibraryPresenceIndex: @unchecked Sendable {
         var remoteProfileKey: String?
         var remoteRevision: UInt64?
 
-        mutating func invalidateLocal(clearHomeLocalSeed: Bool) {
+        mutating func invalidateLocal() {
             localIsBuilt = false
-            if clearHomeLocalSeed { homeLocalSeed = nil }
+            homeLocalSeed = nil
         }
 
         mutating func invalidateRemote() {
@@ -163,20 +160,14 @@ final class LibraryPresenceIndex: @unchecked Sendable {
     private var state = CommittedState()
     private var localGeneration = 0
     private var remoteGeneration = 0
-    private var invalidationGate = PresenceInvalidationGate()
+    private var presenceNotificationScheduled = false
 
-    // This index is the ONE place that knows which upstream events can change presence, so UI consumers observe
-    // only `.LibraryPresenceDidChange` instead of subscribing to a growing set of proxies.
-    //   · RemoteLibrarySnapshotDidChange   — remote facts changed, posted AFTER the cache is updated (race-free).
-    //   · ExecutionLifecycleDidChange      — a foreground execution ended; the local hash index may have changed.
-    //   · BackgroundBackupRunMarkerDidChange — a background run may have changed local fingerprints without a
-    //     remote re-sync (e.g. a download), which the snapshot signal wouldn't cover.
-    //   · LocalIndexChangePublisher — a local index build / duplicate cleanup mutated fingerprints without any
-    //     execution lease or snapshot signal (it only reaches Home otherwise).
+    // Subscribe to committed sources; action callers do not own cache invalidation.
     private var observerTokens: [NSObjectProtocol] = []
-    private let localIndexChangePublisher: LocalIndexChangePublisher?
+    private let localIndexChangePublisher: LocalIndexChangePublisher
     private let homeLocalSeedProvider: HomeLocalSeedProvider?
     private var indexChangeObserverID: UUID?
+    private var remoteSnapshotObserverID: UUID?
     private let homeLocalSeedChanges: ChangeSignal<Void>?
     private var homeLocalSeedChangeObserverID: UUID?
 
@@ -184,7 +175,6 @@ final class LibraryPresenceIndex: @unchecked Sendable {
         hashIndexRepository: ContentHashIndexRepository,
         coordinator: BackupCoordinator,
         profileKey: @escaping () -> String?,
-        localIndexChangePublisher: LocalIndexChangePublisher? = nil,
         homeLocalSeedProvider: HomeLocalSeedProvider? = nil,
         homeLocalSeedChanges: ChangeSignal<Void>? = nil
     ) {
@@ -195,64 +185,64 @@ final class LibraryPresenceIndex: @unchecked Sendable {
             coordinator: coordinator
         )
         self.profileKey = profileKey
-        self.localIndexChangePublisher = localIndexChangePublisher
+        localIndexChangePublisher = hashIndexRepository.changes
         self.homeLocalSeedProvider = homeLocalSeedProvider
         self.homeLocalSeedChanges = homeLocalSeedChanges
-        for name in [Notification.Name.RemoteLibrarySnapshotDidChange, .ExecutionLifecycleDidChange, .BackgroundBackupRunMarkerDidChange] {
-            let token = NotificationCenter.default.addObserver(forName: name, object: nil, queue: nil) { [weak self] _ in
-                self?.upstreamStateChanged(
-                    scope: name == .RemoteLibrarySnapshotDidChange ? .remote : .local,
-                    clearHomeLocalSeed: name != .RemoteLibrarySnapshotDidChange
-                )
-            }
-            observerTokens.append(token)
+        remoteSnapshotObserverID = coordinator.remoteSnapshotChanges.addObserver { [weak self] in
+            self?.upstreamStateChanged(scope: .remote)
         }
+        let executionObserver = NotificationCenter.default.addObserver(
+            forName: .ExecutionLifecycleDidChange, object: nil, queue: nil
+        ) { [weak self] _ in
+            self?.upstreamStateChanged(scope: .local)
+        }
+        observerTokens.append(executionObserver)
         if homeLocalSeedProvider != nil {
             homeLocalSeedChangeObserverID = homeLocalSeedChanges?.addObserver { [weak self] in
-                self?.upstreamStateChanged(scope: .local, clearHomeLocalSeed: true)
+                self?.upstreamStateChanged(scope: .local)
             }
         }
-        indexChangeObserverID = localIndexChangePublisher?.addObserver { [weak self] _ in
-            self?.upstreamStateChanged(scope: .local, clearHomeLocalSeed: true)
+        indexChangeObserverID = localIndexChangePublisher.addObserver { [weak self] in
+            self?.upstreamStateChanged(scope: .local)
         }
     }
 
     deinit {
         observerTokens.forEach { NotificationCenter.default.removeObserver($0) }
-        if let indexChangeObserverID { localIndexChangePublisher?.removeObserver(indexChangeObserverID) }
+        if let indexChangeObserverID { localIndexChangePublisher.removeObserver(indexChangeObserverID) }
+        if let remoteSnapshotObserverID { coordinator.remoteSnapshotChanges.removeObserver(remoteSnapshotObserverID) }
         if let homeLocalSeedChangeObserverID {
             homeLocalSeedChanges?.removeObserver(homeLocalSeedChangeObserverID)
         }
     }
 
-    private func upstreamStateChanged(
-        scope: InvalidationScope,
-        clearHomeLocalSeed: Bool
-    ) {
-        invalidate(
-            scope: scope,
-            clearHomeLocalSeed: clearHomeLocalSeed
-        )
-        publishPresenceChangeWhenAllowed()
+    private func upstreamStateChanged(scope: InvalidationScope) {
+        lock.withLock {
+            switch scope {
+            case .local:
+                state.invalidateLocal()
+                localGeneration &+= 1
+            case .remote:
+                state.invalidateRemote()
+                remoteGeneration &+= 1
+            }
+        }
+        schedulePresenceNotification()
     }
 
-    // Bracket a batch that emits many upstream posts. Facts become stale immediately; observers receive one
-    // invalidation after the outermost resume and let the active source rebuild them.
-    func suspendUpstreamRefresh() {
-        lock.withLock { invalidationGate.suspend() }
-    }
-
-    func resumeUpstreamRefresh() {
-        let shouldNotify = lock.withLock { invalidationGate.resume() }
-        if shouldNotify {
+    private func schedulePresenceNotification() {
+        let shouldSchedule = lock.withLock {
+            guard !presenceNotificationScheduled else { return false }
+            presenceNotificationScheduled = true
+            return true
+        }
+        guard shouldSchedule else { return }
+        // Database commits can run while the main thread waits for the write to return.
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.lock.withLock { self.presenceNotificationScheduled = false }
             NotificationCenter.default.post(name: .LibraryPresenceDidChange, object: self)
         }
-    }
-
-    private func publishPresenceChangeWhenAllowed() {
-        let shouldPost = lock.withLock { invalidationGate.recordInvalidation() }
-        guard shouldPost else { return }
-        NotificationCenter.default.post(name: .LibraryPresenceDidChange, object: self)
     }
 
     private struct PresenceProjectionBuild {
@@ -264,6 +254,14 @@ final class LibraryPresenceIndex: @unchecked Sendable {
 
     @discardableResult
     func refresh(notifyOnCommit: Bool = true) async -> Bool {
+        await refreshOutcome(notifyOnCommit: notifyOnCommit).isCurrent
+    }
+
+    func prepareLocalBrowserProjection() async -> BrowserLocalProjectionInput? {
+        await refreshOutcome(notifyOnCommit: false).projection
+    }
+
+    private func refreshOutcome(notifyOnCommit: Bool) async -> PresenceRefreshSingleFlight.Outcome {
         let currentKey = profileKey()
         let currentRevision = coordinator.currentSnapshotRevision()
         let key = PresenceRefreshSingleFlight.Key(
@@ -280,9 +278,9 @@ final class LibraryPresenceIndex: @unchecked Sendable {
             return await self.performRefresh(for: key)
         }
         if result.shouldNotify {
-            publishPresenceChangeWhenAllowed()
+            schedulePresenceNotification()
         }
-        return result.outcome != .failed
+        return result.outcome
     }
 
     private func performRefresh(
@@ -294,7 +292,8 @@ final class LibraryPresenceIndex: @unchecked Sendable {
         let refreshContext: (
             homeSeed: HomeBrowserLocalSeed?,
             needsLocal: Bool,
-            needsRemote: Bool
+            needsRemote: Bool,
+            backedUpFingerprints: Set<Data>
         )? = lock.withLock {
             guard localGeneration == key.localGeneration,
                   remoteGeneration == key.remoteGeneration else { return nil }
@@ -304,13 +303,15 @@ final class LibraryPresenceIndex: @unchecked Sendable {
                 !isRemoteStateCurrentLocked(
                     profileKey: key.profileKey,
                     revision: key.remoteRevision
-                )
+                ),
+                state.backedUpFingerprints
             )
         }
         guard let refreshContext else { return .failed }
         if !refreshContext.needsLocal, !refreshContext.needsRemote {
             MediaBrowserLoadTrace.emit("presenceCacheHit", context: trace, startedAt: startedAt)
-            return .current
+            return .current(BrowserLocalProjectionInput(profileKey: key.profileKey,
+                seed: refreshContext.homeSeed, backedUpFingerprints: refreshContext.backedUpFingerprints))
         }
 
         var homeSeed = refreshContext.homeSeed
@@ -363,7 +364,13 @@ final class LibraryPresenceIndex: @unchecked Sendable {
             startedAt: startedAt,
             details: "committed=\(committed)"
         )
-        return committed ? .committed : .failed
+        guard !Task.isCancelled, profileKey() == key.profileKey else { return .failed }
+        if let remoteBuild,
+           !RemoteSnapshotOwnership.matches(ownerProfileKey: remoteBuild.projection.ownerProfileKey,
+                                            expectedProfileKey: key.profileKey) { return .failed }
+        let projection = BrowserLocalProjectionInput(profileKey: key.profileKey, seed: resolvedHomeSeed,
+            backedUpFingerprints: remoteBuild?.projection.backedUpFingerprints ?? refreshContext.backedUpFingerprints)
+        return committed ? .committed(projection) : .captured(projection)
     }
 
     func prepareRemoteBrowserProjection(notifyOnCommit: Bool = false) async -> RemoteBrowserProjection? {
@@ -371,6 +378,7 @@ final class LibraryPresenceIndex: @unchecked Sendable {
         let startedAt = CFAbsoluteTimeGetCurrent()
         let buildStartedAt = CFAbsoluteTimeGetCurrent()
         let monthGroupingTimeZone = MonthGroupingTimeZonePreference.frozenCurrent()
+        let photoAuthorization = PHPhotoLibrary.authorizationStatus(for: .readWrite)
         let currentKey = profileKey()
         guard let remoteInput = await inputLoader.loadRemote(profileKey: currentKey) else {
             MediaBrowserLoadTrace.emit("remoteSharedCancelled", context: trace, startedAt: startedAt)
@@ -475,6 +483,9 @@ final class LibraryPresenceIndex: @unchecked Sendable {
         let (projectionResult, handlesResult) = await (projected, resolvedHandles)
         guard let baseProjection = projectionResult.projection,
               !Task.isCancelled,
+              PHPhotoLibrary.authorizationStatus(for: .readWrite) == photoAuthorization,
+              profileKey() == currentKey,
+              RemoteSnapshotOwnership.matches(ownerProfileKey: remoteInput.state.profileKey, expectedProfileKey: currentKey),
               monthGroupingTimeZone == .frozenCurrent() else {
             MediaBrowserLoadTrace.emit("remoteSharedCancelled", context: trace, startedAt: startedAt)
             return nil
@@ -513,20 +524,21 @@ final class LibraryPresenceIndex: @unchecked Sendable {
             liveProfileKey: profileKey(),
             liveRemoteRevision: coordinator.currentSnapshotRevision()
         )
-        guard valid else {
-            MediaBrowserLoadTrace.emit("remoteSharedDropped", context: trace, startedAt: startedAt)
-            return nil
-        }
-        if (localInput != nil || presenceBuild != nil), notifyOnCommit {
-            publishPresenceChangeWhenAllowed()
+        guard !Task.isCancelled,
+              PHPhotoLibrary.authorizationStatus(for: .readWrite) == photoAuthorization,
+              profileKey() == currentKey,
+              monthGroupingTimeZone == .frozenCurrent() else { return nil }
+        // A captured projection can render while newer commits keep action authority invalid.
+        if valid, (localInput != nil || presenceBuild != nil), notifyOnCommit {
+            schedulePresenceNotification()
         }
         MediaBrowserLoadTrace.emit(
             "remoteSharedCommit",
             context: trace,
             startedAt: startedAt,
-            details: "presence=\(presenceBuild != nil) notify=\(notifyOnCommit)"
+            details: "current=\(valid) presence=\(presenceBuild != nil) notify=\(notifyOnCommit)"
         )
-        return remoteInput.isAuthoritative ? projection : nil
+        return projection
     }
 
     private func buildPresenceProjection(
@@ -609,7 +621,6 @@ final class LibraryPresenceIndex: @unchecked Sendable {
     ) -> Bool {
         Self.remoteStateIsCurrent(
             isBuilt: state.remoteIsBuilt,
-            isAuthoritative: state.remoteIsAuthoritative,
             ownerProfileKey: state.remoteProfileKey,
             expectedProfileKey: profileKey,
             committedRevision: state.remoteRevision,
@@ -619,14 +630,12 @@ final class LibraryPresenceIndex: @unchecked Sendable {
 
     static func remoteStateIsCurrent(
         isBuilt: Bool,
-        isAuthoritative: Bool,
         ownerProfileKey: String?,
         expectedProfileKey: String?,
         committedRevision: UInt64?,
         liveRevision: UInt64
     ) -> Bool {
         isBuilt &&
-            isAuthoritative &&
             RemoteSnapshotOwnership.matches(
                 ownerProfileKey: ownerProfileKey,
                 expectedProfileKey: expectedProfileKey
@@ -686,40 +695,6 @@ final class LibraryPresenceIndex: @unchecked Sendable {
             ownerProfileKey: projectionProfileKey,
             expectedProfileKey: expectedProfileKey
         )
-    }
-
-    // Forces the next refresh() to rebuild — call after a library change (download / delete) mutates state.
-    func invalidate() {
-        invalidate(scope: .local, clearHomeLocalSeed: true)
-    }
-
-    func invalidateRemoteFacts() {
-        invalidate(scope: .remote, clearHomeLocalSeed: false)
-    }
-
-    func invalidateAllFacts() {
-        invalidate(scope: .all, clearHomeLocalSeed: true)
-    }
-
-    private func invalidate(
-        scope: InvalidationScope,
-        clearHomeLocalSeed: Bool
-    ) {
-        lock.withLock {
-            switch scope {
-            case .local:
-                state.invalidateLocal(clearHomeLocalSeed: clearHomeLocalSeed)
-                localGeneration &+= 1
-            case .remote:
-                state.invalidateRemote()
-                remoteGeneration &+= 1
-            case .all:
-                state.invalidateLocal(clearHomeLocalSeed: clearHomeLocalSeed)
-                state.invalidateRemote()
-                localGeneration &+= 1
-                remoteGeneration &+= 1
-            }
-        }
     }
 
     // Home's staleness rule: a hash row older than the asset's modificationDate no longer describes the
@@ -998,7 +973,7 @@ final class LibraryPresenceIndex: @unchecked Sendable {
     }
 
     // Absence from the committed set can mean "the build predates this month" while an in-place sync mutates
-    // the shared cache month-by-month (single post at sync end) — not "gone from the remote". Destructive
+    // the shared cache month-by-month (coalesced change notification) — not "gone from the remote". Destructive
     // reconcile-as-gone decisions must confirm absence against the live cache with this instead.
     // `.unknown` = the live cache doesn't answer for the active profile (mid-switch it is reset and re-tagged
     // for the incoming profile while this session is still active) — never a confirmed absence.
@@ -1034,7 +1009,7 @@ final class LibraryPresenceIndex: @unchecked Sendable {
         let currentKey = profileKey()
         let revision = coordinator.currentSnapshotRevision()
         return lock.withLock {
-            isRemoteStateCurrentLocked(profileKey: currentKey, revision: revision)
+            isRemoteStateCurrentLocked(profileKey: currentKey, revision: revision) && state.remoteIsAuthoritative
         }
     }
 
@@ -1084,11 +1059,12 @@ final class LibraryPresenceIndex: @unchecked Sendable {
         let revision = coordinator.currentSnapshotRevision()
         return lock.withLock {
             return BrowserLocalProjectionInput(
+                profileKey: currentKey,
                 seed: state.localIsBuilt ? state.homeLocalSeed : nil,
                 backedUpFingerprints: isRemoteStateCurrentLocked(
                     profileKey: currentKey,
                     revision: revision
-                ) && state.remoteIsAuthoritative
+                )
                     ? state.backedUpFingerprints
                     : []
             )

@@ -237,6 +237,34 @@ final class SelectionControllerTests: XCTestCase {
 
     // MARK: - revalidated (confirm-dialog capture vs live truth)
 
+    func testConfirmedIntentSurvivesPresentationCatchUpWhileNewSelectionIsBlocked() {
+        let state = GateState()
+        state.sections = [section(year: 2024, months: [1, 2, 3, 4])]
+        let controller = makeController(state: state)
+        let backup = LibraryMonthKey(year: 2024, month: 1)
+        let download = LibraryMonthKey(year: 2024, month: 2)
+        let complement = LibraryMonthKey(year: 2024, month: 3)
+        let additional = LibraryMonthKey(year: 2024, month: 4)
+        XCTAssertTrue(controller.toggleMonth(backup, side: .local))
+        XCTAssertTrue(controller.toggleMonth(download, side: .remote))
+        XCTAssertTrue(controller.toggleMonth(complement, side: .local))
+        XCTAssertTrue(controller.toggleMonth(complement, side: .remote))
+
+        state.selectable = false
+        XCTAssertFalse(controller.toggleMonth(additional, side: .local))
+        XCTAssertFalse(controller.toggleMonth(backup, side: .local))
+        let confirmed = controller.state.revalidated(backup: [backup], download: [download], complement: [complement])
+        XCTAssertEqual(confirmed.backup, [backup])
+        XCTAssertEqual(confirmed.download, [download])
+        XCTAssertEqual(confirmed.complement, [complement])
+
+        controller.intersect(localMonths: [backup], remoteMonths: [download, complement])
+        let reconciled = controller.state.revalidated(backup: [backup], download: [download], complement: [complement])
+        XCTAssertEqual(reconciled.backup, [backup])
+        XCTAssertEqual(reconciled.download, [download])
+        XCTAssertTrue(reconciled.complement.isEmpty)
+    }
+
     // A backup month whose local side was reconciled away while the confirm dialog was open must be dropped,
     // so startExecution can't run it as a no-op that completes having uploaded nothing.
     func testRevalidated_dropsBackupMonthWhoseLocalSideGone() {

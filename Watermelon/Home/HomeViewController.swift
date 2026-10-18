@@ -164,6 +164,11 @@ final class HomeViewController: UIViewController {
     private let remoteOverlay = UIView()
     private let remoteNodeOverlayController = RemoteNodeOverlayViewController()
     private let lifecycleObservers = NotificationObserverBag()
+    private lazy var foregroundActivity = AppForegroundActivity(onForeground: { [weak self] in
+        self?.updateSettingsFABMembershipAppearance()
+    }) { [weak self] active in
+        self?.store.setAppActive(active)
+    }
 
     private let rightHeaderBg = UIView()
     private var isPanelShown = false
@@ -215,10 +220,10 @@ final class HomeViewController: UIViewController {
         buildUI()
         configureDataSource()
         bindStore()
-        observeApplicationLifecycle()
         observeMembershipChanges()
 
         store.load()
+        foregroundActivity.start()
     }
 
     override func viewDidLayoutSubviews() {
@@ -614,6 +619,13 @@ final class HomeViewController: UIViewController {
         }
         store.onChange = { @MainActor [weak self] kind in
             guard let self else { return }
+            if case .connection = kind, case .disconnected = self.store.connectionState {
+                self.endActiveBrowserLink()
+            }
+            if case .execution = kind, self.store.executionState == nil {
+                self.didRequestReviewForCurrentExecution = false
+            }
+            guard self.store.isAppActive, !self.store.isPresentationCatchingUp else { return }
             switch kind {
             case .data(let months):    self.renderDataChange(months)
             case .fileSizes(let months): self.renderFileSizeChange(months)
@@ -688,7 +700,6 @@ final class HomeViewController: UIViewController {
             maybeRequestRatingPrompt(for: exec)
             refreshLocalLibraryMenu()
         } else {
-            didRequestReviewForCurrentExecution = false
             renderStructuralChange()
         }
     }
@@ -703,9 +714,6 @@ final class HomeViewController: UIViewController {
     }
 
     private func renderConnectionChange() {
-        if case .disconnected = store.connectionState {
-            endActiveBrowserLink()
-        }
         updateRightHeaderButton()
         renderStructuralChange()
     }
@@ -1434,7 +1442,6 @@ final class HomeViewController: UIViewController {
             hashIndexRepository: dependencies.hashIndexRepository,
             coordinator: dependencies.backupCoordinator,
             profileKey: sessionProfileKey,
-            localIndexChangePublisher: dependencies.localIndexChangePublisher,
             homeLocalSeedProvider: { [weak store] in
                 await store?.browserLocalSeed()
             },
@@ -1499,7 +1506,6 @@ final class HomeViewController: UIViewController {
             photoLibraryService: dependencies.photoLibraryService,
             hashIndexRepository: dependencies.hashIndexRepository,
             localHashIndexBuildService: dependencies.localHashIndexBuildService,
-            localIndexChangePublisher: dependencies.localIndexChangePublisher,
             allAccessibleAssetIDs: { [dataManager = store.dataManager] in
                 await dataManager.allAccessibleAssetIDs()
             },
@@ -1690,8 +1696,7 @@ final class HomeViewController: UIViewController {
         let viewController = DuplicatesViewController(
             coordinator: dependencies.localIndexBuildCoordinator,
             hashIndexRepository: dependencies.hashIndexRepository,
-            photoLibraryService: dependencies.photoLibraryService,
-            changePublisher: dependencies.localIndexChangePublisher
+            photoLibraryService: dependencies.photoLibraryService
         )
 
         let container = UINavigationController(rootViewController: viewController)
@@ -1734,10 +1739,7 @@ final class HomeViewController: UIViewController {
                 backupCount: counts.backup,
                 downloadCount: counts.download,
                 complementCount: counts.complement,
-                // A runtime-only execution (browser action / maintenance) or a local-index reload holds the run
-                // even though executionState is nil here — disable Execute so it isn't a tappable no-op. Also
-                // disabled during the async start-resolution window (isStartingExecution).
-                canExecute: !store.isExecutionActive && !store.isLocalIndexReloading && !isStartingExecution
+                canExecute: store.isSelectable && !isStartingExecution
             ),
             menus: SelectionActionPanelMenus(
                 backup: menuFactory.buildCategory(for: .backup),
@@ -1975,19 +1977,6 @@ final class HomeViewController: UIViewController {
         stack.spacing = 12
         stack.alignment = .center
         return stack
-    }
-
-    private func observeApplicationLifecycle() {
-        lifecycleObservers.insert(NotificationCenter.default.addObserver(
-            forName: UIApplication.didBecomeActiveNotification,
-            object: nil,
-            queue: .main
-        ) { [weak self] _ in
-            Task { @MainActor [weak self] in
-                self?.store.refreshLocalPhotoAccessIfNeeded()
-                self?.updateSettingsFABMembershipAppearance()
-            }
-        })
     }
 
     private func observeMembershipChanges() {
@@ -2653,7 +2642,7 @@ final class HomeViewController: UIViewController {
     private var isStartingExecution = false
 
     private func executeTapped() {
-        guard !isStartingExecution else { return }
+        guard !isStartingExecution, store.isSelectable else { return }
         let backup = store.selection.months(for: .backup)
         let download = store.selection.months(for: .download)
         let complement = store.selection.months(for: .complement)
@@ -2668,10 +2657,12 @@ final class HomeViewController: UIViewController {
 
         let alert = UIAlertController(title: String(localized: "home.alert.confirmExecute"), message: lines.joined(separator: "\n"), preferredStyle: .alert)
         alert.addAction(UIAlertAction(title: String(localized: "common.cancel"), style: .cancel))
-        alert.addAction(UIAlertAction(title: String(localized: "common.start"), style: .default) { [weak self] _ in
-            guard let self else { return }
-            Task { @MainActor in
-                await self.startExecutionResolvingIncomplete(
+        alert.addAction(UIAlertAction(title: String(localized: "common.start"), style: .default) { [weak self, weak alert] _ in
+            Task { @MainActor [weak self, weak alert] in
+                await PresentationDismissalSequencer.waitUntilDismissed {
+                    alert?.presentingViewController != nil || alert?.viewIfLoaded?.window != nil
+                }
+                await self?.startExecutionResolvingIncomplete(
                     backup: backup,
                     download: download,
                     complement: complement
@@ -2690,9 +2681,16 @@ final class HomeViewController: UIViewController {
             isStartingExecution = false
             updateActionPanel()
         }
-        let incompleteCount = (download.isEmpty && complement.isEmpty)
-            ? 0
-            : await store.incompleteDownloadItemCount(download: download, complement: complement)
+        let incompleteCount: Int
+        do {
+            incompleteCount = (download.isEmpty && complement.isEmpty)
+                ? 0
+                : try await store.incompleteDownloadItemCount(download: download, complement: complement)
+        } catch {
+            guard !Task.isCancelled else { return }
+            showAlert(title: String(localized: "common.error"), message: error.localizedDescription)
+            return
+        }
         guard incompleteCount > 0 else {
             store.startExecution(backup: backup, download: download, complement: complement, incompletePolicy: .skip)
             return
@@ -2759,7 +2757,7 @@ final class HomeViewController: UIViewController {
             messages.append(String(localized: "home.overlay.notConnected"))
         }
 
-        guard !messages.isEmpty else { return true }
+        guard !messages.isEmpty else { return store.isSelectable }
         showAlert(
             title: String(localized: "home.alert.selectionUnavailable"),
             message: messages.joined(separator: "\n")
@@ -3026,7 +3024,6 @@ private extension RemoteSyncProgress {
 
 extension HomeViewController: UIAdaptivePresentationControllerDelegate {
     func presentationControllerDidDismiss(_ presentationController: UIPresentationController) {
-        store.refreshLocalPhotoAccessIfNeeded()
         updateSettingsFABMembershipAppearance()
         mediaDropViewController?.refreshTransferAccessPresentation()
     }

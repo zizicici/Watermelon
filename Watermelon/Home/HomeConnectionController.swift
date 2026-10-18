@@ -19,10 +19,14 @@ private final class ProgressSequencer: @unchecked Sendable {
 final class HomeConnectionController {
 
     private let dependencies: DependencyContainer
-    private let applicationState: () -> UIApplication.State
+    private let applicationState: @MainActor () -> UIApplication.State
+    private let reloadRemoteIndex: @MainActor (ServerProfileRecord, String) async throws -> Void
+    private var remoteReloadWatermark: Date?
     private var connectingProfile: ServerProfileRecord?
     private var connectTask: Task<Void, Never>?
     private var remoteRefreshTask: Task<Void, Never>?
+    private var remoteSnapshotObserverID: UUID?
+    private let reconciliationObservers = NotificationObserverBag()
 
     var state: ConnectionState {
         if let profile = connectingProfile {
@@ -55,15 +59,85 @@ final class HomeConnectionController {
 
     init(
         dependencies: DependencyContainer,
-        applicationState: @escaping () -> UIApplication.State = { UIApplication.shared.applicationState }
+        applicationState: @escaping @MainActor () -> UIApplication.State = { UIApplication.shared.applicationState },
+        reloadRemoteIndex: (@MainActor (ServerProfileRecord, String) async throws -> Void)? = nil
     ) {
         self.dependencies = dependencies
         self.applicationState = applicationState
+        self.reloadRemoteIndex = reloadRemoteIndex ?? { profile, credential in
+            _ = try await dependencies.backupCoordinator.reloadRemoteIndex(profile: profile, password: credential)
+        }
         dependencies.appSession.onSessionChanged = { [weak self] _ in
             guard let self else { return }
             self.loadProfiles()
             self.onStateChanged?()
+            self.refreshRemoteIndexIfNeeded()
         }
+        remoteSnapshotObserverID = dependencies.backupCoordinator.remoteSnapshotChanges.addCoalescedMainActorObserver { [weak self] in
+            self?.refreshRemoteIndexIfNeeded()
+        }
+        for name in [Notification.Name.ExecutionLifecycleDidChange, .RemoteMaintenanceDidChange, .BackgroundBackupRunMarkerDidChange,
+                     UIApplication.didBecomeActiveNotification] {
+            reconciliationObservers.insert(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.refreshRemoteIndexIfNeeded() }
+            })
+        }
+        reconciliationObservers.insert(NotificationCenter.default.addObserver(
+            forName: UIApplication.willResignActiveNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.cancelRemoteRefresh() }
+        })
+    }
+
+    deinit {
+        if let remoteSnapshotObserverID {
+            dependencies.backupCoordinator.remoteSnapshotChanges.removeObserver(remoteSnapshotObserverID)
+        }
+    }
+
+    private func cancelRemoteRefresh() {
+        remoteRefreshTask?.cancel()
+        remoteRefreshTask = nil
+    }
+
+    func refreshRemoteIndexIfNeeded() {
+        guard applicationState() == .active, !dependencies.appRuntimeFlags.isExecuting,
+              !dependencies.remoteMaintenanceController.isBusy else {
+            cancelRemoteRefresh()
+            return
+        }
+        guard remoteRefreshTask == nil, connectingProfile == nil,
+              let profile = dependencies.appSession.activeProfile,
+              let credentialPayload = profile.resolvedSessionCredential(from: dependencies.appSession) else { return }
+        let marker = Self.latestBackgroundRun(dependencies.databaseManager, profileID: profile.id)
+        guard dependencies.backupCoordinator.remoteSnapshotRequiresReconciliation ||
+              (marker ?? .distantPast) > (remoteReloadWatermark ?? .distantPast) else { return }
+        remoteRefreshTask = Task { [weak self] in
+            guard let self else { return }
+            var didReload = false
+            defer {
+                if !Task.isCancelled {
+                    self.remoteRefreshTask = nil
+                    if didReload { self.refreshRemoteIndexIfNeeded() }
+                }
+            }
+            do {
+                try await self.reloadRemoteIndex(profile, credentialPayload)
+            } catch {
+                return  // failed or cancelled — don't sync a reload that didn't complete
+            }
+            didReload = true
+            guard !Task.isCancelled,
+                  self.dependencies.appSession.activeProfile?.runtimeConnectionIdentity == profile.runtimeConnectionIdentity else { return }
+            self.remoteReloadWatermark = marker
+        }
+    }
+
+    static func latestBackgroundRun(_ db: DatabaseManager, profileID: Int64?) -> Date? {
+        guard let profileID else { return nil }
+        let ran = try? db.backgroundBackupLastRanAt(profileID: profileID)
+        let completed = try? db.backgroundBackupLastCompletedAt(profileID: profileID)
+        return [ran, completed].compactMap { $0 }.max()
     }
 
     func loadProfiles() {
@@ -91,6 +165,7 @@ final class HomeConnectionController {
         progressEpoch &+= 1
         let epoch = progressEpoch
         let sequencer = ProgressSequencer()
+        let marker = Self.latestBackgroundRun(dependencies.databaseManager, profileID: profile.id)
         connectingProfile = profile
         clearSyncProgress()
         onStateChanged?()
@@ -114,6 +189,7 @@ final class HomeConnectionController {
                 }
                 self.connectingProfile = nil
                 self.connectTask = nil
+                self.remoteReloadWatermark = marker
                 self.dependencies.appSession.activate(profile: profile, password: "")
                 self.dependencies.appRuntimeFlags.endEphemeralConnecting(sessionID: sessionID)
                 self.clearSyncProgress()
@@ -210,8 +286,8 @@ final class HomeConnectionController {
         let previousConnectingID = connectingProfile?.id
         connectTask?.cancel()
         connectTask = nil
-        remoteRefreshTask?.cancel()
-        remoteRefreshTask = nil
+        cancelRemoteRefresh()
+        remoteReloadWatermark = nil
         connectingProfile = nil
         dependencies.appRuntimeFlags.endConnecting(profileID: previousConnectingID)
         if let ephemeralSessionID {
@@ -228,36 +304,6 @@ final class HomeConnectionController {
         guard connectingProfile?.isBrowserLinkProfile == true ||
                 dependencies.appSession.activeProfile?.isBrowserLinkProfile == true else { return }
         disconnect()
-    }
-
-    /// Refresh the connected remote's index in place (e.g. after a background backup uploaded to it).
-    /// Owned here because the connection owns the shared remote cache: this task is cancelled by any
-    /// connect/disconnect, and it only ever reloads the *currently connected* profile — which doesn't
-    /// reset the shared cache — so it can't pollute a different connection's view. `onApplied` fires on
-    /// the main actor only if we're still on the same profile when the reload lands.
-    /// Known limitation: the reload applies the cache month-by-month, so an execution started mid-refresh
-    /// can transiently read a partial remote view (same-profile, self-healing, dedup-protected). Accepted
-    /// over a transactional cache publish, which would spike peak memory on the connect path.
-    func refreshActiveRemoteIndex(onApplied: @escaping () -> Void) {
-        guard connectingProfile == nil,
-              let profile = dependencies.appSession.activeProfile,
-              let credentialPayload = profile.resolvedSessionCredential(from: dependencies.appSession) else { return }
-        remoteRefreshTask?.cancel()
-        remoteRefreshTask = Task { [weak self] in
-            guard let self else { return }
-            do {
-                _ = try await self.dependencies.backupCoordinator.reloadRemoteIndex(
-                    profile: profile,
-                    password: credentialPayload
-                )
-            } catch {
-                return  // failed or cancelled — don't sync a reload that didn't complete
-            }
-            guard !Task.isCancelled,
-                  self.dependencies.appSession.activeProfile?.runtimeConnectionIdentity == profile.runtimeConnectionIdentity else { return }
-            self.remoteRefreshTask = nil
-            onApplied()
-        }
     }
 
     // Applies a connect progress frame only if it belongs to the current attempt and is newer (by emission
@@ -313,8 +359,8 @@ final class HomeConnectionController {
         }
         // A connect supersedes any in-flight connect (switching off a slow node) and background remote refresh.
         connectTask?.cancel()
-        remoteRefreshTask?.cancel()
-        remoteRefreshTask = nil
+        cancelRemoteRefresh()
+        remoteReloadWatermark = nil
         connectingProfile = profile
         progressEpoch &+= 1
         let epoch = progressEpoch
@@ -357,6 +403,7 @@ final class HomeConnectionController {
                         duration: Self.elapsedSeconds(since: adoptStart)
                     )
                 }
+                let marker = Self.latestBackgroundRun(self.dependencies.databaseManager, profileID: connectionProfile.id)
                 let reloadStart = CFAbsoluteTimeGetCurrent()
                 _ = try await self.dependencies.backupCoordinator.reloadRemoteIndex(
                     profile: connectionProfile,
@@ -400,6 +447,7 @@ final class HomeConnectionController {
                 self.dependencies.appRuntimeFlags.endConnecting(profileID: profile.id)
                 self.connectingProfile = nil
                 self.connectTask = nil
+                self.remoteReloadWatermark = marker
                 self.dependencies.appSession.activate(profile: liveProfile, password: password)
                 self.clearSyncProgress()
                 Self.traceConnect(

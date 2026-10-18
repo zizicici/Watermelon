@@ -24,7 +24,6 @@ final class DependencyContainer {
     let photoLibraryService: PhotoLibraryService
     let hashIndexRepository: ContentHashIndexRepository
     let localHashIndexBuildService: LocalHashIndexBuildService
-    let localIndexChangePublisher: LocalIndexChangePublisher
     let localIndexBuildCoordinator: LocalIndexBuildCoordinator
     let backupCoordinator: BackupCoordinator
     let inboxTransferService: InboxTransferService
@@ -85,13 +84,10 @@ final class DependencyContainer {
             photoLibraryService: photoLibraryService,
             repository: hashIndexRepository
         )
-        let localIndexChangePublisher = LocalIndexChangePublisher()
-        self.localIndexChangePublisher = localIndexChangePublisher
         localIndexBuildCoordinator = LocalIndexBuildCoordinator(
             buildService: localHashIndexBuildService,
             photoLibraryService: photoLibraryService,
             hashIndexRepository: hashIndexRepository,
-            changePublisher: localIndexChangePublisher,
             appRuntimeFlags: appRuntimeFlags
         )
         let backupCoordinator = BackupCoordinator(

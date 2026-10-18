@@ -9,8 +9,7 @@ final class MediaBrowserViewerViewController: UIViewController {
     private let source: MediaBrowserSource
     private let session: MediaBrowserSession
     private var reconciledSessionRevision: UInt64
-    private let presentedSnapshot: MediaBrowserSnapshot
-    private var itemOverrides: [Int: MediaBrowserItem] = [:]
+    private(set) var pageOrder: MediaBrowserPageOrder
     private var currentIndex: Int
     private let runner: MediaBrowserActionRunner
     private let actionScope: MediaBrowserActionPolicy.Scope?
@@ -18,6 +17,17 @@ final class MediaBrowserViewerViewController: UIViewController {
     // changes underneath it (e.g. the currently-viewed local-only item gets backed up by a background run).
     private let presenceIndex: LibraryPresenceIndex
     private let onContentChanged: () -> Void
+    private var isPageVisible = false
+    private lazy var foregroundActivity = AppForegroundActivity() { [weak self] active in
+        guard let self else { return }
+        if active {
+            self.reconcileItems()
+            self.refreshActivePage()
+        } else {
+            self.deactivateVisiblePages()
+        }
+    }
+    var isDisplayed: Bool { isPageVisible && foregroundActivity.isActive }
 
     private lazy var collectionView = UICollectionView(frame: .zero, collectionViewLayout: makeLayout())
     private let topBar = UIView()
@@ -51,7 +61,7 @@ final class MediaBrowserViewerViewController: UIViewController {
         self.source = source
         self.session = session
         self.reconciledSessionRevision = session.revision
-        self.presentedSnapshot = session.snapshot
+        self.pageOrder = MediaBrowserPageOrder(snapshot: session.snapshot)
         self.currentIndex = session.snapshot.index(of: startItemID) ?? 0
         self.runner = runner
         self.actionScope = actionScope
@@ -98,43 +108,9 @@ final class MediaBrowserViewerViewController: UIViewController {
             ) { [weak self] _ in
                 MainActor.assumeIsolated { self?.appSessionChanged() }
             })
-            // Presence invalidated underneath us → immediately re-gate actions while the grid replaces its snapshot.
-            observers.insert(NotificationCenter.default.addObserver(
-                forName: .LibraryPresenceDidChange,
-                object: nil,
-                queue: .main
-            ) { [weak self] _ in
-                MainActor.assumeIsolated { self?.presenceChanged() }
-            })
+
         }
-        // Losing the active foreground state doesn't call viewWillDisappear, so without this an inline video (or
-        // Live Photo) keeps playing once the shared AVAudioSession is `.playback` + `.mixWithOthers` (left active by
-        // a PiP backup run) — iOS doesn't auto-pause it. `willResignActive` is the canonical pause moment and covers
-        // the interruptions `didEnterBackground` misses (incoming call, Control Center, Notification Center, Siri) as
-        // well as full backgrounding; `didBecomeActive` (not `willEnterForeground`) re-activates after a resign-only
-        // interruption. It does NOT fire for in-app alert/sheet presentation, so consent/error dialogs are unaffected.
-        observers.insert(NotificationCenter.default.addObserver(
-            forName: UIApplication.willResignActiveNotification,
-            object: nil,
-            queue: .main
-        ) { [weak self] _ in
-            MainActor.assumeIsolated { self?.appWillResignActive() }
-        })
-        observers.insert(NotificationCenter.default.addObserver(
-            forName: UIApplication.didBecomeActiveNotification,
-            object: nil,
-            queue: .main
-        ) { [weak self] _ in
-            MainActor.assumeIsolated { self?.appDidBecomeActive() }
-        })
-    }
-
-    private func appWillResignActive() {
-        deactivateVisiblePages()
-    }
-
-    private func appDidBecomeActive() {
-        refreshActivePage()
+        foregroundActivity.start()
     }
 
     private func taskLifecycleChanged() {
@@ -150,22 +126,23 @@ final class MediaBrowserViewerViewController: UIViewController {
         updateChrome(for: currentIndex)
     }
 
-    private func presenceChanged() {
-        reconcileItems()
-        updateChrome(for: currentIndex)
-    }
-
-    func reconcileItems() {
-        guard reconciledSessionRevision != session.revision else {
-            updateChrome(for: currentIndex)
-            return
+    func reconcileItems(preparedPageOrder: MediaBrowserPageOrder? = nil) {
+        guard foregroundActivity.isActive else { return }
+        if reconciledSessionRevision != session.revision {
+            reconciledSessionRevision = session.revision
+            if let preparedPageOrder, preparedPageOrder.id == pageOrder.id {
+                pageOrder = preparedPageOrder
+            } else {
+                pageOrder = pageOrder.reconciling(with: session.snapshot)
+            }
         }
-        reconciledSessionRevision = session.revision
-        itemOverrides.removeAll(keepingCapacity: true)
         for indexPath in collectionView.indexPathsForVisibleItems {
-            guard let cell = collectionView.cellForItem(at: indexPath) as? MediaPageCell,
-                  let item = item(at: indexPath.item),
-                  !cell.isConfigured(with: item) else { continue }
+            guard let cell = collectionView.cellForItem(at: indexPath) as? MediaPageCell else { continue }
+            guard let item = item(at: indexPath.item) else {
+                cell.showUnavailable()
+                continue
+            }
+            guard !cell.isConfigured(with: item) else { continue }
             cell.configure(with: item, source: source)
             if indexPath.item == currentIndex { setActivePage(cell) }
         }
@@ -173,29 +150,23 @@ final class MediaBrowserViewerViewController: UIViewController {
     }
 
     private var itemCount: Int {
-        presentedSnapshot.itemCount
+        pageOrder.count
     }
 
     private func item(at index: Int) -> MediaBrowserItem? {
-        if let overridden = itemOverrides[index] { return overridden }
-        guard let original = presentedSnapshot.item(at: index) else { return nil }
-        if let fresh = session.snapshot.item(id: original.id) {
-            return fresh
-        }
-        if let localIdentifier = original.localIdentifier,
-           let fresh = session.snapshot.item(id: .local(localIdentifier)) {
-            return fresh
-        }
-        return original
+        pageOrder.item(at: index, in: session.snapshot)
     }
 
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
+        isPageVisible = true
+        reconcileItems()
         refreshActivePage()
     }
 
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
+        isPageVisible = false
         runner.cancelShareMaterialization()
         deactivateVisiblePages()
     }
@@ -318,11 +289,17 @@ final class MediaBrowserViewerViewController: UIViewController {
     }
 
     private func updateChrome(for index: Int) {
-        guard let item = item(at: index) else { return }
+        guard foregroundActivity.isActive else { return }
+        guard let item = item(at: index) else {
+            titleLabel.attributedText = nil
+            actionBar.isHidden = true
+            actionBarHeightConstraint.constant = 0
+            return
+        }
         titleLabel.attributedText = Self.titleText(for: Date(timeIntervalSince1970: Double(item.creationDateMs) / 1000))
         // Live presence remains the final gate while a committed snapshot catches up.
         let entries = actionBarEntries(for: item)
-        let showBar = !entries.isEmpty && isPresent(item)
+        let showBar = isPresent(item)
         actionBar.isHidden = !showBar
         actionBarHeightConstraint.constant = showBar ? Self.actionBarHeight : 0
         if showBar {
@@ -349,7 +326,7 @@ final class MediaBrowserViewerViewController: UIViewController {
     }
 
     private func handleBarTap(_ id: AnyHashable) {
-        guard let item = item(at: currentIndex) else { return }
+        guard let item = item(at: currentIndex), isPresent(item) else { return }
         if let kind = id as? MediaBrowserActionKind {
             runAction(kind)
         } else if let bar = id as? ViewerBarAction {
@@ -386,6 +363,7 @@ final class MediaBrowserViewerViewController: UIViewController {
             presenceIndex.backupPresenceVerdict($0)
         }
         return availableActions(for: item).filter { kind in
+            guard kind == .share || session.isCurrent else { return false }
             guard runner.canRun(kind) else { return false }
             switch kind {
             case .deleteRemote:
@@ -427,22 +405,14 @@ final class MediaBrowserViewerViewController: UIViewController {
     // Run one action on the CURRENT item, re-validating against fresh state first: the bar was built for this
     // item but presence may have shifted (downloaded elsewhere → Download no longer applies, or deleted → gone).
     private func runAction(_ kind: MediaBrowserActionKind) {
-        let actedIndex = currentIndex
-        guard let current = item(at: actedIndex) else { return }
-        guard isPresent(current), availableActions(for: current).contains(kind) else {
+        guard let current = item(at: currentIndex) else { return }
+        guard isPresent(current), runnableActions(for: current).contains(kind) else {
             presentActionError()
             return
         }
         // Reload the grid on any content change; `dismiss` also closes the viewer (delete/upload).
-        runner.run(kind, item: current, source: source, from: self, onChanged: { [weak self, onContentChanged = self.onContentChanged] dismiss, downloadedLocalID in
+        runner.run(kind, item: current, source: source, from: self, onChanged: { [weak self, onContentChanged = self.onContentChanged] dismiss in
             onContentChanged()
-            // Download keeps the viewer open: flip the acted item to on-device so it no longer offers Download
-            // (which would re-import a duplicate). The page index is stable even if the user swipes meanwhile.
-            if let self, let downloadedLocalID, var updated = self.item(at: actedIndex) {
-                updated.attachLocalIdentifier(downloadedLocalID)
-                self.itemOverrides[actedIndex] = updated
-                if actedIndex == self.currentIndex { self.updateChrome(for: actedIndex) }
-            }
             if dismiss { self?.dismiss(animated: true) }
         })
     }
@@ -485,18 +455,11 @@ final class MediaBrowserViewerViewController: UIViewController {
     }
 
     private func runDeleteAll(_ item: MediaBrowserItem) {
-        let actedIndex = currentIndex
-        runner.runDeleteAll(item, from: self) { [weak self] hadFailures, deletedDeviceIDs in
+        guard session.isCurrent,
+              let current = self.item(at: currentIndex), current.id == item.id else { return }
+        runner.runDeleteAll(current, from: self) { [weak self] hadFailures in
             guard let self else { return }
             self.onContentChanged()
-            // The device half committed even when the remote leg failed: clear the deleted handles so the
-            // kept-open page cannot re-offer Delete Local while the replacement snapshot is loading.
-            if var updated = self.item(at: actedIndex),
-               updated.localIdentifier.map(deletedDeviceIDs.contains) == true {
-                updated.removeLocalIdentifier()
-                self.itemOverrides[actedIndex] = updated
-                if actedIndex == self.currentIndex { self.updateChrome(for: actedIndex) }
-            }
             // A failed backup delete presented an error on this viewer — keep it open so the error stays visible.
             if !hadFailures { self.dismiss(animated: true) }
         }
@@ -647,13 +610,14 @@ final class MediaBrowserViewerViewController: UIViewController {
     private func setActivePage(_ cell: MediaPageCell?) {
         if activeCell !== cell { activeCell?.setActive(false) }
         activeCell = cell
-        cell?.setActive(true)
+        cell?.setActive(isDisplayed)
     }
 
     // Exactly one page is "active" (the centered one) and may play its Live Photo / inline video; every other
     // page is deactivated — including the page just left, which after a completed page change is off-screen and
     // reachable only through `activeCell`, not `visibleCells`.
     private func refreshActivePage() {
+        guard isDisplayed else { return }
         let current = currentPageCell()
         for case let cell as MediaPageCell in collectionView.visibleCells where cell !== current {
             cell.setActive(false)
@@ -713,11 +677,15 @@ extension MediaBrowserViewerViewController: UICollectionViewDataSource, UICollec
 
     func collectionView(_ collectionView: UICollectionView, cellForItemAt indexPath: IndexPath) -> UICollectionViewCell {
         let cell = collectionView.dequeueReusableCell(withReuseIdentifier: MediaPageCell.reuseID, for: indexPath) as! MediaPageCell
-        guard let item = item(at: indexPath.item) else { return cell }
-        cell.configure(with: item, source: source)
+        if let item = item(at: indexPath.item) {
+            cell.configure(with: item, source: source)
+        } else {
+            cell.showUnavailable()
+        }
         cell.hostViewController = self
         cell.onSingleTap = { [weak self] in self?.toggleChrome() }
         cell.onZoomChanged = { [weak self] zoomedIn in
+            guard self?.currentIndex == indexPath.item else { return }
             self?.isZoomed = zoomedIn
             self?.setPagingEnabled(!zoomedIn)
         }

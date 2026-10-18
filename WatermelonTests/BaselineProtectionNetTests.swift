@@ -106,7 +106,8 @@ final class BaselineProtectionNetTests: XCTestCase {
             client: client, basePath: basePath, month: monthKey,
             plan: RepoMaintenancePlan(
                 RemoteLiteRepoGateway.MaintenancePlan(layout: .lite, session: outer.session, monthsListing: nil)
-            )
+            ),
+            expectedProfileKey: RemoteIndexSyncService.remoteProfileKey(makeProfile(writerID: writerID))
         )
         let lockedAfterReuse = await client.lockExists(basePath: basePath, writerID: writerID)
         XCTAssertTrue(

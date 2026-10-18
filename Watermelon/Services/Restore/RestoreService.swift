@@ -102,7 +102,6 @@ final class RestoreService: @unchecked Sendable {
         let instances: [RemoteAssetResourceInstance]
         let identity: Data
         var creationDate: Date? = nil
-        var isIncomplete: Bool = false
     }
 
     struct ImportedAssetSnapshot: Sendable {
@@ -112,9 +111,6 @@ final class RestoreService: @unchecked Sendable {
 
     struct RestoredAsset: Sendable {
         let localIdentifier: String
-        let importedInstances: [RemoteAssetResourceInstance]
-        var indexWriteHandled = false
-        var isCompleteRestore = false
     }
 
     struct RestoredItem: Sendable {
@@ -189,7 +185,7 @@ final class RestoreService: @unchecked Sendable {
                         defer { prepared.removeFiles() }
                         completions[index] = try await importGroup(
                             prepared.group, downloaded: prepared.downloaded,
-                            itemIdentity: item.identity, after: completions[index - 1]
+                            after: completions[index - 1]
                         )
                     } catch {
                         if index > 0 { try await completeItem(index - 1) }
@@ -399,14 +395,11 @@ final class RestoreService: @unchecked Sendable {
     private func importGroup(
         _ group: RestoreGroup,
         downloaded: [(RemoteAssetResourceInstance, URL)],
-        itemIdentity: Data,
         after previous: Task<RestoredAsset?, Error>?
     ) async throws -> Task<RestoredAsset?, Error> {
         let acceptedDownloaded = Self.acceptedDownloadedResources(from: downloaded)
         do {
             try Task.checkCancellation()
-            let sourceContentFingerprint = AssetContentFingerprint.fingerprint(
-                resources: acceptedDownloaded.map { $0.0.contentIdentityResource })
             let localID = try await importAsset(acceptedDownloaded, group.creationDate)
             print("[RestoreService]   saveToPhotoLibrary succeeded, localID=\(localID ?? "nil")")
 
@@ -418,20 +411,14 @@ final class RestoreService: @unchecked Sendable {
             return Task.detached(priority: .userInitiated) {
                 _ = await previous?.result
                 guard let inspect else {
-                    return RestoredAsset(localIdentifier: localID, importedInstances: planned)
+                    return RestoredAsset(localIdentifier: localID)
                 }
                 do {
                     let snapshot = try await inspect(localID, planned)
-                    let importedContentFingerprint = AssetContentFingerprint.fingerprint(
-                        resources: snapshot.instances.map(\.contentIdentityResource))
                     try repository?.writeHashIndex(assetLocalIdentifier: localID,
                         instances: snapshot.instances,
                         modificationDateMs: snapshot.modificationDateMs)
-                    let complete = !group.isIncomplete && sourceContentFingerprint == itemIdentity
-                        && planned.allSatisfy { $0.resourceHash.count == 32 }
-                        && sourceContentFingerprint == importedContentFingerprint
-                    return RestoredAsset(localIdentifier: localID, importedInstances: snapshot.instances,
-                        indexWriteHandled: repository != nil, isCompleteRestore: complete)
+                    return RestoredAsset(localIdentifier: localID)
                 } catch {
                     guard repository != nil else {
                         if Self.isSkippablePhotoLibraryImportError(error) {
@@ -440,7 +427,7 @@ final class RestoreService: @unchecked Sendable {
                         throw error
                     }
                     print("[RestoreService] imported asset verification deferred: \(localID), \(error)")
-                    return RestoredAsset(localIdentifier: localID, importedInstances: [], indexWriteHandled: true)
+                    return RestoredAsset(localIdentifier: localID)
                 }
             }
         } catch {
@@ -676,7 +663,7 @@ final class RestoreService: @unchecked Sendable {
             return try await withTaskCancellationHandler {
                 try Task.checkCancellation()
                 return try await service.downloadGroup(
-                    RestoreGroup(creationDate: creationDate, instances: item.instances, isIncomplete: item.isIncomplete),
+                    RestoreGroup(creationDate: creationDate, instances: item.instances),
                     itemIdentity: item.identity, itemPosition: index + 1, totalItems: totalItems,
                     workerID: workerID, directory: directory, profile: profile, password: password,
                     clientBox: clientBox, shouldDrain: shouldDrain, onTransferState: onTransferState
@@ -695,7 +682,6 @@ final class RestoreService: @unchecked Sendable {
     private struct RestoreGroup: Sendable {
         let creationDate: Date?
         let instances: [RemoteAssetResourceInstance]
-        let isIncomplete: Bool
     }
 
     static func isItemLocalFailure(_ error: Error) -> Bool {

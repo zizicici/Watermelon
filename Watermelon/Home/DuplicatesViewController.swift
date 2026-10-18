@@ -4,7 +4,7 @@ import UIKit
 
 @MainActor
 final class DuplicatesViewController: UIViewController {
-    fileprivate struct DuplicateEntry {
+    struct DuplicateEntry: Sendable {
         let assetLocalIdentifier: String
         let creationDate: Date?
         let mediaType: PHAssetMediaType
@@ -26,11 +26,13 @@ final class DuplicatesViewController: UIViewController {
         let indexInGroup: Int
     }
 
-    private struct DuplicatesData {
+    struct DuplicatesData: Sendable {
         let scopeTotal: Int
         let scopeIndexed: Int
         let groups: [(fingerprint: Data, entries: [DuplicateEntry])]
     }
+
+    typealias SnapshotLoader = @Sendable () async -> DuplicatesData?
 
     private final class DiffableDataSource: UITableViewDiffableDataSource<SectionID, ItemID> {
         var footerTitle: ((SectionID) -> String?)?
@@ -44,7 +46,7 @@ final class DuplicatesViewController: UIViewController {
     private let coordinator: LocalIndexBuildCoordinator
     private let hashIndexRepository: ContentHashIndexRepository
     private let photoLibraryService: PhotoLibraryService
-    private let changePublisher: LocalIndexChangePublisher
+    private let snapshotLoader: SnapshotLoader
 
     private let summaryContainer = UIView()
     private let summaryLabel = UILabel()
@@ -65,6 +67,12 @@ final class DuplicatesViewController: UIViewController {
     private var executeTask: Task<Void, Never>?
     private var coordinatorObserverID: UUID?
     private var lastObservedRunning = false
+    private var pendingAlert: (title: String, message: String)?
+    private lazy var foregroundActivity = AppForegroundActivity() { [weak self] active in
+        guard let self else { return }
+        if active { self.refreshPresentation() }
+        else { self.cancelDuplicatesLoad() }
+    }
 
     private var executeBarButton: UIBarButtonItem!
 
@@ -83,12 +91,14 @@ final class DuplicatesViewController: UIViewController {
         coordinator: LocalIndexBuildCoordinator,
         hashIndexRepository: ContentHashIndexRepository,
         photoLibraryService: PhotoLibraryService,
-        changePublisher: LocalIndexChangePublisher
+        snapshotLoader: SnapshotLoader? = nil
     ) {
         self.coordinator = coordinator
         self.hashIndexRepository = hashIndexRepository
         self.photoLibraryService = photoLibraryService
-        self.changePublisher = changePublisher
+        self.snapshotLoader = snapshotLoader ?? {
+            await Self.computeData(repository: hashIndexRepository, photoLibraryService: photoLibraryService)
+        }
         self.emptyStateView = makeAlbumEmptyStateView(
             title: String(localized: "home.duplicates.emptyTitle"),
             message: String(localized: "home.duplicates.emptyMessage")
@@ -141,20 +151,34 @@ final class DuplicatesViewController: UIViewController {
             self?.handleCoordinatorChange()
         }
 
-        loadDuplicates()
+        foregroundActivity.start()
+    }
+
+    private func refreshPresentation() {
+        guard foregroundActivity.isActive, executeTask == nil else { return }
+        if let pendingAlert {
+            self.pendingAlert = nil
+            let alert = UIAlertController(title: pendingAlert.title, message: pendingAlert.message, preferredStyle: .alert)
+            alert.addAction(UIAlertAction(title: String(localized: "common.ok"), style: .default))
+            present(alert, animated: ConsideringUser.animated)
+        }
+        if coordinator.isRunning {
+            loadingIndicator.stopAnimating()
+            tableView.isHidden = false
+            emptyStateView.isHidden = true
+            applySnapshot(animatingDifferences: false)
+            updateSummary()
+        } else {
+            loadDuplicates()
+        }
     }
 
     private func handleCoordinatorChange() {
         let nowRunning = coordinator.isRunning
-        let didFinish = lastObservedRunning && !nowRunning
-        let didStart = !lastObservedRunning && nowRunning
+        guard nowRunning != lastObservedRunning else { return }
         lastObservedRunning = nowRunning
-        if didFinish {
-            loadDuplicates()
-        } else if didStart {
-            applySnapshot(animatingDifferences: false)
-            updateSummary()
-        }
+        if nowRunning { cancelDuplicatesLoad() }
+        refreshPresentation()
     }
 
     private func configureUI() {
@@ -267,36 +291,47 @@ final class DuplicatesViewController: UIViewController {
     }
 
     private func loadDuplicates() {
-        loadTask?.cancel()
+        guard foregroundActivity.isActive, !coordinator.isRunning, executeTask == nil else { return }
+        cancelDuplicatesLoad()
         loadingIndicator.startAnimating()
         emptyStateView.isHidden = true
         tableView.isHidden = true
         executeBarButton.isEnabled = false
         summaryLabel.text = String(localized: "home.duplicates.loading")
 
-        let repository = hashIndexRepository
-        let photoLibraryService = photoLibraryService
+        let loader = snapshotLoader
         loadTask = Task { [weak self] in
-            let data = await Self.computeData(
-                repository: repository,
-                photoLibraryService: photoLibraryService
-            )
-            guard !Task.isCancelled else { return }
-            self?.applyData(data)
+            let data = await loader()
+            guard !Task.isCancelled, let self,
+                  self.foregroundActivity.isActive, !self.coordinator.isRunning,
+                  self.executeTask == nil, let data else { return }
+            self.loadTask = nil
+            self.applyData(data)
         }
+    }
+
+    private func cancelDuplicatesLoad() {
+        loadTask?.cancel()
+        loadTask = nil
     }
 
     private func applyData(_ data: DuplicatesData) {
         scopeTotal = data.scopeTotal
         scopeIndexed = data.scopeIndexed
 
+        var keptAssetIDs: [Data: String] = [:]
+        for (fingerprint, index) in self.keepIndexByGroup {
+            if let entries = self.entriesByGroup[fingerprint], entries.indices.contains(index) {
+                keptAssetIDs[fingerprint] = entries[index].assetLocalIdentifier
+            }
+        }
         groupOrder = data.groups.map(\.fingerprint)
         var entriesByGroup: [Data: [DuplicateEntry]] = [:]
         var locatorByEntry: [String: EntryLocator] = [:]
         var keepIndexByGroup: [Data: Int] = [:]
         for (fingerprint, entries) in data.groups {
             entriesByGroup[fingerprint] = entries
-            keepIndexByGroup[fingerprint] = 0
+            keepIndexByGroup[fingerprint] = entries.firstIndex { $0.assetLocalIdentifier == keptAssetIDs[fingerprint] } ?? 0
             for (index, entry) in entries.enumerated() {
                 locatorByEntry[entry.assetLocalIdentifier] = EntryLocator(
                     fingerprint: fingerprint,
@@ -307,7 +342,7 @@ final class DuplicatesViewController: UIViewController {
         self.entriesByGroup = entriesByGroup
         self.locatorByEntry = locatorByEntry
         self.keepIndexByGroup = keepIndexByGroup
-        self.skippedGroups = []
+        self.skippedGroups.formIntersection(groupOrder)
 
         loadingIndicator.stopAnimating()
         let hasContent = !groupOrder.isEmpty || isIndexGateVisible
@@ -337,6 +372,8 @@ final class DuplicatesViewController: UIViewController {
                 )
             }
         }
+        let existingItems = Set(dataSource.snapshot().itemIdentifiers)
+        snapshot.reconfigureItems(snapshot.itemIdentifiers.filter(existingItems.contains))
         dataSource.apply(snapshot, animatingDifferences: animatingDifferences)
     }
 
@@ -448,13 +485,20 @@ final class DuplicatesViewController: UIViewController {
         alert.addAction(UIAlertAction(
             title: String(localized: "home.duplicates.execute"),
             style: .destructive
-        ) { [weak self] _ in
-            self?.performDeletion(pairs: pairs)
+        ) { [weak self, weak alert] _ in
+            Task { @MainActor [weak self, weak alert] in
+                await PresentationDismissalSequencer.waitUntilDismissed {
+                    alert?.presentingViewController != nil || alert?.viewIfLoaded?.window != nil
+                }
+                self?.performDeletion(pairs: pairs)
+            }
         })
         present(alert, animated: ConsideringUser.animated)
     }
 
     private func performDeletion(pairs: [KeepDeletePair]) {
+        guard executeTask == nil else { return }
+        cancelDuplicatesLoad()
         executeBarButton.isEnabled = false
         loadingIndicator.startAnimating()
         tableView.isHidden = true
@@ -463,7 +507,6 @@ final class DuplicatesViewController: UIViewController {
 
         let photoLibraryService = photoLibraryService
         let repository = hashIndexRepository
-        let publisher = changePublisher
         executeTask = Task { [weak self] in
             let stillDuplicate = await Self.revalidate(
                 pairs: pairs,
@@ -485,54 +528,40 @@ final class DuplicatesViewController: UIViewController {
                     repository: repository,
                     assetIDs: assetIDsToDelete
                 )
-                publisher.publish(.touched(assetIDs: Set(assetIDsToDelete)))
             }
             self?.handleDeletionResult(success: success)
         }
     }
 
     private func handleStaleSnapshot() {
-        loadingIndicator.stopAnimating()
-        let alert = UIAlertController(
-            title: String(localized: "home.duplicates.staleSnapshotTitle"),
-            message: String(localized: "home.duplicates.staleSnapshotMessage"),
-            preferredStyle: .alert
-        )
-        alert.addAction(UIAlertAction(title: String(localized: "common.ok"), style: .default))
-        present(alert, animated: ConsideringUser.animated)
-        loadDuplicates()
+        executeTask = nil
+        pendingAlert = (String(localized: "home.duplicates.staleSnapshotTitle"), String(localized: "home.duplicates.staleSnapshotMessage"))
+        refreshPresentation()
     }
 
     private func handleDeletionResult(success: Bool) {
-        loadingIndicator.stopAnimating()
-        if success {
-            loadDuplicates()
-        } else {
-            tableView.isHidden = groupOrder.isEmpty
-            emptyStateView.isHidden = !groupOrder.isEmpty
-            updateSummary()
-            let alert = UIAlertController(
-                title: String(localized: "common.error"),
-                message: String(localized: "home.duplicates.deleteFailed"),
-                preferredStyle: .alert
-            )
-            alert.addAction(UIAlertAction(title: String(localized: "common.ok"), style: .default))
-            present(alert, animated: ConsideringUser.animated)
+        executeTask = nil
+        if !success {
+            pendingAlert = (String(localized: "common.error"), String(localized: "home.duplicates.deleteFailed"))
         }
+        refreshPresentation()
     }
 
     private nonisolated static func computeData(
         repository: ContentHashIndexRepository,
         photoLibraryService: PhotoLibraryService
-    ) async -> DuplicatesData {
-        await withCancellableDetachedValue(priority: .userInitiated) {
+    ) async -> DuplicatesData? {
+        await withCancellableDetachedValue(priority: .userInitiated) { () -> DuplicatesData? in
+            guard !Task.isCancelled else { return nil }
             let allIDs = photoLibraryService.collectAssetIDs(query: .library(.all))
+            guard !Task.isCancelled else { return nil }
             let valid = (try? repository.fetchValidIndexedRows(assetIDs: allIDs)) ?? [:]
-
+            guard !Task.isCancelled else { return nil }
             let phAssets = photoLibraryService.fetchAssets(localIdentifiers: Set(valid.keys))
             var assetsByID: [String: PHAsset] = [:]
             var validFingerprints: [String: Data] = [:]
             for asset in phAssets {
+                guard !Task.isCancelled else { return nil }
                 guard let row = valid[asset.localIdentifier] else { continue }
                 if let modificationDate = asset.modificationDate,
                    modificationDate > row.updatedAt {
@@ -544,12 +573,14 @@ final class DuplicatesViewController: UIViewController {
 
             var assetIDsByFingerprint: [Data: [String]] = [:]
             for (assetID, fingerprint) in validFingerprints {
+                guard !Task.isCancelled else { return nil }
                 assetIDsByFingerprint[fingerprint, default: []].append(assetID)
             }
             let duplicateIDArrays = assetIDsByFingerprint.filter { $0.value.count > 1 }
 
             var groups: [(fingerprint: Data, entries: [DuplicateEntry])] = []
             for (fingerprint, assetIDs) in duplicateIDArrays {
+                guard !Task.isCancelled else { return nil }
                 var entries: [DuplicateEntry] = []
                 for assetID in assetIDs {
                     guard let phAsset = assetsByID[assetID] else { continue }

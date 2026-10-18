@@ -2,8 +2,7 @@ import UIKit
 
 // A horizontal row of vertical (SF-symbol-over-label) action buttons. Centers when the buttons fit the
 // width, scrolls when they overflow. Generic over a caller tag so a screen can mix real action kinds with
-// synthetic entries (e.g. a single "Delete" that opens its own menu). Shared by the viewer chrome and the
-// grid's multi-select toolbar.
+// synthetic entries (e.g. a single "Delete" that opens its own menu).
 final class MediaActionBar: UIView {
     struct Entry {
         let id: AnyHashable

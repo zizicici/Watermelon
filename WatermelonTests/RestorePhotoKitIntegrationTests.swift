@@ -132,8 +132,6 @@ final class RestorePhotoKitIntegrationTests: XCTestCase {
         )
         let item = try XCTUnwrap(restored.first)
         createdIDs.append(item.asset.localIdentifier)
-        XCTAssertEqual(item.asset.importedInstances.map(\.role).sorted(), expected.map(\.role).sorted(), fixture.id)
-        XCTAssertTrue(item.asset.indexWriteHandled)
         let asset = try XCTUnwrap(PHAsset.fetchAssets(withLocalIdentifiers: [item.asset.localIdentifier], options: nil).firstObject)
         if let date = fixture.creationDateMs {
             XCTAssertEqual(asset.creationDate?.millisecondsSinceEpoch, date)
@@ -171,9 +169,9 @@ final class RestorePhotoKitIntegrationTests: XCTestCase {
         let ids: Set<String> = [item.asset.localIdentifier]
         let initial = try XCTUnwrap(repository.fetchAssetHashCaches(assetIDs: ids)[item.asset.localIdentifier])
         XCTAssertEqual(initial.assetFingerprint, importedFingerprint, fixture.id)
+        XCTAssertEqual(initial.hashesByRoleSlot.keys.map(\.role).sorted(), expected.map(\.role).sorted(), fixture.id)
         let sourceFingerprint = fingerprint(instances)
         let complete = expectedFingerprint == sourceFingerprint
-        XCTAssertEqual(item.asset.isCompleteRestore, complete, fixture.id)
         try database.write { db in
             try db.execute(sql: "DELETE FROM sync_state WHERE stateKey = 'local_asset_fingerprint_version'")
         }
@@ -183,8 +181,7 @@ final class RestorePhotoKitIntegrationTests: XCTestCase {
         try restartedRepository.clearLocalHashIndex()
         let builder = LocalHashIndexBuildService(photoLibraryService: PhotoLibraryService(), repository: restartedRepository)
         try await LocalDownloadIndexPreflight.run(
-            assetIDs: ids, buildService: builder, iCloudPhotoBackupMode: .disable,
-            onReady: { XCTAssertEqual($0, ids) }
+            assetIDs: ids, buildService: builder, iCloudPhotoBackupMode: .disable
         )
         XCTAssertEqual(try restartedRepository.fetchAssetHashCaches(assetIDs: ids)[item.asset.localIdentifier]?.assetFingerprint, importedFingerprint)
         let month = LibraryMonthKey.from(date: asset.creationDate, calendar: LibraryMonthKey.currentPreferenceMonthCalendar())
@@ -207,9 +204,9 @@ final class RestorePhotoKitIntegrationTests: XCTestCase {
         let delta = RemoteLibraryMonthDelta(month: month, resources: remoteResources, assets: [remoteAsset], assetResourceLinks: links)
         let worker = HomeDataProcessingWorker(photoLibraryService: PhotoLibraryService(), contentHashIndexRepository: restartedRepository,
             remoteMonthSnapshot: { $0 == month ? delta : nil })
-        _ = await worker.loadLocalIndex(forceReload: true, scope: .device(.all))
+        _ = await worker.reloadLocalIndex(scope: .device(.all))
         _ = await worker.syncRemoteSnapshot(state: .init(revision: 1, isFullSnapshot: true, monthDeltas: [delta], profileKey: destinationKey), hasActiveConnection: true)
-        let remaining = await worker.remoteOnlyItems(for: month, expectedScope: .device(.all))
+        let remaining = try await worker.remoteOnlyItems(for: month, expectedScope: .device(.all))
         XCTAssertEqual(remaining.count, complete ? 0 : 1, fixture.id)
         let remoteCache = RemoteLibrarySnapshotCache()
         remoteCache.setProfileKey(destinationKey)
@@ -239,15 +236,14 @@ final class RestorePhotoKitIntegrationTests: XCTestCase {
                 cachedLocalHash: try restartedRepository.fetchAssetHashCaches(assetIDs: ids)[item.asset.localIdentifier],
                 iCloudPhotoBackupMode: .disable, pass: .localResources, monthStore: store, profile: destinationProfile,
                 assetPosition: 1, totalAssets: 1, writeMode: .lite(session, nil))
-            let processor = AssetProcessor(photoLibraryService: PhotoLibraryService(), hashIndexRepository: restartedRepository,
-                remoteIndexService: RemoteIndexSyncService())
+            let processor = AssetProcessor(photoLibraryService: PhotoLibraryService(), hashIndexRepository: restartedRepository)
             let adjustmentChanged = tokens.contains { local in
                 local.role == ResourceTypeCode.adjustmentData && !links.contains {
                     $0.role == local.role && $0.slot == local.slot && $0.resourceHash == local.contentHash
                 }
             }
             let executor = BackupParallelExecutor(hashIndexRepository: restartedRepository, assetProcessor: processor,
-                remoteIndexService: RemoteIndexSyncService())
+                remoteSnapshotCache: RemoteLibrarySnapshotCache())
             XCTAssertEqual(executor.monthAlreadyFullyBackedUp(monthAssetIDs: [asset.localIdentifier], monthStore: store), !adjustmentChanged)
             let outcome = try await processor.process(context: context, client: client, eventStream: BackupEventStream(), cancellationController: nil)
             XCTAssertEqual(outcome.status, adjustmentChanged ? .success : .skipped)
@@ -348,9 +344,13 @@ final class RestorePhotoKitIntegrationTests: XCTestCase {
         let manifestURL = dbDirectory.appendingPathComponent("manifest.sqlite")
         let queue = try DatabaseQueue(path: manifestURL.path)
         try MonthManifestStore.migrate(queue)
+        let snapshotCache = RemoteLibrarySnapshotCache()
+        snapshotCache.setProfileKey(profileKey)
+        let remoteIndex = RemoteIndexSyncService(snapshotCache: snapshotCache)
         let store = MonthManifestStore(client: client, basePath: "/p", year: 2026, month: 1,
             localManifestURL: manifestURL, dbQueue: queue, remoteFilesByName: [:], dirty: false,
-            layout: .lite, liteWriteOwnership: .uniform({}))
+            layout: .lite, liteWriteOwnership: .uniform({}),
+                snapshotObserver: snapshotCache.snapshotObserver(profileKey: profileKey))
         for instance in instances {
             _ = try store.upsertResource(.init(year: 2026, month: 1, fileName: instance.fileName,
                 contentHash: instance.resourceHash, fileSize: instance.fileSize, resourceType: instance.role,
@@ -363,14 +363,11 @@ final class RestorePhotoKitIntegrationTests: XCTestCase {
             })
         _ = try await store.flushToRemote()
         let uploadsBefore = await client.uploadedPaths.count
-        let snapshotCache = RemoteLibrarySnapshotCache()
-        snapshotCache.setProfileKey(profileKey)
-        let remoteIndex = RemoteIndexSyncService(snapshotCache: snapshotCache)
         let initial = store.unsortedSnapshot()
-        remoteIndex.replaceCachedMonth(.init(year: 2026, month: 1), resources: initial.resources,
-            assets: initial.assets, links: initial.links, expectedProfileKey: profileKey)
-        let processor = AssetProcessor(photoLibraryService: PhotoLibraryService(), hashIndexRepository: repository, remoteIndexService: remoteIndex)
-        let executor = BackupParallelExecutor(hashIndexRepository: repository, assetProcessor: processor, remoteIndexService: remoteIndex)
+        remoteIndex.snapshotCache.replaceMonth(.init(year: 2026, month: 1), resources: initial.resources,
+            assets: initial.assets, assetResourceLinks: initial.links, onlyIfOwnedBy: profileKey)
+        let processor = AssetProcessor(photoLibraryService: PhotoLibraryService(), hashIndexRepository: repository)
+        let executor = BackupParallelExecutor(hashIndexRepository: repository, assetProcessor: processor, remoteSnapshotCache: remoteIndex.snapshotCache)
         XCTAssertFalse(executor.monthAlreadyFullyBackedUp(monthAssetIDs: [localID], monthStore: store))
         let lock = try XCTUnwrap(WriteLockService(basePath: "/p", writerID: UUID().uuidString.lowercased(), client: client))
         let context = AssetProcessContext(workerID: 0, asset: asset,
@@ -383,10 +380,11 @@ final class RestorePhotoKitIntegrationTests: XCTestCase {
         XCTAssertEqual(updated.uploadedFileSizeBytes, 0)
         XCTAssertEqual(store.assetsByFingerprint.count, 1)
         XCTAssertEqual(store.assetsByFingerprint[remoteFingerprint]?.creationDateMs, newDate.millisecondsSinceEpoch)
-        XCTAssertEqual(remoteIndex.fullSnapshot().assets.first?.creationDateMs, newDate.millisecondsSinceEpoch)
+        XCTAssertEqual(remoteIndex.snapshotCache.current().assets, initial.assets)
         let uploadsAfterProcessing = await client.uploadedPaths.count
         XCTAssertEqual(uploadsAfterProcessing, uploadsBefore)
-        _ = try await store.flushToRemote()
+        try await store.flushToRemote()
+        XCTAssertEqual(remoteIndex.snapshotCache.current().assets.first?.creationDateMs, newDate.millisecondsSinceEpoch)
         let uploadsAfterFlush = await client.uploadedPaths.count
         let repeated = try await processor.process(context: context, client: client, eventStream: BackupEventStream(), cancellationController: nil)
         XCTAssertEqual(repeated.status, .skipped)
@@ -460,9 +458,13 @@ final class RestorePhotoKitIntegrationTests: XCTestCase {
             let manifestURL = root.appendingPathComponent(scenario + ".sqlite")
             let queue = try DatabaseQueue(path: manifestURL.path)
             try MonthManifestStore.migrate(queue)
+            let snapshotCache = RemoteLibrarySnapshotCache()
+            snapshotCache.setProfileKey(profileKey)
+            let remoteIndex = RemoteIndexSyncService(snapshotCache: snapshotCache)
             let store = MonthManifestStore(client: client, basePath: "/p", year: 2026, month: 1,
                 localManifestURL: manifestURL, dbQueue: queue, remoteFilesByName: [:], dirty: false,
-                layout: .lite, liteWriteOwnership: .uniform({}))
+                layout: .lite, liteWriteOwnership: .uniform({}),
+                snapshotObserver: snapshotCache.snapshotObserver(profileKey: profileKey))
             for resource in fixture.resources {
                 let instance = resource.instance
                 _ = try store.upsertResource(.init(year: 2026, month: 1, fileName: instance.fileName,
@@ -487,14 +489,11 @@ final class RestorePhotoKitIntegrationTests: XCTestCase {
             _ = try await store.flushToRemote()
             let originalManifest = await client.fileData(path: store.manifestAbsolutePath)
             let uploadCount = await client.uploadedPaths.count
-            let snapshotCache = RemoteLibrarySnapshotCache()
-            snapshotCache.setProfileKey(profileKey)
-            let remoteIndex = RemoteIndexSyncService(snapshotCache: snapshotCache)
             let original = store.unsortedSnapshot()
-            remoteIndex.replaceCachedMonth(.init(year: 2026, month: 1), resources: original.resources,
-                assets: original.assets, links: original.links, expectedProfileKey: profileKey)
-            let processor = AssetProcessor(photoLibraryService: PhotoLibraryService(), hashIndexRepository: repository, remoteIndexService: remoteIndex)
-            let executor = BackupParallelExecutor(hashIndexRepository: repository, assetProcessor: processor, remoteIndexService: remoteIndex)
+            remoteIndex.snapshotCache.replaceMonth(.init(year: 2026, month: 1), resources: original.resources,
+                assets: original.assets, assetResourceLinks: original.links, onlyIfOwnedBy: profileKey)
+            let processor = AssetProcessor(photoLibraryService: PhotoLibraryService(), hashIndexRepository: repository)
+            let executor = BackupParallelExecutor(hashIndexRepository: repository, assetProcessor: processor, remoteSnapshotCache: remoteIndex.snapshotCache)
             XCTAssertFalse(executor.monthAlreadyFullyBackedUp(monthAssetIDs: [localID], monthStore: store), scenario)
             var cache = try XCTUnwrap(repository.fetchAssetHashCaches(assetIDs: [localID])[localID])
             if scenario == "stale-cache" { cache.hashesByRoleSlot[.init(role: 7, slot: adjustment.slot)] = Data(repeating: 99, count: 32) }
@@ -546,7 +545,7 @@ final class RestorePhotoKitIntegrationTests: XCTestCase {
                 if scenario == "upload-failure" { XCTAssertEqual(result?.status, .failed) }
                 XCTAssertEqual(Set(store.links(forAssetFingerprint: sourceFingerprint)), Set(oldLinks), scenario)
                 XCTAssertEqual(store.assetsByFingerprint[sourceFingerprint], oldAsset, scenario)
-                XCTAssertEqual(Set(remoteIndex.fullSnapshot().assetResourceLinks), Set(oldLinks), scenario)
+                XCTAssertEqual(Set(remoteIndex.snapshotCache.current().assetResourceLinks), Set(oldLinks), scenario)
                 let unchanged = await client.fileData(path: store.manifestAbsolutePath)
                 XCTAssertEqual(unchanged, originalManifest, scenario)
                 XCTAssertFalse(executor.monthAlreadyFullyBackedUp(monthAssetIDs: [localID], monthStore: store), scenario)
@@ -574,14 +573,16 @@ final class RestorePhotoKitIntegrationTests: XCTestCase {
             XCTAssertEqual(store.assetsByFingerprint[sourceFingerprint]?.totalFileSizeBytes,
                 oldAsset.totalFileSizeBytes - oldAdjustment.fileSize + exported.fileSize)
             XCTAssertEqual(try repository.fetchAssetHashCaches(assetIDs: [localID])[localID]?.hashesByRoleSlot[.init(role: 7, slot: adjustment.slot)], exported.contentHash)
+            XCTAssertEqual(Set(remoteIndex.snapshotCache.current().assetResourceLinks), Set(oldLinks), scenario)
             if scenario == "manifest-failure" {
                 await client.enqueueUploadError(RemoteErrorFixtures.terminal)
-                do { _ = try await store.flushToRemote(); XCTFail("Expected failed manifest upload") } catch {}
+                do { try await store.flushToRemote(); XCTFail("Expected failed manifest upload") } catch {}
                 XCTAssertTrue(store.dirty)
                 let unchanged = await client.fileData(path: store.manifestAbsolutePath)
                 XCTAssertEqual(unchanged, originalManifest)
             }
-            _ = try await store.flushToRemote()
+            try await store.flushToRemote()
+            XCTAssertEqual(Set(remoteIndex.snapshotCache.current().assetResourceLinks), Set(store.unsortedSnapshot().links))
             XCTAssertFalse(store.dirty)
             let reloaded = try await MonthManifestStore.loadOrCreate(client: client, basePath: "/p", year: 2026, month: 1, layout: .lite)
             XCTAssertEqual(Set(reloaded.links(forAssetFingerprint: sourceFingerprint)), Set(store.links(forAssetFingerprint: sourceFingerprint)))

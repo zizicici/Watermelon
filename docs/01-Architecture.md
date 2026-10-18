@@ -38,23 +38,22 @@
 10. `photoLibraryService` (`PhotoLibraryService`)
 11. `hashIndexRepository` (`ContentHashIndexRepository`)
 12. `localHashIndexBuildService` (`LocalHashIndexBuildService`)
-13. `localIndexChangePublisher` (`LocalIndexChangePublisher`)
-14. `localIndexBuildCoordinator` (`LocalIndexBuildCoordinator`)
-15. `backupCoordinator` (`BackupCoordinator`)
-16. `restoreService` (`RestoreService`)
-17. `appRuntimeFlags` (`AppRuntimeFlags`)
-18. `remoteMaintenanceController` (`RemoteMaintenanceController`)
-19. `profileReachabilityService` (`ProfileReachabilityService`)
+13. `localIndexBuildCoordinator` (`LocalIndexBuildCoordinator`)
+14. `backupCoordinator` (`BackupCoordinator`)
+15. `restoreService` (`RestoreService`)
+16. `appRuntimeFlags` (`AppRuntimeFlags`)
+17. `remoteMaintenanceController` (`RemoteMaintenanceController`)
+18. `profileReachabilityService` (`ProfileReachabilityService`)
 
 说明：
 
 1. `AppSession` 保存当前激活 profile 和会话内凭据。SMB / WebDAV / S3 需要密码（S3 把 secret access key 落 Keychain）；SFTP 把 `SFTPCredentialBlob` 的 JSON 落 Keychain；OneDrive 把账号身份 JSON 落 Keychain，token 只由 MSAL cache 管理；Dropbox 与 Google Drive 把账号身份 + refresh token JSON 落 Keychain，短期 access token 只在内存缓存。SFTP / OneDrive / Dropbox / Google Drive 的 `supportsPasswordPrompt = false`，凭据缺失只能进编辑页重新认证；外接存储不需要。
 2. `LocalHashIndexBuildService` 直接被 `HomeExecutionCoordinator` 用作执行前预检查工具。
 3. `LocalIndexBuildCoordinator` 封装更多页 / 索引 UI 触发的非执行态索引构建，并叠加权限检查与进度通知。
-4. `LocalIndexChangePublisher` 把索引相关变更广播给 Home / 索引页，避免轮询。
+4. `DatabaseManager` 按规范化的数据库文件 URL 共享进程内存储，统一拥有 `DatabaseQueue` 与 `localIndexChanges`；前台、后台和快捷指令均使用同一写队列与指纹版本。存储注册表弱持有实例，迁移和观察器安装仅在首次打开时执行。GRDB 观察器只跟踪非空指纹记录的身份；删除或清空指纹仍发布，纯尺寸 INSERT/UPDATE 不发布，事务及保存点回滚不发布。Home 和 Browser 订阅同一源并按版本追赶；有限历史过期时完整重建。
 5. `RemoteMaintenanceController` 负责用户主动触发的远端月份校验任务；它在校验期间会把 Home 的 `isSelectable` 拉为 `false`。
 6. `ProfileReachabilityService` 在后台周期性探测已保存 profile（SMB / SFTP 走 TCP、WebDAV / S3 / OneDrive / Dropbox / Google Drive 走 HTTP、外接存储走 security-scoped bookmark resolve），结果以 `unknown / reachable / unreachable` 形式暴露给 Home，供右侧菜单标记 “离线”。`DependencyContainer` 在初始化时立刻 `start()` 它，并保留 NWPathMonitor 与前台进入通知触发的 force-sweep 能力。
-7. `DependencyContainer.makeForBackgroundTask()` 会构造一份独立的依赖给 `BackgroundBackupRunner` 使用。
+7. `DependencyContainer.makeForBackgroundTask()` 构造独立依赖，但同文件的数据库存储仍共享。同目标的远端快照实例同步接收已提交的月份结果、删除与失效，普通加载结果只更新当前实例。`RemoteLibrarySnapshotCache.changes` 经 service/coordinator 传给各自的 Home 和 Browser，UI 通过异步合并订阅刷新；后台标记负责触发前台补扫。自动补扫在 App 失活或业务执行开始时取消，待恢复前台且业务结束后继续。
 
 ## 3. Home 模块
 
@@ -76,8 +75,8 @@
 2. 维护首页渲染所需状态：`sections`、`rowLookup`、`selection`、`localPhotoAccessState`、`localLibraryScope`、`isReloadingScope`
 3. 对外暴露 `connectionState` 与 `executionState`，以及综合判断 `isSelectable`（要求已连接、已授权相册、不在执行态、不在 scope 重载、不在远端 maintenance）
 4. 把内部状态变化统一映射为 `HomeChangeKind`
-5. 串行合并 `reloadLocal / syncRemote / notifyConnection / notifyStructural` 等刷新任务（由 `HomeRefreshScheduler` 执行）
-6. 订阅 `LocalIndexChangePublisher` 与 `RemoteMaintenanceController`，把索引构建 / 校验事件转成 `.structural` 通知
+5. 串行合并 `reloadLocal / reconcileLocal / syncRemote / notifyConnection / notifyStructural` 等刷新任务（由 `HomeRefreshScheduler` 执行）；App 非 active 时保留待处理工作，回到前台时统一追赶再投影，执行所需的显式读取屏障仍然有效。页面被覆盖或导航到其他页面不暂停数据更新。
+6. 订阅数据库索引变更并合并为 Home 串行队列上的增量核对；Browser 复用 Home 缓存、下载筛选远端资源前主动追赶提交版本。Photos 决定成员、数据库决定指纹，成员变化同时触发体积重算。变更历史压缩后的完整重建与普通加载共用同一结果和消费路径，保留指纹校验、时区、权限观察与全量尺寸扫描。远端变更由 `RemoteLibrarySnapshotCache` 在释放锁后统一发布。
 7. 在 `load / reloadProfiles / connect / disconnect` 等 profile 集合或 active profile 变化处把最新数据推给 `ProfileReachabilityService`；其 `onChange` 回调会被合并成一次 `.notifyConnection` 刷新，让目标菜单重新渲染 `离线` 标记
 
 ### `HomeAutoConnectCoordinator`
@@ -93,19 +92,21 @@
 3. 处理密码输入、切换 profile、断开连接
 4. 调用 `BackupCoordinator.reloadRemoteIndex(...)` 重建共享远端快照
 5. 连接失败时，如旧连接仍然有效，则尝试恢复旧连接对应的远端索引
+6. App 在前台且执行、维护已结束时，核对当前节点的后台备份标记及远端待核对状态；成功刷新后若期间又有变化则继续追赶，失败等待下次激活或变更。已加载的页面在 App 前台期间持续消费数据，不依赖页面是否显示。
 
 ### `HomeIncrementalDataManager`
 
 数据管线门面，把重活分给两位协作者：
 
 1. `HomeDataProcessingWorker`：在串行处理队列上跑索引变更与远端快照同步，持有 `HomeLocalIndexEngine` 与 `HomeRemoteIndexEngine`
-2. `HomeFileSizeScanCoordinator`：在主 actor 上跑文件大小扫描，按月 `Task.yield()`，启动全量扫描与 `PHChange` 触发的 rescan 共用一个 refcount 控制 size snapshot 释放
+2. `HomeFileSizeScanCoordinator`：完整扫描和增量扫描共用一个任务与待处理月份集合；计算和数据库写回离开主线程，写回串行等待；App 进入后台时按月暂停，回到前台后继续
 
 对外提供：
 
 1. `monthRow / allMonthRows / localAssetIDs / remoteOnlyItems / matchedCount`
 2. `remoteOnlyItems(for:)` 已改为 `async`：单次处理队列 hop 内同时抓远端原始 delta（经 `BackupCoordinator.remoteMonthRawData(for:)`）、用 `HomeAlbumMatching.buildRemoteItems` 构建 `RemoteAlbumItem`、并 snapshot 本月本地 fingerprint 集合，queue 外只做差集过滤 + 创建时间升序排序，全程不再走 `PHAsset` / `local_asset_resources` fetch
-3. 注册为 `PHPhotoLibraryChangeObserver`，并把 `RemoteLibrarySnapshotState` 增量写入 `HomeRemoteIndexEngine`
+3. 注册为 `PHPhotoLibraryChangeObserver`；App 进入后台时只记录 Photos 失效，回到前台或操作读取时通过同一重建入口追赶。过期 Home seed 不提供给 Browser，由 Browser 自行读取当前资料库。
+4. `RemoteLibrarySnapshotState` 增量写入 `HomeRemoteIndexEngine`；`HomeRefreshScheduler` 单独管理完整重建、增量刷新及执行/维护期间的延后请求。
 
 ### `HomeLocalIndexEngine` / `HomeRemoteIndexEngine`
 
@@ -126,11 +127,11 @@
 
 以下文件都集中在 `Watermelon/Home/`，均为状态管理类小组件，没有 UI：
 
-1. `HomeRefreshScheduler` — 把 reloadLocal / syncRemote / notifyConnection / notifyStructural 合批，避免连续触发刷新
+1. `HomeRefreshScheduler` — 串行合批完整重建、本地增量和远端同步；普通提交逐轮展示已完成结果，作用域重建、连接通知和 App 前后台变化通过展示版本隔离旧轮次，避免持续提交饿死 UI，也避免旧轮次提前结束新一轮前台追赶。
 2. `HomeScopeController` — 维护当前本地图库 scope（设备图库的全部 / 照片 / 视频，或指定相册），并标记 scope 重载中
 3. `HomeScopeNormalizer` — 校验已选相册 ID 是否仍然存在、是否需要弹提示
 4. `HomeSelectionController` — 月份选择状态（toggle、年级、双侧全选、连接变化清空）
-5. `HomeFileSizeScanCoordinator` — 文件大小扫描的 task / 引用计数管理
+5. `HomeFileSizeScanCoordinator` — 文件大小扫描的统一任务与待处理月份管理
 6. `HomeDataProcessingWorker` — 串行处理队列 worker，持有两套引擎
 7. `HomeSectionBuilder` — 年聚合、构建 `sections` 和 `rowLookup`
 8. `HomeMenuFactory` — 构建左右 header 的 UIMenu（相册切换、profile 切换、设置等）；`HomeLocalLibraryMenu` 为备份与投递共用设备图库的媒体类型筛选菜单和标题格式
@@ -151,7 +152,7 @@
 
 ### `HomeExecutionCoordinator`
 
-`DownloadMonthGate` 串行化纯下载月份与同步月份的补下载，排队期间响应暂停和取消。`DownloadWorkflowHelper` 为两条首页路径启用 2 worker 的 `OrderedRestorePipeline`：资产并发预取、按输入顺序导入，上一张的校验与索引收尾可和下一张导入重叠，完成回调仍有序。临时资源由 `RestoreStagingStore` 按运行和资产管理。`HomeLocalIndexRefreshBatcher` 每 200 ms 合并刷新首页索引，每月退出前等待余项刷新；上传 worker 仍等待所属月份完成下载后才报告 completed。
+`DownloadMonthGate` 串行化纯下载月份与同步月份的补下载，排队期间响应暂停和取消。`DownloadWorkflowHelper` 为两条首页路径启用 2 worker 的 `OrderedRestorePipeline`：资产并发预取、按输入顺序导入，上一张的校验与索引收尾可和下一张导入重叠，完成回调仍有序。临时资源由 `RestoreStagingStore` 按运行和资产管理。`HomeRefreshScheduler` 统一调度完整重建和增量追赶，以 200 ms 窗口合并数据库提交通知；完整重建吸收已排队的增量请求，具体变更由 worker 按源版本读取，无变化时不重建界面；上传 worker 仍等待所属月份完成下载后才报告 completed。
 
 职责：
 
@@ -189,7 +190,7 @@
 - `thumb-<fp>` 与来源无关：有 current fingerprint 的本地项先读该 key，miss 后用 PhotoKit 快速渲染，经过 current-bytes 前后校验再写回；远端同 fingerprint 随后直接复用。远端 sidecar、已验证原图派生结果也写同一个 key，反向供本地复用。
 - 本地 PHAsset 不建立 app-owned localIdentifier key，也不维护 alias；只有缺少 current fingerprint 或校验失败的本地项停留在 PhotoKit 系统缓存，不得污染旧 fingerprint。
 - Photo Library 变化由 Media Browser 的 PHChange observer 重建数据，并用不可被普通 reload 覆盖的 generation latch 刷新可见 cell；刷新保留旧图直到新 PhotoKit 请求完成，不同步清空整屏。PhotoKit 负责本地缩略图缓存及资源变化后的请求结果，app 不再维护 local cache generation 或重渲染循环。
-- Grid 与 Viewer 共享当前模式的一份 `MediaBrowserSession` 连续快照；Viewer 固定打开时的页序，只按 id / local lineage 从最新 session 解析页面，并用小型 action overlay 承接尚未进入快照的本次操作结果。切换模式会释放旧快照，不预存 Local / All / Remote 三套 sections。item identity 由本地 `localIdentifier` 或远端 `(assetFingerprint, storageMonth)` 构造，不能由调用方拼接字符串。
+- Grid 与 Viewer 共享当前模式的一份 `MediaBrowserSession` 连续快照；Viewer 固定打开时的页序，从同次提交的未过滤资源索引解析当前状态，不维护操作结果 overlay。Merged 在去重时保留当前本地 ID → fingerprint 关联，重复副本也能解析到远端资源；页面只保留身份引用，全部引用随快照在后台推进，离屏页同样消费编辑、备份和删除变化。刷新期间禁用详情操作，源中消失的资源清除媒体并显示不可用。切换模式会释放旧快照，不预存 Local / All / Remote 三套 sections。item identity 由本地 `localIdentifier` 或远端 `(assetFingerprint, storageMonth)` 构造，不能由调用方拼接字符串。
 - `MediaBrowserSession` 持有 `MediaBrowserSelection`，后者统一拥有当前 snapshot、选择模式、选中 ID、增量统计、按显示顺序的惰性缓存和拖选范围。替换 snapshot 同步裁剪选择并重算能力；单项变化只增减统计，拖选只处理范围差集，不复制完整基线。Grid 不直接写 ID 集合，Viewer 继续只读 session 快照。
 - `MediaBrowserCollectionSelection` 将业务选择投影到可见 UICollectionView 路径；`MediaBrowserCollectionView` 在 UIKit 完成布局与复用后触发校正。系统双指手势期间保留已访问路径，结束后清理离屏路径。全选不会把整个图库登记成 UIKit 选中项，布局回调不扫描完整业务选择。
 - `MediaBrowserSource.load()` 返回 `.loaded(content)` / `.stale` / `.cancelled`；stale 不得折成 empty 覆盖现有 UI。远端投影同时保留 storage month（路径/删除）与按当前时区算出的 display month；Remote/Merged 共用这次计算。Merged 让 Local 只创建 remote presence 中不存在的条目，再按 display month 线性合并，不构建两份子 snapshot，也不维护 fast/fallback 两套规则。最终 snapshot 接管 source 的分段 item buffers 并以 section offsets 分页，不再 flatten 全库复制。
@@ -200,7 +201,7 @@
 - `MediaDropFileSelectionController` 独立维护文件列表、导入/移除状态与错误回调，底层 `MediaDropFileStagingStore` 把 document picker 返回的文件复制到会话级临时目录；`InboxTransferItem` 将 PhotoKit local identifier 与暂存文件统一为投递输入，额度按两者合计计算。
 - `InboxTransferService` 只复用 storage client 的连接、目录、排他创建与修改时间能力，直接写节点的 `Inbox`；它不进入 Lite repo、manifest、hash index、备份去重或写锁链路。图片导出固定允许访问 iCloud，普通文件不套用图片 Filter。
 - `LibraryPresenceIndex` 分别版本化 local facts 与 remote facts；远端提交必须匹配 active profile 和 snapshot revision，旧 flight 不能覆盖新 revision。远端查询返回 `complete / incomplete / absent / unknown`，profile/revision/authority 任一不匹配都 fail-closed 为 unknown，破坏性操作不能把 unknown 当作已完整备份。
-- 上游变化只负责 invalidation + 通知，当前 source 或 action 显式触发重建；批量操作的 suspend 只合并通知，不启动一条可绕过 suspend 的后台 retry/rebuild 链。
+- 上游变化只负责 invalidation + 异步合并通知，当前 source 或 action 显式触发重建；Browser 调度器统一处理 App 前后台、执行和批量操作期间的待刷新工作。
 - 已移除的 `AlbumThumbnails` 和旧 `browser-local-*` 从引入起均使用 `toDisk: false`，无需新增磁盘迁移；更早可能落在 `ImageCache.default` 的文件继续由 `purgeLegacyDefaultCacheIfNeeded` 一次性清理。
 - Media Browser 及远端资源的本地回退不得直接调用 PhotoKit 请求 API：图片、原图数据、视频、PHAsset Live Photo 和资源文件型 Live Photo 都经 `PhotoKitImageLoader`。取消/错误立即结束，正常 degraded 中间结果等待最终帧；本地交互缩略图 15 秒超时，允许网络的缩略图和备份 sidecar 为 180 秒，完整媒体没有固定墙钟超时并由调用任务取消。Share materialization 例外：Viewer 退出时取消，并有独立的 5 分钟 backstop，防止 Share latch 永久占用。
 - `LibraryCreationDate` 是 Local、备份月份调度、manifest 和 Remote/Merged 投影共同的 `creationDate` 边界；缺失、非有限或明显越界的值统一回退到 Unix epoch。`LibraryMonthKey.from` 验证 year/month，保证 Lite month filename 可重新扫描。
@@ -257,7 +258,7 @@
 
 同一次 run 的 `BackupRunRequest.workerCountOverride` 同时用于远端 manifest 变化月份的预同步下载和后续上传：显式节点值可把两者扩到 `6...24`，最终都按实际月份数裁剪；协议自动模式仍使用各后端默认值。Browser Link 没有持久节点覆盖，上传和 manifest 下载均使用协议自动值或全局 `1...4`。后台自动备份不读取这套前台覆盖，固定使用 `1`。
 
-`MonthSeedLookup` 优化（快照较小时）现在由并行执行阶段在装载 manifest 时按需构造，准备阶段不再统一前置。
+快照较小时，准备阶段构建 `MonthSeedLookup` 的月份范围索引；并行执行阶段装载 manifest 时才展开对应月份的 seed。
 
 ### `WriteLockService`（`Shared/Services/Repo/`）
 
@@ -291,7 +292,12 @@ Lite 仓库的单写者租约。锁文件位于 `.watermelon/locks/<writerID>.lo
 5. 上传远端资源（最大重试 3 次）
 6. 写本地 hash 索引
 7. 写月 manifest
-8. 增量更新共享远端快照缓存
+
+远端业务直接操作 `MonthManifestStore`；加载确认、清单提交及读回校验后的结果由 store 的观察回调统一交给 `RemoteLibrarySnapshotCache`。上传、删除与资源收养共享这一持久化边界，校验逻辑位于 `MonthManifestStore+Verification.swift`。清单读取保留取消语义，不能将取消误判为损坏并移除已确认数据。清单加载、提交和校验通过 `@concurrent` 显式离开调用方执行器，避免 UI 发起时把同步解析或数据库工作带到主线程。`RemoteIndexSyncService` 只负责扫描，不再包装或串行化业务操作；扫描之间保留可取消的排队，扫描内部的月份下载仍可并行。
+
+`RemoteLibrarySnapshotCache` 同时维护月份快照与扫描摘要。扫描携带连接上下文和源版本；业务提交过的月份拒绝旧扫描写回和删除，其他月份继续接收，冲突留待前台或执行结束后补扫。补扫待办与远端状态不确定分别记录，确认数据不会仅因扫描冲突而失去可用性。持久化失败保留最后确认的数据并标记待核对。月份内的资源按文件名、资产按指纹、链接按指纹与 role/slot 索引，键不重复保存月份；跨月资产查询不遍历每个资产；数组展开、重计算和全库排序在锁外进行，变更通知在解锁后分发；OneDrive 的磁盘快照由独立 `RemoteManifestSnapshotDiskCache` 管理，业务提交使旧磁盘快照失效。
+
+同目标的跨 Coordinator 提交复用同一份已整理月份数据，分发不包含网络或业务调度。备份 seed 在同一临界区校验目标归属、可信状态与条目上限后捕获，锁外展开且不做全库排序；校验不通过时按月份重新加载。
 
 ### 内容身份识别
 
@@ -299,7 +305,7 @@ Lite 仓库的单写者租约。锁文件位于 `.watermelon/locks/<writerID>.lo
 
 ### `MonthManifestStore`（`Shared/Services/Backup/`）
 
-文件：`MonthManifestStore.swift` + `+Loading.swift` + `+Schema.swift`
+文件：`MonthManifestStore.swift` + `+Loading.swift` + `+Verification.swift` + `+Schema.swift`
 
 职责：
 
@@ -310,8 +316,8 @@ Lite 仓库的单写者租约。锁文件位于 `.watermelon/locks/<writerID>.lo
 
 ### `RemoteIndexSyncService` / `RemoteLibrarySnapshotCache`（`Shared/Services/Backup/`）
 
-1. `RemoteIndexSyncService` 扫描远端 `YYYY/MM/.watermelon_manifest.sqlite` 摘要、对比上次 digest、找出 changed/removed months、仅重新下载变化月份的 manifest，并写入 `RemoteLibrarySnapshotCache`
-2. `RemoteLibrarySnapshotCache` 维护内存态完整快照与 `revision`，向 Home 暴露 `currentState(since:)` / `monthRawData(for:)` 等接口
+1. `RemoteIndexSyncService` 扫描远端 `.watermelon/months/YYYY-MM.sqlite`（兼容旧 V1 布局）摘要、对比上次 digest、找出 changed/removed months、仅重新下载变化月份的 manifest，并写入 `RemoteLibrarySnapshotCache`
+2. `RemoteLibrarySnapshotCache` 维护内存态完整快照与 `revision`，向 Home 暴露 `state(since:)` / `monthRawData(for:)` 等接口
 
 ### `RemoteMaintenanceController`（`Watermelon/Services/Backup/`）
 

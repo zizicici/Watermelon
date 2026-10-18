@@ -142,19 +142,19 @@ final class MonthFlushRecoveryTests: XCTestCase {
         let hashRepo = ContentHashIndexRepository(databaseManager: databaseManager)
         let assetProcessor = AssetProcessor(
             photoLibraryService: PhotoLibraryService(),
-            hashIndexRepository: hashRepo,
-            remoteIndexService: remoteIndex
+            hashIndexRepository: hashRepo
         )
         return BackupParallelExecutor(
             hashIndexRepository: hashRepo,
             assetProcessor: assetProcessor,
-            remoteIndexService: remoteIndex
+            remoteSnapshotCache: remoteIndex.snapshotCache
         )
     }
 
     private func makeStore(
         client: RemoteStorageClientProtocol,
-        ownership: RepoOwnershipGates = .uniform({})
+        ownership: RepoOwnershipGates = .uniform({}),
+        snapshotObserver: MonthManifestStore.SnapshotObserver? = nil
     ) throws -> MonthManifestStore {
         let localURL = MonthManifestStore.makeLocalManifestURL(year: year, month: month)
         try? FileManager.default.removeItem(at: localURL)
@@ -163,7 +163,7 @@ final class MonthFlushRecoveryTests: XCTestCase {
         return MonthManifestStore(
             client: client, basePath: basePath, year: year, month: month,
             localManifestURL: localURL, dbQueue: queue, remoteFilesByName: [:], dirty: false,
-            layout: .lite, liteWriteOwnership: ownership
+            layout: .lite, liteWriteOwnership: ownership, snapshotObserver: snapshotObserver
         )
     }
 
@@ -187,7 +187,6 @@ final class MonthFlushRecoveryTests: XCTestCase {
         pool: StorageClientPool,
         state: BackupParallelExecutor.MonthFinalizeState,
         recoveryWindow: TimeInterval,
-        loadedSnapshot: (resources: [RemoteManifestResource], assets: [RemoteManifestAsset], links: [RemoteAssetResourceLink])? = nil,
         eventStream: BackupEventStream = BackupEventStream(),
         remoteIndex: RemoteIndexSyncService = RemoteIndexSyncService(),
         deferredAssetIDs: Set<String> = []
@@ -195,7 +194,6 @@ final class MonthFlushRecoveryTests: XCTestCase {
         await makeExecutor(remoteIndex: remoteIndex).finalizeMonth(
             monthStore: store,
             monthKey: LibraryMonthKey(year: year, month: month),
-            loadedSnapshot: loadedSnapshot ?? store.unsortedSnapshot(),
             monthDirtyAssetIDs: ["asset-a"],
             monthProgressCounts: BackupMonthProgressCounts(),
             monthDeferredAssetIDs: deferredAssetIDs,
@@ -475,16 +473,24 @@ final class MonthFlushRecoveryTests: XCTestCase {
     // leaving the assets resume-complete so resume skips them → orphans).
     func testCancellationShapedReconnectPausesUncommittedNotFailed() async throws {
         let broken = InMemoryRemoteStorageClient()
-        await broken.enqueueUploadError(networkLost)   // first manifest flush trips
-        let store = try makeStore(client: broken)
-        let committedBaseline = store.unsortedSnapshot()   // last committed state — empty, before the dirty upsert
+        let cache = RemoteLibrarySnapshotCache()
+        let owner = RemoteIndexSyncService.remoteProfileKey(profile())
+        cache.setProfileKey(owner)
+        let store = try makeStore(client: broken, snapshotObserver: cache.snapshotObserver(profileKey: owner))
+        let remoteIndex = RemoteIndexSyncService(snapshotCache: cache)
+        let committed = TestFixtures.remoteResource(year: year, month: month, contentHash: Data([0x66]), fileName: "committed.jpg")
+        try store.upsertResource(committed)
+        let fingerprint = BackupAssetResourcePlanner.assetFingerprint(resourceRoleSlotHashes: [
+            (role: ResourceTypeCode.photo, slot: 0, contentHash: committed.contentHash)
+        ])
+        try store.upsertAsset(TestFixtures.remoteAsset(year: year, month: month, fingerprint: fingerprint),
+            links: [TestFixtures.remoteLink(year: year, month: month, assetFingerprint: fingerprint,
+                resourceHash: committed.contentHash)])
+        try await store.flushToRemote()
+        await broken.enqueueUploadError(networkLost)
         let dirtyResource = TestFixtures.remoteResource(year: year, month: month, contentHash: Data([0x77]), fileName: "d.jpg")
         try store.upsertResource(dirtyResource)
         XCTAssertTrue(store.dirty)
-
-        // Mirror production's optimistic cache upsert during upload, so the rollback has something to revert.
-        let remoteIndex = RemoteIndexSyncService()
-        remoteIndex.upsertCachedResource(dirtyResource, expectedProfileKey: nil)
 
         // Every reconnect surfaces a cancellation-shaped fault → recoverWorkerConnection returns .cancelled.
         let pool = StorageClientPool(maxConnections: 1) { throw CancellationError() }
@@ -495,7 +501,7 @@ final class MonthFlushRecoveryTests: XCTestCase {
         // costs only one backoff; a tight one risks a slow-CONNECT box flipping the outcome to .exhausted.
         let disposition = await finalize(
             store: store, pool: pool, state: s, recoveryWindow: 30,
-            loadedSnapshot: committedBaseline, eventStream: eventStream, remoteIndex: remoteIndex
+            eventStream: eventStream, remoteIndex: remoteIndex
         )
 
         guard case .breakMonthLoop = disposition else {
@@ -509,9 +515,9 @@ final class MonthFlushRecoveryTests: XCTestCase {
         let unmark = await resumeUnmark(in: eventStream)
         XCTAssertEqual(unmark?.ids, ["asset-a"], "must un-mark the month's uncommitted assets for resume")
         XCTAssertEqual(unmark?.failedCount, 0, "a clean pause un-marks without reporting failures")
-        // The cache must roll back to the committed baseline (empty) — no orphaned uncommitted resource left.
-        let cachedMonth = remoteIndex.remoteMonthRawData(for: LibraryMonthKey(year: year, month: month))
-        XCTAssertEqual(cachedMonth?.resources.count ?? 0, 0, "a failed flush must roll the cache back to committed baseline")
+        let cachedMonth = remoteIndex.snapshotCache.monthRawData(for: LibraryMonthKey(year: year, month: month))
+        XCTAssertEqual(cachedMonth?.resources, [committed])
+        XCTAssertTrue(remoteIndex.snapshotCache.requiresReconciliation)
     }
 
     func testPresetMonthFatalSkipsFlush() async throws {

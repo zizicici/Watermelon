@@ -36,8 +36,38 @@ final class OneDriveRemoteIndexCacheTests: XCTestCase {
 
         let downloadsAfterSecondSync = await client.downloadAttemptPaths
         XCTAssertEqual(downloadsAfterSecondSync, downloadsAfterFirstSync)
-        let snapshot = secondService.fullSnapshot()
+        let snapshot = secondService.snapshotCache.current()
         XCTAssertEqual(snapshot.resources.map(\.fileName), ["f171.jpg"])
+    }
+
+    func testBusinessCommitInvalidatesPersistedSnapshotEvenWhenListingMetadataIsUnchanged() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let month = LibraryMonthKey(year: 2024, month: 3)
+        try await seedLiteMonth(client, month: month, hashByte: 0xAB,
+            modifiedAt: Date(timeIntervalSince1970: 1_700_000_000))
+        let diskCache = RemoteManifestSnapshotDiskCache(directory: cacheDirectory)
+        let profile = try oneDriveProfile()
+        let owner = RemoteIndexSyncService.remoteProfileKey(profile)
+        let service = RemoteIndexSyncService(diskCache: diskCache)
+        _ = try await service.syncIndex(client: client, profile: profile, layout: .lite)
+        XCTAssertNotNil(diskCache.load(profileKey: owner, layout: .lite))
+        let oldListing = try await client.list(path: RepoLayoutLite.monthsDirectoryPath(basePath: basePath))
+        let loaded = try await MonthManifestStore.loadManifestDirect(client: client, basePath: basePath,
+            year: month.year, month: month.month, layout: .lite, assertOwnership: .uniform({}),
+            snapshotObserver: service.snapshotCache.snapshotObserver(profileKey: owner))
+        let store = try XCTUnwrap(loaded)
+        try store.upsertResource(TestFixtures.remoteResource(year: month.year, month: month.month,
+            contentHash: Data([0xCD]), fileName: "new.jpg"))
+        try await store.flushToRemote()
+        XCTAssertNil(diskCache.load(profileKey: owner, layout: .lite))
+
+        let downloadsBefore = await client.downloadAttemptPaths.count
+        await client.enqueueListResult(oldListing)
+        let reopened = RemoteIndexSyncService(diskCache: diskCache)
+        _ = try await reopened.syncIndex(client: client, profile: profile, layout: .lite)
+        let downloadsAfter = await client.downloadAttemptPaths.count
+        XCTAssertEqual(downloadsAfter, downloadsBefore + 1)
+        XCTAssertEqual(Set(reopened.snapshotCache.current().resources.map(\.fileName)), ["f171.jpg", "new.jpg"])
     }
 
     func testOneDriveDigestChangeDownloadsChangedManifestInsteadOfHydratingStaleSnapshot() async throws {
@@ -69,7 +99,7 @@ final class OneDriveRemoteIndexCacheTests: XCTestCase {
         let downloadsAfterSecondSync = await client.downloadAttemptPaths
         XCTAssertEqual(downloadsAfterSecondSync.filter { $0 == liteMonthPath(month) }.count, 2)
         XCTAssertGreaterThan(downloadsAfterSecondSync.count, downloadsAfterFirstSync.count)
-        let snapshot = secondService.fullSnapshot()
+        let snapshot = secondService.snapshotCache.current()
         XCTAssertEqual(snapshot.resources.map(\.fileName), ["f205.jpg"])
     }
 
@@ -89,7 +119,7 @@ final class OneDriveRemoteIndexCacheTests: XCTestCase {
 
         let downloads = await client.downloadAttemptPaths
         XCTAssertEqual(downloads.filter { $0 == liteMonthPath(month) }.count, 2)
-        XCTAssertEqual(service.fullSnapshot().resources.map(\.fileName), ["f171.jpg"])
+        XCTAssertEqual(service.snapshotCache.current().resources.map(\.fileName), ["f171.jpg"])
     }
 
     func testNonOneDriveManifestDownloadTransientFailureDoesNotRetryDuringSync() async throws {
@@ -242,8 +272,10 @@ final class OneDriveRemoteIndexCacheTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: directory) }
         let database = try DatabaseManager(databaseURL: directory.appendingPathComponent("test.sqlite"))
         let remoteIndexService = RemoteIndexSyncService()
+        let owner = RemoteIndexSyncService.remoteProfileKey(try oneDriveProfile())
+        XCTAssertTrue(remoteIndexService.snapshotCache.claimIfUnowned(profileKey: owner))
         let month = LibraryMonthKey(year: 2024, month: 3)
-        remoteIndexService.replaceCachedMonth(
+        remoteIndexService.snapshotCache.replaceMonth(
             month,
             resources: [
                 TestFixtures.remoteResource(
@@ -254,8 +286,8 @@ final class OneDriveRemoteIndexCacheTests: XCTestCase {
                 )
             ],
             assets: [],
-            links: [],
-            expectedProfileKey: nil
+            assetResourceLinks: [],
+            onlyIfOwnedBy: nil
         )
         let service = BackupRunPreparationService(
             photoLibraryService: PhotoLibraryService(),
@@ -267,6 +299,7 @@ final class OneDriveRemoteIndexCacheTests: XCTestCase {
 
         let lookup = service.makeMonthSeedLookup(
             from: RemoteIndexSyncDigest(resourceCount: 1, assetCount: 0, linkCount: 0),
+            expectedProfileKey: owner,
             eventStream: BackupEventStream()
         )
 
@@ -274,6 +307,10 @@ final class OneDriveRemoteIndexCacheTests: XCTestCase {
         guard case .verifyRemoteDirectory = seed.resourceListingPolicy else {
             return XCTFail("every backend, OneDrive included, must verify the remote directory")
         }
+        remoteIndexService.snapshotCache.setProfileKey("other")
+        XCTAssertNil(service.makeMonthSeedLookup(
+            from: RemoteIndexSyncDigest(resourceCount: 1, assetCount: 0, linkCount: 0),
+            expectedProfileKey: owner, eventStream: BackupEventStream()))
     }
 
     private func seedLiteMonth(

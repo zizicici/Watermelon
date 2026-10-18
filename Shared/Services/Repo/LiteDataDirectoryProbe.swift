@@ -4,7 +4,7 @@ import os.log
 // Shared probe for a Lite month's data directory (<YYYY>/<MM>). Lite keeps month truth under
 // .watermelon/months; the data directory is a separate, layout-shared resource tree. The three call
 // sites that read it before a reconcile — MonthManifestStore.loadOrCreate, .loadSeeded, and
-// RemoteIndexSyncService.verifyMonth — must read it the same way: a confirmed-absent directory is an
+// MonthManifestStore.verifyMonth — must read it the same way: a confirmed-absent directory is an
 // empty listing, any other transport fault fails closed (never read as "zero files"), and a destructive
 // prune (whole-month clear or large-ratio) of a non-empty manifest needs a second confirming listing plus
 // sampled metadata absence checks before it is allowed to dirty the manifest.

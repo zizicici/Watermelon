@@ -49,8 +49,8 @@
 
 ## 6. 大图库文件大小扫描仍有成本
 
-1. 首页会异步扫描每个月本地资源总大小，由 `HomeFileSizeScanCoordinator` 在主 actor 上逐月 `Task.yield()`。
-2. 启动全量扫描与 PHChange 增量 rescan 共用 size snapshot refcount，已避免被对方提前释放。
+1. 首页通过 `HomeFileSizeScanCoordinator` 按月异步扫描本地资源总大小，资源枚举与数据库读写均离开主线程。
+2. 完整与增量扫描共用单任务及其 size snapshot，App 进入后台时暂停；内存警告释放工作集，下次回到前台再重扫。
 3. 但大图库初次进入仍可能较慢；在文件大小全部补齐前，部分汇总会暂时显示 `-`。
 
 ## 7. 并发策略仍是“固定默认 + 手动覆盖”

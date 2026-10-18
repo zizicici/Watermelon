@@ -5,6 +5,7 @@ import os.log
 private let manifestLoadLog = Logger(subsystem: "com.zizicici.watermelon", category: "MonthManifestStore")
 
 extension MonthManifestStore {
+    @concurrent
     static func loadOrCreate(
         client: RemoteStorageClientProtocol,
         basePath: String,
@@ -14,7 +15,32 @@ extension MonthManifestStore {
         layout: ManifestLayout,
         stepLogger: MonthManifestStepLogger? = nil,
         assertOwnership: RepoOwnershipGates? = nil,
-        liteMonthsListing: LiteMonthsListingSnapshot? = nil
+        liteMonthsListing: LiteMonthsListingSnapshot? = nil,
+        snapshotObserver: SnapshotObserver? = nil
+    ) async throws -> MonthManifestStore {
+        do {
+            let store = try await loadWorkingMonth(client: client, basePath: basePath, year: year, month: month,
+                seed: seed, layout: layout, stepLogger: stepLogger, assertOwnership: assertOwnership,
+                liteMonthsListing: liteMonthsListing, snapshotObserver: snapshotObserver)
+            store.publishSnapshot()
+            return store
+        } catch {
+            snapshotObserver?(.uncertain)
+            throw error
+        }
+    }
+
+    private static func loadWorkingMonth(
+        client: RemoteStorageClientProtocol,
+        basePath: String,
+        year: Int,
+        month: Int,
+        seed: Seed? = nil,
+        layout: ManifestLayout,
+        stepLogger: MonthManifestStepLogger? = nil,
+        assertOwnership: RepoOwnershipGates? = nil,
+        liteMonthsListing: LiteMonthsListingSnapshot? = nil,
+        snapshotObserver: SnapshotObserver? = nil
     ) async throws -> MonthManifestStore {
         if let seed {
             return try await loadSeeded(
@@ -26,7 +52,8 @@ extension MonthManifestStore {
                 layout: layout,
                 stepLogger: stepLogger,
                 assertOwnership: assertOwnership,
-                liteMonthsListing: liteMonthsListing
+                liteMonthsListing: liteMonthsListing,
+                snapshotObserver: snapshotObserver
             )
         }
 
@@ -165,7 +192,8 @@ extension MonthManifestStore {
             layout: layout,
             liteWriteOwnership: assertOwnership,
             liteMonthsListing: liteMonthsListing,
-            stepLogger: stepLogger
+            stepLogger: stepLogger,
+            snapshotObserver: snapshotObserver
         )
 
         // reloadCache doubles as the integrity check: corruption surfaces
@@ -209,7 +237,8 @@ extension MonthManifestStore {
         layout: ManifestLayout,
         stepLogger: MonthManifestStepLogger? = nil,
         assertOwnership: RepoOwnershipGates? = nil,
-        liteMonthsListing: LiteMonthsListingSnapshot? = nil
+        liteMonthsListing: LiteMonthsListingSnapshot? = nil,
+        snapshotObserver: SnapshotObserver? = nil
     ) async throws -> MonthManifestStore {
         let localURL = Self.makeLocalManifestURL(year: year, month: month)
 
@@ -309,7 +338,8 @@ extension MonthManifestStore {
             layout: layout,
             liteWriteOwnership: assertOwnership,
             liteMonthsListing: liteMonthsListing,
-            stepLogger: stepLogger
+            stepLogger: stepLogger,
+            snapshotObserver: snapshotObserver
         )
         try store.seedDatabase(seed)
         try store.reloadCache()
@@ -401,6 +431,7 @@ extension MonthManifestStore {
     /// `assertOwnership`, when provided, marks this an owned Lite write load: it is carried into the store
     /// so the schema-upgrade flush gates through the same primitive. A `.lite` load with no assertion is
     /// read-only and never schema-pushes; V1 keeps its default schema-push behavior either way.
+    @concurrent
     static func loadManifestDirect(
         client: RemoteStorageClientProtocol,
         basePath: String,
@@ -412,7 +443,8 @@ extension MonthManifestStore {
         assertOwnership: RepoOwnershipGates? = nil,
         liteMonthsListing: LiteMonthsListingSnapshot? = nil,
         surfaceDownloadNotFound: Bool = false,
-        surfaceDownloadFailure: Bool = false
+        surfaceDownloadFailure: Bool = false,
+        snapshotObserver: SnapshotObserver? = nil
     ) async throws -> MonthManifestStore? {
         let monthRelativePath = String(format: "%04d/%02d", year, month)
         let absPath = manifestAbsolutePath
@@ -422,6 +454,7 @@ extension MonthManifestStore {
 
         do {
             try await client.download(remotePath: absPath, localURL: localURL)
+            try Task.checkCancellation()
         } catch {
             try? FileManager.default.removeItem(at: localURL)
             if error is CancellationError || Task.isCancelled {
@@ -448,6 +481,7 @@ extension MonthManifestStore {
             )
         } catch {
             try? FileManager.default.removeItem(at: localURL)
+            if error is CancellationError || Task.isCancelled { throw CancellationError() }
             throw NSError(
                 domain: "MonthManifestStore",
                 code: -34,
@@ -472,13 +506,15 @@ extension MonthManifestStore {
             dirty: prepared.requiresRemoteSync,
             layout: layout,
             liteWriteOwnership: assertOwnership,
-            liteMonthsListing: liteMonthsListing
+            liteMonthsListing: liteMonthsListing,
+            snapshotObserver: snapshotObserver
         )
 
         do {
             try store.reloadCache()
             if layout == .lite { try await store.upgradeAssetFingerprints() }
         } catch {
+            if error is CancellationError || Task.isCancelled { throw CancellationError() }
             throw NSError(
                 domain: "MonthManifestStore",
                 code: -35,

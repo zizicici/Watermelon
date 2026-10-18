@@ -130,6 +130,13 @@ final class MonthManifestStore {
     /// Without this cache, processBundle re-folds the entire set per bundle → O(N²) per month.
     private var collisionKeysCache: Set<String>?
     private(set) var dirty: Bool = false
+    enum SnapshotEvent: Sendable {
+        case confirmed(RemoteLibraryMonthDelta, remoteChanged: Bool)
+        case removed(LibraryMonthKey)
+        case uncertain
+    }
+    typealias SnapshotObserver = @Sendable (SnapshotEvent) -> Void
+    let snapshotObserver: SnapshotObserver?
 
     // True once a read-back proves the just-published canonical byte-wrong, independent of the error finally
     // surfaced. Gates flushToRemote's proven-bad-canonical cleanup; reset at the start of each read-back.
@@ -149,7 +156,8 @@ final class MonthManifestStore {
         layout: ManifestLayout,
         liteWriteOwnership: RepoOwnershipGates? = nil,
         liteMonthsListing: LiteMonthsListingSnapshot? = nil,
-        stepLogger: MonthManifestStepLogger? = nil
+        stepLogger: MonthManifestStepLogger? = nil,
+        snapshotObserver: SnapshotObserver? = nil
     ) {
         self.client = client
         self.basePath = basePath
@@ -164,6 +172,7 @@ final class MonthManifestStore {
         self.liteWriteOwnership = liteWriteOwnership
         self.liteMonthsListing = liteMonthsListing
         self.stepLogger = stepLogger
+        self.snapshotObserver = snapshotObserver
     }
 
     deinit {
@@ -905,7 +914,34 @@ final class MonthManifestStore {
     }
 
     @discardableResult
+    @concurrent
     func flushToRemote(ignoreCancellation: Bool = false) async throws -> Bool {
+        if ignoreCancellation {
+            return try await Task { try await self.flushAndPublish(ignoreCancellation: true) }.value
+        }
+        return try await flushAndPublish(ignoreCancellation: false)
+    }
+
+    private func flushAndPublish(ignoreCancellation: Bool) async throws -> Bool {
+        do {
+            let committed = try await flushManifest(ignoreCancellation: ignoreCancellation)
+            if committed { publishSnapshot(remoteChanged: true) }
+            return committed
+        } catch {
+            snapshotObserver?(.uncertain)
+            throw error
+        }
+    }
+
+    func publishSnapshot(remoteChanged: Bool = false) {
+        guard let snapshotObserver else { return }
+        let snapshot = unsortedSnapshot()
+        snapshotObserver(.confirmed(RemoteLibraryMonthDelta(month: LibraryMonthKey(year: year, month: month),
+            resources: snapshot.resources, assets: snapshot.assets, assetResourceLinks: snapshot.links),
+            remoteChanged: remoteChanged))
+    }
+
+    private func flushManifest(ignoreCancellation: Bool = false) async throws -> Bool {
         guard dirty else { return false }
         try await assertLiteWriteOwnership(ignoreCancellation: ignoreCancellation)
         if !ignoreCancellation {
@@ -1124,9 +1160,7 @@ final class MonthManifestStore {
             } catch {}
         }
 
-        if !ignoreCancellation {
-            try Task.checkCancellation()
-        }
+        // Cancellation after verification cannot undo the committed manifest.
         dirty = false
         return true
     }

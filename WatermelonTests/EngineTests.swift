@@ -50,6 +50,40 @@ final class EngineTests: XCTestCase {
         )
     }
 
+    func testExplicitRemovalEvictsAllAlbumMembershipAndToleratesLatePhotoKitRemoval() throws {
+        let engine = makeEngine()
+        let shared = TestFixtures.snapshot(id: "deleted", year: 2026, month: 10)
+        let kept = TestFixtures.snapshot(id: "kept", year: 2026, month: 10)
+        let month = LibraryMonthKey(year: 2026, month: 10)
+        reload(engine, [[shared, kept], [shared]], fingerprints: ["deleted": TestFixtures.record(Data([1]))])
+        engine.setMonthFileSize(500, for: month)
+
+        XCTAssertEqual(engine.removeAssets(["deleted"], remoteFingerprintsForMonth: { _ in [] }), [month])
+        XCTAssertEqual(engine.localAssetIDs(for: month), ["kept"])
+        XCTAssertTrue(engine.fingerprints(for: ["deleted"]).isEmpty)
+        XCTAssertNil(engine.monthFileSizes[month])
+        XCTAssertEqual(try XCTUnwrap(engine.currentBrowserLocalSeed()).assets.map(\.localIdentifier), ["kept"])
+
+        apply(engine, [TestFixtures.incrementalChange(at: 0, removed: ["deleted"]),
+                       TestFixtures.incrementalChange(at: 1, removed: ["deleted"])])
+        XCTAssertEqual(engine.localMonthSummary(for: month)?.assetCount, 1)
+        XCTAssertTrue(engine.removeAssets(["deleted"], remoteFingerprintsForMonth: { _ in [] }).isEmpty)
+    }
+
+    func testExplicitRemovalDropsEmptyMonthAndAllowsLaterReinsertion() {
+        let engine = makeEngine()
+        let snapshot = TestFixtures.snapshot(id: "restored", year: 2026, month: 10)
+        let month = LibraryMonthKey(year: 2026, month: 10)
+        reload(engine, [[snapshot]])
+
+        XCTAssertEqual(engine.removeAssets(["restored", "unknown"], remoteFingerprintsForMonth: { _ in [] }), [month])
+        XCTAssertTrue(engine.allMonths.isEmpty)
+        XCTAssertNil(engine.localMonthSummary(for: month))
+        apply(engine, [TestFixtures.incrementalChange(at: 0, inserted: [snapshot])])
+        XCTAssertEqual(engine.localAssetIDs(for: month), ["restored"])
+        XCTAssertEqual(engine.localMonthSummary(for: month)?.assetCount, 1)
+    }
+
     // MARK: - reload
 
     func testReload_singleFetchResult_populatesMonthsAndAggregates() {
@@ -456,89 +490,17 @@ final class EngineTests: XCTestCase {
         XCTAssertEqual(engine.localMonthSummary(for: key)?.backedUpCount, 1)
     }
 
-    // MARK: - refreshFingerprintsFromDB (mtime staleness gate)
-
-    func testRefreshFingerprintsFromDB_acceptsFingerprintNewerThanAssetMtime() {
-        let engine = makeEngine()
-        let fp = Data([0xAB])
+    func testReloadRejectsFingerprintsOlderThanPhotosModificationDate() {
         let month = LibraryMonthKey(year: 2024, month: 1)
         let mtime = TestFixtures.date(2024, 1, 10)
-        reload(engine, [[TestFixtures.snapshot(id: "a", year: 2024, month: 1, modificationDate: mtime)]])
-
-        let changed = engine.refreshFingerprintsFromDB(
-            allFingerprints: ["a": TestFixtures.record(fp, updatedAt: mtime.addingTimeInterval(60))],
-            remoteFingerprintsForMonth: { $0 == month ? [fp] : [] }
-        )
-
-        XCTAssertEqual(changed, [month])
-        XCTAssertEqual(engine.localMonthSummary(for: month)?.backedUpCount, 1)
-    }
-
-    func testRefreshFingerprintsFromDB_dropsFingerprintOlderThanAssetMtime() {
-        let engine = makeEngine()
         let fp = Data([0xAB])
-        let month = LibraryMonthKey(year: 2024, month: 1)
-        let mtime = TestFixtures.date(2024, 1, 10)
-        reload(engine, [[TestFixtures.snapshot(id: "a", year: 2024, month: 1, modificationDate: mtime)]])
-
-        engine.refreshFingerprintsFromDB(
-            allFingerprints: ["a": TestFixtures.record(fp, updatedAt: mtime.addingTimeInterval(-60))],
-            remoteFingerprintsForMonth: { $0 == month ? [fp] : [] }
-        )
-
-        XCTAssertEqual(engine.localMonthSummary(for: month)?.backedUpCount, 0, "fingerprint predating the asset edit is stale")
-    }
-
-    func testRefreshFingerprintsFromDB_afterEditPHChange_doesNotResurrectStaleFingerprint() {
-        // Self-healing: once the edit's PHChange refreshes the in-memory mtime, a later DB refresh that
-        // still holds the pre-edit fingerprint drops it rather than counting the asset as backed up.
-        let engine = makeEngine()
-        let fp = Data([0xAB])
-        let month = LibraryMonthKey(year: 2024, month: 1)
-        let m0 = TestFixtures.date(2024, 1, 10)
-        let remote: (LibraryMonthKey) -> Set<Data> = { $0 == month ? [fp] : [] }
-        reload(
-            engine,
-            [[TestFixtures.snapshot(id: "a", year: 2024, month: 1, modificationDate: m0)]],
-            fingerprints: ["a": TestFixtures.record(fp, updatedAt: m0)],
-            remoteFingerprintsForMonth: remote
-        )
-        XCTAssertEqual(engine.localMonthSummary(for: month)?.backedUpCount, 1)
-
-        let edited = TestFixtures.snapshot(id: "a", year: 2024, month: 1, modificationDate: m0.addingTimeInterval(3600))
-        _ = engine.applyChange(
-            TestFixtures.changePayload([TestFixtures.incrementalChange(at: 0, changed: [edited])]),
-            fingerprintsForIDs: TestFixtures.emptyFingerprint,
-            remoteFingerprintsForMonth: remote
-        )
-        XCTAssertEqual(engine.localMonthSummary(for: month)?.backedUpCount, 0, "live-mtime fetch (empty fp provider) clears the in-memory fingerprint on edit")
-
-        engine.refreshFingerprintsFromDB(
-            allFingerprints: ["a": TestFixtures.record(fp, updatedAt: m0)],
-            remoteFingerprintsForMonth: remote
-        )
-        XCTAssertEqual(engine.localMonthSummary(for: month)?.backedUpCount, 0, "refresh must not resurrect it")
-    }
-
-    func testRefreshFingerprintsFromDB_emptyInputDoesNotWipeExisting() {
-        // fetchAllFingerprints returns [:] on a swallowed DB-read error; the fast lane must not treat that
-        // as a real empty library and wipe every backed-up count.
-        let engine = makeEngine()
-        let fp = Data([0xAB])
-        let month = LibraryMonthKey(year: 2024, month: 1)
-        let m0 = TestFixtures.date(2024, 1, 10)
-        let remote: (LibraryMonthKey) -> Set<Data> = { $0 == month ? [fp] : [] }
-        reload(
-            engine,
-            [[TestFixtures.snapshot(id: "a", year: 2024, month: 1, modificationDate: m0)]],
-            fingerprints: ["a": TestFixtures.record(fp, updatedAt: m0)],
-            remoteFingerprintsForMonth: remote
-        )
-        XCTAssertEqual(engine.localMonthSummary(for: month)?.backedUpCount, 1)
-
-        let changed = engine.refreshFingerprintsFromDB(allFingerprints: [:], remoteFingerprintsForMonth: remote)
-
-        XCTAssertEqual(changed, [])
-        XCTAssertEqual(engine.localMonthSummary(for: month)?.backedUpCount, 1, "transient empty must not wipe counts")
+        for age in [-60.0, 0.0, 60.0] {
+            let engine = makeEngine()
+            reload(engine,
+                [[TestFixtures.snapshot(id: "a", year: 2024, month: 1, modificationDate: mtime)]],
+                fingerprints: ["a": TestFixtures.record(fp, updatedAt: mtime.addingTimeInterval(age))],
+                remoteFingerprintsForMonth: { $0 == month ? [fp] : [] })
+            XCTAssertEqual(engine.localMonthSummary(for: month)?.backedUpCount, age < 0 ? 0 : 1)
+        }
     }
 }

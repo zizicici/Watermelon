@@ -1,9 +1,12 @@
 import Foundation
 
 final class BackupCoordinator: Sendable {
-    private let remoteIndexService: RemoteIndexSyncService
+    private let remoteSnapshotCache: RemoteLibrarySnapshotCache
     private let preparationService: BackupRunPreparationService
     private let parallelExecutor: BackupParallelExecutor
+
+    var remoteSnapshotChanges: ChangeSignal<Void> { remoteSnapshotCache.changes }
+    var remoteSnapshotRequiresReconciliation: Bool { remoteSnapshotCache.requiresReconciliation }
 
     init(
         photoLibraryService: PhotoLibraryService,
@@ -17,11 +20,10 @@ final class BackupCoordinator: Sendable {
         let assetProcessor = assetProcessor ?? AssetProcessor(
             photoLibraryService: photoLibraryService,
             hashIndexRepository: hashIndexRepository,
-            remoteIndexService: remoteIndexService,
             thumbnailRenderer: ThumbnailRenderer()
         )
 
-        self.remoteIndexService = remoteIndexService
+        self.remoteSnapshotCache = remoteIndexService.snapshotCache
         preparationService = BackupRunPreparationService(
             photoLibraryService: photoLibraryService,
             storageClientFactory: storageClientFactory,
@@ -32,7 +34,7 @@ final class BackupCoordinator: Sendable {
         parallelExecutor = BackupParallelExecutor(
             hashIndexRepository: hashIndexRepository,
             assetProcessor: assetProcessor,
-            remoteIndexService: remoteIndexService
+            remoteSnapshotCache: remoteIndexService.snapshotCache
         )
     }
 
@@ -171,7 +173,7 @@ final class BackupCoordinator: Sendable {
                 // A directory-valued month slot is skipped by the read-plane digest scan (so it never enters
                 // allKnownMonths), but full verify is an owned maintenance op that must still surface it: enumerate
                 // those slots so the owned verifyMonth fails the sweep closed instead of reporting success over damaged state.
-                let scannedMonths = self.remoteIndexService.allKnownMonths()
+                let scannedMonths = self.remoteSnapshotCache.allKnownMonths()
                 let directoryMonths = try await self.directoryValuedLiteMonthSlots(client: client, profile: profile, plan: plan)
                 let uniqueMonths = Array(scannedMonths.union(directoryMonths)).sorted()
                 let total = uniqueMonths.count
@@ -183,7 +185,8 @@ final class BackupCoordinator: Sendable {
                         client: client,
                         basePath: profile.basePath,
                         month: month,
-                        plan: plan
+                        plan: plan,
+                        expectedProfileKey: RemoteIndexSyncService.remoteProfileKey(profile)
                     )
                     let current = index + 1
                     await MainActor.run { onProgress(RemoteSyncProgress(current: current, total: total)) }
@@ -280,22 +283,22 @@ final class BackupCoordinator: Sendable {
     }
 
     func healthDigest() -> RemoteHealthDigest {
-        remoteIndexService.healthDigest()
+        remoteSnapshotCache.healthDigest()
     }
 
     func remoteMonthRawData(for month: LibraryMonthKey) -> RemoteLibraryMonthDelta? {
-        remoteIndexService.remoteMonthRawData(for: month)
+        remoteSnapshotCache.monthRawData(for: month)
     }
 
     func currentRemoteSnapshotState(since revision: UInt64?) -> RemoteLibrarySnapshotState {
-        remoteIndexService.currentState(since: revision)
+        remoteSnapshotCache.state(since: revision)
     }
 
     func currentSnapshotRevision() -> UInt64 {
-        remoteIndexService.snapshotRevision()
+        remoteSnapshotCache.currentRevision()
     }
 
     func snapshotContainsAssetFingerprint(_ fingerprint: Data) -> (contains: Bool, profileKey: String?) {
-        remoteIndexService.snapshotContainsAssetFingerprint(fingerprint)
+        remoteSnapshotCache.containsAssetFingerprint(fingerprint)
     }
 }
