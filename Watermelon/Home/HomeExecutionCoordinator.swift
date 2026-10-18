@@ -856,6 +856,7 @@ final class HomeExecutionCoordinator {
             completed = try await dependencies.backupCoordinator.withDownloadVerificationPlan(
                 profile: context.profile,
                 password: context.password,
+                workerCountOverride: activeExecutionSettingsSnapshot().uploadWorkerCountOverride,
                 terminationControl: terminationControl
             ) { verifier in
                 await self.runDownloadMonths(

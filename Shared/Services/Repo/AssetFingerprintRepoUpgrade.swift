@@ -7,6 +7,31 @@ struct AssetFingerprintRepoUpgrade: Sendable {
     let assertOwnership: RepoOwnershipGates
     let monthsListing: LiteMonthsListingSnapshot
     let onProgress: (@Sendable (V1ToLiteMigrationProgress) async -> Void)?
+    var execution = RepoUpgradeExecution()
+
+    private actor ThumbnailMigrationState {
+        private var entriesByDirectory: [String: Set<String>] = [:]
+        private var isMigrating = false
+        private var waiters: [CheckedContinuation<Void, Never>] = []
+
+        func migrate(changes: [(previous: Data, current: Data)], using upgrade: AssetFingerprintRepoUpgrade) async throws {
+            guard !changes.isEmpty else { return }
+            // Different months can refer to the same thumbnail destination.
+            if isMigrating {
+                await withCheckedContinuation { waiters.append($0) }
+            }
+            isMigrating = true
+            defer {
+                // Keep the lock held during handoff so another month cannot overtake the resumed waiter.
+                if waiters.isEmpty { isMigrating = false }
+                else { waiters.removeFirst().resume() }
+            }
+            try Task.checkCancellation()
+            var entries = entriesByDirectory
+            try await upgrade.migrateThumbnails(changes: changes, entriesByDirectory: &entries)
+            entriesByDirectory = entries
+        }
+    }
 
     func run(createdAt: String, createdBy: String) async throws {
         try Task.checkCancellation()
@@ -24,20 +49,23 @@ struct AssetFingerprintRepoUpgrade: Sendable {
         try await retireLegacyVersionScratch()
 
         let months = try await discoverMonths()
-        var thumbnailEntriesByDirectory: [String: Set<String>] = [:]
+        let thumbnails = ThumbnailMigrationState()
         await onProgress?(.init(phase: .copying, current: 0, total: months.count))
-        for (index, month) in months.enumerated() {
+        try await execution.run(months: months, client: client, operation: { month, workerClient in
             try Task.checkCancellation()
             try await assertOwnership.assertWrite()
             guard let store = try await MonthManifestStore.loadManifestDirect(
-                client: client, basePath: basePath, year: month.year, month: month.month,
+                client: workerClient, basePath: basePath, year: month.year, month: month.month,
                 layout: .lite, pushSchemaUpgrade: false, assertOwnership: assertOwnership,
                 liteMonthsListing: monthsListing, surfaceDownloadFailure: true
             ) else { throw LiteRepoError.repoDamaged }
-            try await migrateThumbnails(for: store, entriesByDirectory: &thumbnailEntriesByDirectory)
+            let worker = AssetFingerprintRepoUpgrade(client: workerClient, basePath: basePath,
+                assertOwnership: assertOwnership, monthsListing: monthsListing, onProgress: nil)
+            try await thumbnails.migrate(changes: store.rekeyedAssetFingerprints, using: worker)
             try await store.flushToRemote()
-            await onProgress?(.init(phase: .copying, current: index + 1, total: months.count))
-        }
+        }, onMonthCompleted: { completed in
+            await onProgress?(.init(phase: .copying, current: completed, total: months.count))
+        })
         guard try await discoverMonths() == months else { throw LiteRepoError.repoDamaged }
         try Task.checkCancellation()
         try await assertOwnership.assertWrite()
@@ -50,9 +78,7 @@ struct AssetFingerprintRepoUpgrade: Sendable {
         } catch { }
     }
 
-    private func migrateThumbnails(for store: MonthManifestStore, entriesByDirectory: inout [String: Set<String>]) async throws {
-        let changes = store.rekeyedAssetFingerprints
-        guard !changes.isEmpty else { return }
+    private func migrateThumbnails(changes: [(previous: Data, current: Data)], entriesByDirectory: inout [String: Set<String>]) async throws {
         let root = RemoteThumbnailPaths.rootAbsolutePath(basePath: basePath)
         let shards = try await thumbnailEntries(at: root, cache: &entriesByDirectory)
         guard !shards.isEmpty else { return }

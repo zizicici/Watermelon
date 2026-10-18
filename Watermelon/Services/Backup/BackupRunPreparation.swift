@@ -296,7 +296,9 @@ struct BackupRunPreparationService: Sendable {
                         let plan = try await LocalVolumeRepoGateway.prepareForegroundWrite(
                             client: localVolumeClient,
                             basePath: liteProfile.basePath,
-                            writerID: liteProfile.writerID
+                            writerID: liteProfile.writerID,
+                            upgradeExecution: makeUpgradeExecution(profile: profile, password: password,
+                                workerCountOverride: request.workerCountOverride)
                         )
                         activeWriteMode = RepoWriteMode.lite(plan.session, plan.monthsListing)
                     } else {
@@ -331,6 +333,8 @@ struct BackupRunPreparationService: Sendable {
                         reconnectLockClient: makeLockClient,
                         onForeignWriterObserved: MultiDeviceMarkerFactory.make(for: liteProfile, databaseManager: databaseManager),
                         leaseDiagnosticLogger: leaseDiagnosticLogger,
+                        upgradeExecution: makeUpgradeExecution(profile: profile, password: password,
+                            workerCountOverride: request.workerCountOverride),
                         onMigrationProgress: migrationProgress
                     )
                     switch outcome {
@@ -595,6 +599,7 @@ struct BackupRunPreparationService: Sendable {
                 client: client,
                 profile: profile,
                 makeConnectedLockClient: makeConnectedLockClient,
+                upgradeExecution: RepoUpgradeExecution(workerCount: downloadConcurrency, makeClient: makeClient),
                 onSyncProgress: onSyncProgress
             )
             layout = prepared.layout
@@ -652,6 +657,7 @@ struct BackupRunPreparationService: Sendable {
     func withDownloadVerificationPlan<T>(
         profile: ServerProfileRecord,
         password: String,
+        workerCountOverride: Int?,
         terminationControl: ExecutionTerminationControl?,
         body: (BackupDownloadVerificationPlan) async throws -> T
     ) async throws -> T {
@@ -665,6 +671,8 @@ struct BackupRunPreparationService: Sendable {
                 client: client,
                 profile: profile,
                 terminationControl: terminationControl,
+                upgradeExecution: makeUpgradeExecution(profile: profile, password: password,
+                    workerCountOverride: workerCountOverride),
                 makeConnectedLockClient: {
                     try await self.makeConnectedLockClient(
                         profile: profile,
@@ -681,6 +689,7 @@ struct BackupRunPreparationService: Sendable {
         client: any RemoteStorageClientProtocol,
         profile: ServerProfileRecord,
         terminationControl: ExecutionTerminationControl? = nil,
+        upgradeExecution: RepoUpgradeExecution = RepoUpgradeExecution(),
         makeConnectedLockClient: ConnectedLockClientProvider? = nil,
         body: (BackupDownloadVerificationPlan) async throws -> T
     ) async throws -> T {
@@ -689,6 +698,7 @@ struct BackupRunPreparationService: Sendable {
             client: client,
             profile: profile,
             terminationControl: terminationControl,
+            upgradeExecution: upgradeExecution,
             makeConnectedLockClient: makeConnectedLockClient
         )
         let verifier = BackupDownloadVerificationPlan { [self] month in
@@ -743,6 +753,8 @@ struct BackupRunPreparationService: Sendable {
             client: client,
             profile: profile,
             terminationControl: terminationControl,
+            upgradeExecution: makeUpgradeExecution(profile: profile, password: password,
+                workerCountOverride: BackupWorkerCountResolver.workerCountOverride(for: profile)),
             makeConnectedLockClient: {
                 try await self.makeConnectedLockClient(
                     profile: profile,
@@ -757,6 +769,7 @@ struct BackupRunPreparationService: Sendable {
         client: any RemoteStorageClientProtocol,
         profile: ServerProfileRecord,
         terminationControl: ExecutionTerminationControl? = nil,
+        upgradeExecution: RepoUpgradeExecution = RepoUpgradeExecution(),
         makeConnectedLockClient: ConnectedLockClientProvider? = nil
     ) async throws -> RepoMaintenancePlan {
         try terminationControl?.checkDrainRequested()
@@ -764,7 +777,8 @@ struct BackupRunPreparationService: Sendable {
             let plan = RepoMaintenancePlan(try await LocalVolumeRepoGateway.prepareMaintenance(
                 client: localVolumeClient,
                 basePath: profile.basePath,
-                writerID: profile.writerID
+                writerID: profile.writerID,
+                upgradeExecution: upgradeExecution
             ))
             if terminationControl?.shouldDrain == true {
                 await plan.session?.release()
@@ -786,7 +800,8 @@ struct BackupRunPreparationService: Sendable {
             freshOwnLockTakeoverScopes: resolved.browserLinkFreshTakeoverScopes,
             ownLockTakeoverScope: resolved.browserLinkCurrentLockScope,
             reconnectLockClient: makeConnectedLockClient,
-            onForeignWriterObserved: MultiDeviceMarkerFactory.make(for: resolved, databaseManager: databaseManager)
+            onForeignWriterObserved: MultiDeviceMarkerFactory.make(for: resolved, databaseManager: databaseManager),
+            upgradeExecution: upgradeExecution
         )
         let maintenancePlan = RepoMaintenancePlan(plan)
         if terminationControl?.shouldDrain == true {
@@ -1823,7 +1838,9 @@ struct BackupRunPreparationService: Sendable {
                         client: localVolumeClient,
                         basePath: liteProfile.basePath,
                         writerID: liteProfile.writerID,
-                        initialDecision: decision
+                        initialDecision: decision,
+                        upgradeExecution: makeUpgradeExecution(profile: profile, password: password,
+                            workerCountOverride: BackupWorkerCountResolver.workerCountOverride(for: profile))
                     )
                     mode = RepoWriteMode.lite(plan.session, plan.monthsListing)
                 } else {
@@ -1841,7 +1858,9 @@ struct BackupRunPreparationService: Sendable {
                         ownLockTakeoverScope: liteProfile.browserLinkCurrentLockScope,
                         initialDecision: decision,
                         reconnectLockClient: makeLockClient,
-                        onForeignWriterObserved: MultiDeviceMarkerFactory.make(for: liteProfile, databaseManager: databaseManager)
+                        onForeignWriterObserved: MultiDeviceMarkerFactory.make(for: liteProfile, databaseManager: databaseManager),
+                        upgradeExecution: makeUpgradeExecution(profile: profile, password: password,
+                            workerCountOverride: BackupWorkerCountResolver.workerCountOverride(for: profile))
                     )
                     mode = RepoWriteMode.lite(plan.session, plan.monthsListing)
                 }
@@ -1928,6 +1947,19 @@ struct BackupRunPreparationService: Sendable {
         try storageClientFactory.makeClient(profile: profile, credentialPayload: password)
     }
 
+    private func makeUpgradeExecution(
+        profile: ServerProfileRecord,
+        password: String,
+        workerCountOverride: Int?
+    ) -> RepoUpgradeExecution {
+        RepoUpgradeExecution(
+            workerCount: Self.resolveSyncDownloadConcurrency(profile: profile, override: workerCountOverride),
+            makeClient: { [storageClientFactory] in
+                try storageClientFactory.makeClient(profile: profile, credentialPayload: password)
+            }
+        )
+    }
+
     private static func traceConnectStage(
         profile: ServerProfileRecord,
         stage: String,
@@ -2006,6 +2038,7 @@ struct BackupRunPreparationService: Sendable {
         client: any RemoteStorageClientProtocol,
         profile: ServerProfileRecord,
         makeConnectedLockClient: ConnectedLockClientProvider? = nil,
+        upgradeExecution: RepoUpgradeExecution = RepoUpgradeExecution(),
         onSyncProgress: (@Sendable (RemoteSyncProgress) -> Void)? = nil
     ) async throws -> (layout: MonthManifestStore.ManifestLayout, session: AnyRepoWriteSession?, monthsListing: LiteMonthsListingSnapshot?) {
         let onMigrationProgress: @Sendable (V1ToLiteMigrationProgress) async -> Void = { progress in
@@ -2023,6 +2056,7 @@ struct BackupRunPreparationService: Sendable {
                 client: localVolumeClient,
                 basePath: profile.basePath,
                 writerID: profile.writerID,
+                upgradeExecution: upgradeExecution,
                 onMigrationProgress: onMigrationProgress
             ))
         } else {
@@ -2041,6 +2075,7 @@ struct BackupRunPreparationService: Sendable {
                 freshOwnLockTakeoverScopes: resolved.browserLinkFreshTakeoverScopes,
                 ownLockTakeoverScope: resolved.browserLinkCurrentLockScope,
                 onForeignWriterObserved: MultiDeviceMarkerFactory.make(for: resolved, databaseManager: databaseManager),
+                upgradeExecution: upgradeExecution,
                 onMigrationProgress: onMigrationProgress
             ))
         }

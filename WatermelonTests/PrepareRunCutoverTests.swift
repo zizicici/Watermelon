@@ -3265,6 +3265,52 @@ final class PrepareRunCutoverTests: XCTestCase {
         XCTAssertFalse(locked)
     }
 
+    func testDownloadVerificationPlanUpgradesMonthsConcurrentlyBeforeVerification() async throws {
+        let client = InMemoryRemoteStorageClient()
+        try await seedCommittedVersion(client)
+        let months = (1...3).map { LibraryMonthKey(year: 2024, month: $0) }
+        for month in months {
+            try await seedPopulatedLiteMonth(client, month: month, hashByte: UInt8(month.month))
+        }
+        let versionPath = RepoLayoutLite.versionPath(basePath: basePath)
+        try await client.seedFile(path: versionPath, data: VersionManifestLite.encode(.init(
+            formatVersion: 2, minAppVersion: "1.5.0", createdAt: "date", createdBy: "writer"
+        )))
+        let monthPaths = Set(months.map { RepoLayoutLite.monthPath(basePath: basePath, month: $0) })
+        let started = expectation(description: "verification upgrade downloads overlap")
+        started.expectedFulfillmentCount = months.count
+        let gate = UpgradeTestGate()
+        await client.setOnDownloadAttempt { path in
+            guard monthPaths.contains(path),
+                  let bytes = await client.fileData(path: versionPath),
+                  (try? VersionManifestLite.decode(bytes))?.upgradePending == true else { return }
+            started.fulfill()
+            await gate.wait()
+        }
+        let service = try makePrepService()
+        let writerID = newWriterID()
+        let profile = makeProfile(writerID: writerID)
+        let task = Task {
+            try await service.withDownloadVerificationPlan(
+                client: client,
+                profile: profile,
+                upgradeExecution: RepoUpgradeExecution(workerCount: 3, makeClient: { client })
+            ) { verifier in
+                let bytes = await client.fileData(path: versionPath)
+                let version = try VersionManifestLite.decode(XCTUnwrap(bytes))
+                XCTAssertEqual(version.formatVersion, 3)
+                XCTAssertNil(version.upgradePending)
+                for month in months { try await verifier.verify(month: month) }
+            }
+        }
+        await fulfillment(of: [started], timeout: 5)
+        await client.setOnDownloadAttempt(nil)
+        await gate.open()
+        try await task.value
+        let locked = await client.lockExists(basePath: basePath, writerID: writerID)
+        XCTAssertFalse(locked)
+    }
+
     func testDownloadVerificationPlanReleasesMaintenanceLeaseWhenBodyThrows() async throws {
         let client = InMemoryRemoteStorageClient()
         try await seedCommittedVersion(client)

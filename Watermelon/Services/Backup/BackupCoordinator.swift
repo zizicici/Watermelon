@@ -132,12 +132,14 @@ final class BackupCoordinator: Sendable {
     func withDownloadVerificationPlan<T>(
         profile: ServerProfileRecord,
         password: String,
+        workerCountOverride: Int?,
         terminationControl: ExecutionTerminationControl?,
         body: (BackupDownloadVerificationPlan) async throws -> T
     ) async throws -> T {
         try await preparationService.withDownloadVerificationPlan(
             profile: profile,
             password: password,
+            workerCountOverride: workerCountOverride,
             terminationControl: terminationControl,
             body: body
         )

@@ -19,7 +19,7 @@ final class AssetFingerprintRepoUpgradeTests: XCTestCase {
         return fixture.fingerprint
     }
 
-    private func makeMonth(_ month: Int, duplicates: Bool) throws -> (bytes: Data, fingerprint: Data, files: [String: Data], legacyFingerprints: [Data]) {
+    private func makeMonth(_ month: Int, duplicates: Bool) throws -> (bytes: Data, fingerprint: Data, files: [String: Data]) {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         let queue = try MonthManifestStore.makeManifestQueue(path: url.path)
         try MonthManifestStore.migrate(queue)
@@ -28,14 +28,12 @@ final class AssetFingerprintRepoUpgradeTests: XCTestCase {
             localManifestURL: url, dbQueue: queue, remoteFilesByName: [:], dirty: false, layout: .v1)
         var files: [String: Data] = [:]
         var expected = Data()
-        var legacyFingerprints: [Data] = []
         for copy in 0..<(duplicates ? 2 : 1) {
             let adjustment = ContentIdentityFixtures.adjustment(timestamp: Double(copy + 1))
             let inputs: [(Int, String, Data)] = [(1, "original.jpg", Data("original".utf8)),
                 (5, "edited.jpg", Data("edited".utf8)), (7, "edit-\(copy).AAE", adjustment)]
             let resources = inputs.map { AssetContentFingerprint.Resource(role: $0.0, slot: 0, hash: ContentIdentityFixtures.hash($0.2)) }
             let raw = BackupAssetResourcePlanner.legacyAssetFingerprint(resourceRoleSlotHashes: resources.map { ($0.role, $0.slot, $0.hash) })
-            legacyFingerprints.append(raw)
             expected = AssetContentFingerprint.fingerprint(resources: resources)
             for (role, name, data) in inputs {
                 files[name] = data
@@ -47,7 +45,7 @@ final class AssetFingerprintRepoUpgradeTests: XCTestCase {
                 backedUpAtMs: Int64(200 + copy), resourceCount: 3, totalFileSizeBytes: inputs.reduce(0) { $0 + Int64($1.2.count) }),
                 links: resources.map { .init(year: 2026, month: month, assetFingerprint: raw, resourceHash: $0.hash, role: $0.role, slot: 0) })
         }
-        return (try Data(contentsOf: url), expected, files, legacyFingerprints)
+        return (try Data(contentsOf: url), expected, files)
     }
 
     private func thumbnail(_ color: UIColor = .red) -> Data {
@@ -57,8 +55,18 @@ final class AssetFingerprintRepoUpgradeTests: XCTestCase {
         }
     }
 
+    private func legacyFingerprint(_ client: InMemoryRemoteStorageClient, copy: Int = 0) async throws -> Data {
+        let loaded = try await MonthManifestStore.loadManifestDirect(
+            client: client, basePath: base, year: 2026, month: 1, layout: .v1,
+            manifestAbsolutePath: monthPath(1), pushSchemaUpgrade: false
+        )
+        let store = try XCTUnwrap(loaded)
+        let asset = try XCTUnwrap(store.assetsByFingerprint.values.first { $0.backedUpAtMs == Int64(200 + copy) })
+        return asset.assetFingerprint
+    }
+
     private func seedLegacyThumbnail(_ client: InMemoryRemoteStorageClient, copy: Int = 0) async throws -> (path: String, data: Data) {
-        let legacy = try makeMonth(1, duplicates: true).legacyFingerprints[copy]
+        let legacy = try await legacyFingerprint(client, copy: copy)
         let path = RemoteThumbnailPaths.absolutePath(basePath: base, fingerprintHex: legacy.hexString)
         let data = thumbnail()
         await client.seedDirectory(RemoteThumbnailPaths.rootAbsolutePath(basePath: base))
@@ -153,7 +161,7 @@ final class AssetFingerprintRepoUpgradeTests: XCTestCase {
     func testThumbnailMigrationListsImplicitDirectoriesWithoutDirectoryObjects() async throws {
         let client = InMemoryRemoteStorageClient()
         let expected = try await seed(client)
-        let legacyFingerprint = try makeMonth(1, duplicates: false).legacyFingerprints[0]
+        let legacyFingerprint = try await legacyFingerprint(client)
         let oldPath = RemoteThumbnailPaths.absolutePath(basePath: base, fingerprintHex: legacyFingerprint.hexString)
         let data = thumbnail()
         await client.seedFile(path: oldPath, data: data)
@@ -375,6 +383,93 @@ final class AssetFingerprintRepoUpgradeTests: XCTestCase {
         XCTAssertFalse(uploads.dropFirst(before).contains { $0.contains("/months/") })
     }
 
+    func testGatewayUpgradesMonthsConcurrentlyAndPreservesSharedThumbnail() async throws {
+        let backing = InMemoryRemoteStorageClient()
+        for month in 1...5 { _ = try await seed(backing, month: month) }
+        let legacy = try await seedLegacyThumbnail(backing)
+        let expected = try makeMonth(1, duplicates: false).fingerprint
+        let target = RemoteThumbnailPaths.absolutePath(basePath: base, fingerprintHex: expected.hexString)
+        let started = expectation(description: "three month downloads overlap")
+        started.expectedFulfillmentCount = 3
+        let gate = UpgradeTestGate()
+        let progress = UpgradeProgressRecorder()
+        let firstWave = Set((1...3).map { monthPath($0) })
+        let versionPath = versionPath
+        await backing.setOnDownloadAttempt { path in
+            guard firstWave.contains(path),
+                  let bytes = await backing.fileData(path: versionPath),
+                  (try? VersionManifestLite.decode(bytes))?.upgradePending == true,
+                  await progress.firstDownload(path) else { return }
+            started.fulfill()
+            await gate.wait()
+        }
+        let primary = UpgradeStorageClient(backing: backing)
+        let task = Task {
+            try await RemoteLiteRepoGateway.prepareReload(
+                client: primary, basePath: base, writerID: UUID().uuidString.lowercased(),
+                makeLockClient: { LiteLockClientHandle(client: UpgradeStorageClient(backing: backing)) },
+                upgradeExecution: RepoUpgradeExecution(workerCount: 3, makeClient: { UpgradeStorageClient(backing: backing) }),
+                onMigrationProgress: { await progress.record($0) }
+            )
+        }
+        await fulfillment(of: [started], timeout: 5)
+        let pendingBytes = await backing.fileData(path: versionPath)
+        XCTAssertEqual(try VersionManifestLite.decode(XCTUnwrap(pendingBytes)).upgradePending, true)
+        await gate.open()
+        let plan = try await task.value
+        await plan.session?.release()
+        let steps = await progress.copyingCounts
+        XCTAssertEqual(steps, [0, 1, 2, 3, 4, 5])
+        let uploads = await backing.uploadedPaths
+        XCTAssertEqual(uploads.filter { $0 == target }.count, 1)
+        let newThumbnail = await backing.fileData(path: target)
+        let oldThumbnail = await backing.fileData(path: legacy.path)
+        XCTAssertEqual(newThumbnail, legacy.data)
+        XCTAssertEqual(oldThumbnail, legacy.data)
+        let finalBytes = await backing.fileData(path: versionPath)
+        XCTAssertNil(try VersionManifestLite.decode(XCTUnwrap(finalBytes)).upgradePending)
+        for month in 1...5 {
+            let store = try await snapshot(backing, month: month)
+            XCTAssertNotNil(store.assetsByFingerprint[expected])
+        }
+    }
+
+    func testConcurrentFailureKeepsPendingAndReusesCompletedMonthOnRetry() async throws {
+        let backing = InMemoryRemoteStorageClient()
+        _ = try await seed(backing)
+        _ = try await seed(backing, month: 2)
+        let corruptPath = monthPath(2)
+        let originalBytes = await backing.fileData(path: corruptPath)
+        await backing.seedFile(path: corruptPath, data: Data("corrupt".utf8))
+        let firstCompleted = UpgradeTestGate()
+        await backing.setOnDownloadAttempt { path in
+            if path == corruptPath { await firstCompleted.wait() }
+        }
+        let execution = RepoUpgradeExecution(workerCount: 2, makeClient: { UpgradeStorageClient(backing: backing) })
+        do {
+            try await AssetFingerprintRepoUpgrade(
+                client: UpgradeStorageClient(backing: backing), basePath: base, assertOwnership: .uniform({}),
+                monthsListing: LiteMonthsListingSnapshot(), onProgress: { progress in
+                    if progress.phase == .copying, progress.current == 1 { await firstCompleted.open() }
+                }, execution: execution
+            ).run(createdAt: "date", createdBy: "writer")
+            XCTFail("A corrupt month must prevent the final commit")
+        } catch { }
+        let bytes = await backing.fileData(path: versionPath)
+        XCTAssertEqual(try VersionManifestLite.decode(XCTUnwrap(bytes)).upgradePending, true)
+        let uploadsBefore = await backing.uploadedPaths.count
+        await backing.setOnDownloadAttempt(nil)
+        await backing.seedFile(path: corruptPath, data: try XCTUnwrap(originalBytes))
+        try await AssetFingerprintRepoUpgrade(
+            client: UpgradeStorageClient(backing: backing), basePath: base, assertOwnership: .uniform({}),
+            monthsListing: LiteMonthsListingSnapshot(), onProgress: nil, execution: execution
+        ).run(createdAt: "date", createdBy: "writer")
+        let uploads = await backing.uploadedPaths
+        XCTAssertFalse(uploads.dropFirst(uploadsBefore).contains { $0.contains("2026-01") })
+        let finalBytes = await backing.fileData(path: versionPath)
+        XCTAssertNil(try VersionManifestLite.decode(XCTUnwrap(finalBytes)).upgradePending)
+    }
+
     private func interruptedOneDriveUpgrade() async throws -> (
         backing: InMemoryRemoteStorageClient, client: InterruptedOneDriveUpgradeClient,
         fingerprint: Data, writerID: String, scratch: [String: Data]
@@ -492,6 +587,37 @@ final class AssetFingerprintRepoUpgradeTests: XCTestCase {
         let decision = try await RepoFormatRouter(client: state.client, basePath: base).classify()
         XCTAssertEqual(decision, .fingerprintUpgrade)
     }
+}
+
+private actor UpgradeProgressRecorder {
+    private var downloads: Set<String> = []
+    private(set) var copyingCounts: [Int] = []
+    func firstDownload(_ path: String) -> Bool { downloads.insert(path).inserted }
+    func record(_ progress: V1ToLiteMigrationProgress) {
+        if progress.phase == .copying { copyingCounts.append(progress.current) }
+    }
+}
+
+private struct UpgradeStorageClient: RemoteStorageClientProtocol {
+    let backing: InMemoryRemoteStorageClient
+    func connect() async throws {}
+    func disconnect() async {}
+    func storageCapacity() async throws -> RemoteStorageCapacity? { nil }
+    func list(path: String) async throws -> [RemoteStorageEntry] { try await backing.list(path: path) }
+    func metadata(path: String) async throws -> RemoteStorageEntry? { try await backing.metadata(path: path) }
+    func upload(localURL: URL, remotePath: String, respectTaskCancellation: Bool, onProgress: ((Double) -> Void)?) async throws {
+        try await backing.upload(localURL: localURL, remotePath: remotePath, respectTaskCancellation: respectTaskCancellation, onProgress: onProgress)
+    }
+    func upload(localURL: URL, remotePath: String, mode: RemoteUploadMode, respectTaskCancellation: Bool, onProgress: ((Double) -> Void)?) async throws {
+        try await backing.upload(localURL: localURL, remotePath: remotePath, mode: mode, respectTaskCancellation: respectTaskCancellation, onProgress: onProgress)
+    }
+    func setModificationDate(_ date: Date, forPath path: String) async throws { try await backing.setModificationDate(date, forPath: path) }
+    func download(remotePath: String, localURL: URL) async throws { try await backing.download(remotePath: remotePath, localURL: localURL) }
+    func exists(path: String) async throws -> Bool { try await backing.exists(path: path) }
+    func delete(path: String) async throws { try await backing.delete(path: path) }
+    func createDirectory(path: String) async throws { try await backing.createDirectory(path: path) }
+    func move(from sourcePath: String, to destinationPath: String) async throws { try await backing.move(from: sourcePath, to: destinationPath) }
+    func copy(from sourcePath: String, to destinationPath: String) async throws { try await backing.copy(from: sourcePath, to: destinationPath) }
 }
 
 private actor InterruptedOneDriveUpgradeClient: RemoteStorageClientProtocol, OneDriveManifestItemIDClient {

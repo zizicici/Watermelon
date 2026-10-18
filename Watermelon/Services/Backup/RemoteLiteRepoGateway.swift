@@ -31,6 +31,7 @@ enum RemoteLiteRepoGateway {
         reconnectLockClient: ConnectedLockClientProvider? = nil,
         onForeignWriterObserved: (@Sendable () async -> Void)? = nil,
         leaseDiagnosticLogger: RepoLeaseDiagnosticLogger? = nil,
+        upgradeExecution: RepoUpgradeExecution = RepoUpgradeExecution(),
         onMigrationProgress: (@Sendable (V1ToLiteMigrationProgress) async -> Void)? = nil
     ) async throws -> WritePlan {
         try await foregroundWrite(
@@ -47,6 +48,7 @@ enum RemoteLiteRepoGateway {
             reconnectLockClient: reconnectLockClient,
             onForeignWriterObserved: onForeignWriterObserved,
             leaseDiagnosticLogger: leaseDiagnosticLogger,
+            upgradeExecution: upgradeExecution,
             onMigrationProgress: onMigrationProgress
         )
     }
@@ -97,6 +99,7 @@ enum RemoteLiteRepoGateway {
         reconnectLockClient: ConnectedLockClientProvider?,
         onForeignWriterObserved: (@Sendable () async -> Void)?,
         leaseDiagnosticLogger: RepoLeaseDiagnosticLogger?,
+        upgradeExecution: RepoUpgradeExecution = RepoUpgradeExecution(),
         onMigrationProgress: (@Sendable (V1ToLiteMigrationProgress) async -> Void)?
     ) async throws -> WritePlan {
         lockClientHandle.transferToCoordinator()
@@ -119,6 +122,7 @@ enum RemoteLiteRepoGateway {
                 now: now,
                 initialDecision: initialDecision,
                 skipsPreLockClassify: skipsPreLockClassify,
+                upgradeExecution: upgradeExecution,
                 onMigrationProgress: onMigrationProgress
             )
             return try requirePlan(outcome)
@@ -137,6 +141,7 @@ enum RemoteLiteRepoGateway {
         reconnectLockClient: ConnectedLockClientProvider? = nil,
         onForeignWriterObserved: (@Sendable () async -> Void)? = nil,
         leaseDiagnosticLogger: RepoLeaseDiagnosticLogger? = nil,
+        upgradeExecution: RepoUpgradeExecution = RepoUpgradeExecution(),
         onMigrationProgress: (@Sendable (V1ToLiteMigrationProgress) async -> Void)? = nil
     ) async throws -> BackgroundOutcome {
         lockClientHandle.transferToCoordinator()
@@ -158,6 +163,7 @@ enum RemoteLiteRepoGateway {
                 writerID: writerID,
                 now: now,
                 initialDecision: nil,
+                upgradeExecution: upgradeExecution,
                 onMigrationProgress: onMigrationProgress
             ) {
             case .proceed(let plan):
@@ -184,6 +190,7 @@ enum RemoteLiteRepoGateway {
         reconnectLockClient: ConnectedLockClientProvider? = nil,
         onForeignWriterObserved: (@Sendable () async -> Void)? = nil,
         leaseDiagnosticLogger: RepoLeaseDiagnosticLogger? = nil,
+        upgradeExecution: RepoUpgradeExecution = RepoUpgradeExecution(),
         onMigrationProgress: (@Sendable (V1ToLiteMigrationProgress) async -> Void)? = nil
     ) async throws -> MaintenancePlan {
         lockClientHandle.transferToCoordinator()
@@ -205,6 +212,7 @@ enum RemoteLiteRepoGateway {
                 writerID: writerID,
                 now: now,
                 initialDecision: nil,
+                upgradeExecution: upgradeExecution,
                 onMigrationProgress: onMigrationProgress
             ))
             return MaintenancePlan(layout: plan.layout, session: plan.session, monthsListing: plan.monthsListing)
@@ -225,6 +233,7 @@ enum RemoteLiteRepoGateway {
         now: Date = Date(),
         onForeignWriterObserved: (@Sendable () async -> Void)? = nil,
         leaseDiagnosticLogger: RepoLeaseDiagnosticLogger? = nil,
+        upgradeExecution: RepoUpgradeExecution = RepoUpgradeExecution(),
         onMigrationProgress: (@Sendable (V1ToLiteMigrationProgress) async -> Void)? = nil
     ) async throws -> MaintenancePlan {
         switch try await LiteRepoTransitionEngine.reloadDisposition(client: client, basePath: basePath) {
@@ -245,6 +254,7 @@ enum RemoteLiteRepoGateway {
                 reconnectLockClient: makeLockClient,
                 onForeignWriterObserved: onForeignWriterObserved,
                 leaseDiagnosticLogger: leaseDiagnosticLogger,
+                upgradeExecution: upgradeExecution,
                 onMigrationProgress: onMigrationProgress
             )
             return MaintenancePlan(layout: plan.layout, session: plan.session, monthsListing: plan.monthsListing)

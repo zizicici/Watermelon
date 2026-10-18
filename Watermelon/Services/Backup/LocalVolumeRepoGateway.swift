@@ -19,6 +19,7 @@ enum LocalVolumeRepoGateway {
         writerID: String?,
         now: Date = Date(),
         initialDecision: RepoFormatDecision? = nil,
+        upgradeExecution: RepoUpgradeExecution = RepoUpgradeExecution(),
         onMigrationProgress: (@Sendable (V1ToLiteMigrationProgress) async -> Void)? = nil
     ) async throws -> WritePlan {
         try requirePlan(await LiteRepoTransitionEngine.prepareWrite(
@@ -29,6 +30,7 @@ enum LocalVolumeRepoGateway {
             writerID: writerID,
             now: now,
             initialDecision: initialDecision,
+            upgradeExecution: upgradeExecution,
             onMigrationProgress: onMigrationProgress
         ))
     }
@@ -38,6 +40,7 @@ enum LocalVolumeRepoGateway {
         basePath: String,
         writerID: String?,
         now: Date = Date(),
+        upgradeExecution: RepoUpgradeExecution = RepoUpgradeExecution(),
         onMigrationProgress: (@Sendable (V1ToLiteMigrationProgress) async -> Void)? = nil
     ) async throws -> MaintenancePlan {
         let plan = try requirePlan(await LiteRepoTransitionEngine.prepareWrite(
@@ -48,6 +51,7 @@ enum LocalVolumeRepoGateway {
             writerID: writerID,
             now: now,
             initialDecision: nil,
+            upgradeExecution: upgradeExecution,
             onMigrationProgress: onMigrationProgress
         ))
         return MaintenancePlan(layout: plan.layout, session: plan.session, monthsListing: plan.monthsListing)
@@ -58,6 +62,7 @@ enum LocalVolumeRepoGateway {
         basePath: String,
         writerID: String?,
         now: Date = Date(),
+        upgradeExecution: RepoUpgradeExecution = RepoUpgradeExecution(),
         onMigrationProgress: (@Sendable (V1ToLiteMigrationProgress) async -> Void)? = nil
     ) async throws -> MaintenancePlan {
         switch try await LiteRepoTransitionEngine.reloadDisposition(client: client, basePath: basePath) {
@@ -70,6 +75,7 @@ enum LocalVolumeRepoGateway {
                 writerID: writerID,
                 now: now,
                 initialDecision: decision,
+                upgradeExecution: upgradeExecution,
                 onMigrationProgress: onMigrationProgress
             )
             return MaintenancePlan(layout: plan.layout, session: plan.session, monthsListing: plan.monthsListing)

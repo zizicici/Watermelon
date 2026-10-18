@@ -118,7 +118,7 @@ iOS 27 的 `RunBackupIntent` 通过 `BackgroundBackupRunner.runOnDemand` 复用�
 7. 后台自动备份走独立的时间受限执行策略，固定为 `1`
 8. SFTP 的每个 worker 都会起一条独立的 SSH 连接 + SFTP subsystem。多 worker = 多 TCP/握手，受服务端 `MaxStartups` / `MaxSessions` 限制；遇到紧配置的 sshd 需要回落到 worker = 1
 9. 高并发会同时增加连接、网络、CPU、磁盘与远端服务压力；设置过高可能触发限流或使吞吐下降，应逐级提高并以实际备份速度为准
-10. 同一并发数同时用于上传 worker 和备份前的 Lite manifest 下载连接池；manifest 实际 worker 仍按变化月份数裁剪，V1 仓库固定串行
+10. 同一并发数同时用于上传 worker、备份前的 Lite manifest 下载连接池及格式 2→3 的月份指纹升级；实际 worker 按待处理月份数裁剪，V1 布局迁移仍固定串行
 
 连接池大小 `connectionPoolSize` 由 `BackupMonthScheduler.resolveConnectionPoolSize(...)` 推导：Browser Link、外接存储及显式 worker 覆盖使用最终 worker 数；其他远端在自动模式下不超过 `2`，且所有情况至少为 `1`，不会额外预留 worker 之外的连接。Lite manifest 下载沿用同一推导结果。
 

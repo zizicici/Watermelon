@@ -76,6 +76,7 @@ enum LiteRepoTransitionEngine {
         initialDecision: RepoFormatDecision?,
         // Only a caller that already proved a live connection to this repo may skip the pre-lock classify.
         skipsPreLockClassify: Bool = false,
+        upgradeExecution: RepoUpgradeExecution = RepoUpgradeExecution(),
         onMigrationProgress: (@Sendable (V1ToLiteMigrationProgress) async -> Void)?
     ) async throws -> PreparationOutcome<Coordinator.Session> {
         // Background turns every fail-closed condition into a safe skip; the other modes surface it.
@@ -158,6 +159,7 @@ enum LiteRepoTransitionEngine {
                 decision: decision,
                 now: now,
                 monthsListing: monthsListing,
+                upgradeExecution: upgradeExecution,
                 onMigrationProgress: onMigrationProgress
             )
         } catch {
@@ -175,6 +177,7 @@ enum LiteRepoTransitionEngine {
         decision: RepoFormatDecision?,
         now: Date,
         monthsListing: LiteMonthsListingSnapshot,
+        upgradeExecution: RepoUpgradeExecution = RepoUpgradeExecution(),
         onMigrationProgress: (@Sendable (V1ToLiteMigrationProgress) async -> Void)?
     ) async throws -> PreparationOutcome<Session> {
         let session = authority.session
@@ -246,12 +249,14 @@ enum LiteRepoTransitionEngine {
                 session: session,
                 runCleanup: runCleanup,
                 monthsListing: monthsListing,
+                upgradeExecution: upgradeExecution,
                 onMigrationProgress: onMigrationProgress
             ))
 
         case .upgrade:
             return .proceed(try await upgradeFingerprintsWithSession(client: client, basePath: basePath,
                 writerID: writerID, now: now, session: session, monthsListing: monthsListing,
+                upgradeExecution: upgradeExecution,
                 onMigrationProgress: onMigrationProgress))
 
         case .skipAfterReleaseAndUnwind:
@@ -381,6 +386,7 @@ enum LiteRepoTransitionEngine {
         now: Date,
         session: Session,
         monthsListing: LiteMonthsListingSnapshot,
+        upgradeExecution: RepoUpgradeExecution = RepoUpgradeExecution(),
         onMigrationProgress: (@Sendable (V1ToLiteMigrationProgress) async -> Void)?
     ) async throws -> WritePlan<Session> {
         do {
@@ -389,7 +395,7 @@ enum LiteRepoTransitionEngine {
             await OrphanCleanupLite(client: client, basePath: basePath, assertOwnership: ownership,
                 monthsListing: monthsListing, pruneLegacyV1Manifests: true).run(mode: .upgrade)
             try await AssetFingerprintRepoUpgrade(client: client, basePath: basePath,
-                assertOwnership: ownership, monthsListing: monthsListing, onProgress: onMigrationProgress)
+                assertOwnership: ownership, monthsListing: monthsListing, onProgress: onMigrationProgress, execution: upgradeExecution)
                 .run(createdAt: isoTimestamp(now), createdBy: writerID ?? "")
             return WritePlan(layout: .lite, session: session, monthsListing: monthsListing)
         } catch {
@@ -406,6 +412,7 @@ enum LiteRepoTransitionEngine {
         session: Session,
         runCleanup: Bool,
         monthsListing: LiteMonthsListingSnapshot,
+        upgradeExecution: RepoUpgradeExecution = RepoUpgradeExecution(),
         onMigrationProgress: (@Sendable (V1ToLiteMigrationProgress) async -> Void)?
     ) async throws -> WritePlan<Session> {
         do {
@@ -443,6 +450,7 @@ enum LiteRepoTransitionEngine {
         }
         return try await upgradeFingerprintsWithSession(client: client, basePath: basePath,
             writerID: writerID, now: now, session: session, monthsListing: monthsListing,
+            upgradeExecution: upgradeExecution,
             onMigrationProgress: onMigrationProgress)
     }
 
