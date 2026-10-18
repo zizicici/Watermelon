@@ -1471,7 +1471,7 @@ final class HomeExecutionCoordinator {
 
     private func handleBackupEvent(_ event: BackupEvent) {
         switch event {
-        case .preparationProgress:
+        case .preparationProgress, .stageChanged:
             break
         case .log(let message, let level):
             appendLog(message, level: level)

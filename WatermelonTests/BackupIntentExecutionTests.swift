@@ -4,6 +4,97 @@ import Photos
 @testable import Watermelon
 
 final class BackupIntentExecutionTests: XCTestCase {
+    func testStagesAdvanceTheWholeTaskBeforeAnyPhotoUploads() async {
+        let progress = Progress()
+        let reporter = BackupIntentProgressReporter(progress: progress, nodeName: "Home NAS", updateInterval: .zero)
+        let total = progress.totalUnitCount
+        let stages: [(BackupStage, Int64)] = [
+            (.connecting, 10), (.preparingRepository, 20), (.scanningRemote, 30),
+            (.scanningLocal, 40), (.backingUp, 45), (.finishing, 95)
+        ]
+        for (stage, percent) in stages {
+            await reporter.receive(.stageChanged(stage))
+            XCTAssertEqual(progress.totalUnitCount, total)
+            XCTAssertEqual(progress.completedUnitCount, total * percent / 100)
+        }
+        await reporter.receive(.stageChanged(.scanningRemote))
+        await reporter.receive(.preparationProgress(current: 1, total: 1))
+        XCTAssertEqual(progress.completedUnitCount, total * 95 / 100)
+        await reporter.complete()
+        XCTAssertEqual(progress.fractionCompleted, 1)
+    }
+
+    func testIndexCountsAdvanceOnlyInsideTheirStage() async {
+        let progress = Progress()
+        let reporter = BackupIntentProgressReporter(progress: progress, nodeName: "Home NAS", updateInterval: .zero)
+        await reporter.receive(.stageChanged(.scanningRemote))
+        await reporter.receive(.preparationProgress(current: 1, total: 2))
+        XCTAssertEqual(progress.fractionCompleted, 0.345, accuracy: 0.000001)
+        await reporter.receive(.preparationProgress(current: 0, total: 10))
+        XCTAssertEqual(progress.fractionCompleted, 0.345, accuracy: 0.000001)
+        await reporter.receive(.preparationProgress(current: 10, total: 10))
+        XCTAssertLessThan(progress.fractionCompleted, 0.40)
+        await reporter.receive(.stageChanged(.scanningLocal))
+        XCTAssertEqual(progress.fractionCompleted, 0.40, accuracy: 0.000001)
+    }
+
+    func testProlongedNetworkWaitNeverCompletesItsStage() async {
+        let progress = Progress()
+        let reporter = BackupIntentProgressReporter(progress: progress, nodeName: "Home NAS", updateInterval: .zero)
+        await reporter.receive(.stageChanged(.connecting))
+        for _ in 0..<3_600 { await reporter.refreshEstimate() }
+        XCTAssertGreaterThan(progress.fractionCompleted, 0.18)
+        XCTAssertLessThan(progress.fractionCompleted, 0.20)
+
+        await reporter.receive(.started(totalAssets: 100, totalBytes: nil))
+        for _ in 0..<60 { await reporter.refreshEstimate() }
+        let estimated = progress.completedUnitCount
+        await reporter.receive(itemProgress(processed: 1))
+        XCTAssertEqual(progress.completedUnitCount, estimated)
+        await reporter.receive(itemProgress(processed: 100))
+        XCTAssertGreaterThan(progress.completedUnitCount, estimated)
+        XCTAssertLessThan(progress.fractionCompleted, 0.95)
+
+        await reporter.receive(.stageChanged(.finishing))
+        for _ in 0..<3_600 { await reporter.refreshEstimate() }
+        XCTAssertGreaterThan(progress.fractionCompleted, 0.99)
+        XCTAssertLessThan(progress.fractionCompleted, 1)
+    }
+
+    func testSilentPreparationStillUpdatesAndStopsAfterCancellation() async throws {
+        let progress = Progress()
+        let reporter = BackupIntentProgressReporter(progress: progress, nodeName: "Home NAS", updateInterval: .zero)
+        await reporter.start()
+        let initialCaption = try XCTUnwrap(progress.localizedAdditionalDescription)
+        XCTAssertTrue(initialCaption.contains(String(localized: "backupIntent.progress.preparing")))
+        try await Task.sleep(for: .milliseconds(1_200))
+        XCTAssertGreaterThan(progress.fractionCompleted, 0)
+        XCTAssertLessThan(progress.fractionCompleted, 0.10)
+        XCTAssertNotEqual(progress.localizedAdditionalDescription, initialCaption)
+        await reporter.stop()
+        let stopped = progress.completedUnitCount
+        let stoppedCaption = progress.localizedAdditionalDescription
+        await reporter.start()
+        await reporter.receive(.stageChanged(.backingUp))
+        try await Task.sleep(for: .milliseconds(1_200))
+        XCTAssertEqual(progress.completedUnitCount, stopped)
+        XCTAssertEqual(progress.localizedAdditionalDescription, stoppedCaption)
+    }
+
+    func testFinishingUpdatesWithoutClaimingSuccessAndCompletionStopsTimer() async throws {
+        let progress = Progress()
+        let reporter = BackupIntentProgressReporter(progress: progress, nodeName: "Home NAS", updateInterval: .zero)
+        await reporter.start()
+        await reporter.receive(.stageChanged(.finishing))
+        try await Task.sleep(for: .milliseconds(1_200))
+        XCTAssertGreaterThan(progress.fractionCompleted, 0.95)
+        XCTAssertLessThan(progress.fractionCompleted, 1)
+        await reporter.complete()
+        try await Task.sleep(for: .milliseconds(1_200))
+        XCTAssertEqual(progress.fractionCompleted, 1)
+        XCTAssertEqual(progress.localizedAdditionalDescription, String(localized: "backupIntent.progress.completed"))
+    }
+
     func testCancellationBeforeStartDoesNotRunOperation() async {
         let cancellation = BackupCancellationController()
         cancellation.cancel()
@@ -66,7 +157,8 @@ final class BackupIntentExecutionTests: XCTestCase {
         let progress = Progress()
         let reporter = BackupIntentProgressReporter(progress: progress, nodeName: "Home NAS", updateInterval: .zero)
         await reporter.receive(.started(totalAssets: 0, totalBytes: nil))
-        XCTAssertLessThan(progress.totalUnitCount, 0)
+        XCTAssertGreaterThan(progress.totalUnitCount, 0)
+        XCTAssertEqual(progress.completedUnitCount, 0)
         await reporter.receive(.started(totalAssets: 2, totalBytes: nil))
         await reporter.receive(.progress(BackupProgress(
             succeeded: 2, failed: 0, skipped: 0, total: 2,
@@ -105,8 +197,8 @@ final class BackupIntentExecutionTests: XCTestCase {
         let progress = Progress()
         let reporter = BackupIntentProgressReporter(progress: progress, nodeName: "Home NAS", updateInterval: .zero)
         await reporter.complete()
-        XCTAssertEqual(progress.totalUnitCount, 1)
-        XCTAssertEqual(progress.completedUnitCount, 1)
+        XCTAssertGreaterThan(progress.totalUnitCount, 0)
+        XCTAssertEqual(progress.completedUnitCount, progress.totalUnitCount)
     }
 
     func testSlowLargeUploadKeepsPublishingProgressWithAnUnchangedSubtitle() async {
@@ -149,14 +241,14 @@ final class BackupIntentExecutionTests: XCTestCase {
             let previousTotal = progress.totalUnitCount
             await reporter.receive(transferProgress(bytes: 0, size: 1_000))
             XCTAssertEqual(progress.completedUnitCount, previousCompleted)
-            XCTAssertGreaterThan(progress.totalUnitCount, previousTotal)
+            XCTAssertEqual(progress.totalUnitCount, previousTotal)
             await reporter.receive(transferProgress(bytes: 100, size: 1_000))
             XCTAssertGreaterThan(progress.completedUnitCount, previousCompleted)
             XCTAssertLessThan(progress.completedUnitCount, progress.totalUnitCount)
         }
         await reporter.receive(transferProgress(bytes: 1_000, size: 1_000))
         await reporter.receive(itemProgress(processed: 1))
-        XCTAssertEqual(progress.completedUnitCount, progress.totalUnitCount - 1)
+        XCTAssertEqual(progress.completedUnitCount, progress.totalUnitCount * 90 / 100)
         await reporter.complete()
         XCTAssertEqual(progress.completedUnitCount, progress.totalUnitCount)
     }
@@ -180,7 +272,7 @@ final class BackupIntentExecutionTests: XCTestCase {
             }
             await reporter.receive(itemProgress(processed: asset))
         }
-        XCTAssertEqual(progress.completedUnitCount, progress.totalUnitCount - 1)
+        XCTAssertEqual(progress.completedUnitCount, progress.totalUnitCount * 90 / 100)
     }
 
     func testAssetRetryReportsRepreparationAndUploadBeforeCatchingUp() async {
@@ -192,7 +284,7 @@ final class BackupIntentExecutionTests: XCTestCase {
         let initialTotal = progress.totalUnitCount
         await reporter.receive(transferProgress(bytes: 0, size: 1_000, isUpload: false))
         XCTAssertEqual(progress.completedUnitCount, beforeRetry)
-        XCTAssertGreaterThan(progress.totalUnitCount, initialTotal)
+        XCTAssertEqual(progress.totalUnitCount, initialTotal)
         let retryTotal = progress.totalUnitCount
         for isUpload in [false, true] {
             var previous = progress.completedUnitCount
@@ -204,7 +296,7 @@ final class BackupIntentExecutionTests: XCTestCase {
             }
         }
         await reporter.receive(itemProgress(processed: 1))
-        XCTAssertEqual(progress.completedUnitCount, progress.totalUnitCount - 1)
+        XCTAssertEqual(progress.completedUnitCount, progress.totalUnitCount * 90 / 100)
     }
 
     func testAssetRetryDuringSecondResourcePreparationReportsWorkImmediately() async {
@@ -216,7 +308,7 @@ final class BackupIntentExecutionTests: XCTestCase {
         let initialTotal = progress.totalUnitCount
         await reporter.receive(transferProgress(bytes: 0, size: 1_000, totalResources: 2, isUpload: false))
         XCTAssertEqual(progress.completedUnitCount, beforeRetry)
-        XCTAssertGreaterThan(progress.totalUnitCount, initialTotal)
+        XCTAssertEqual(progress.totalUnitCount, initialTotal)
         let retryTotal = progress.totalUnitCount
         await reporter.receive(transferProgress(bytes: 10, size: 1_000, totalResources: 2, isUpload: false))
         XCTAssertGreaterThan(progress.completedUnitCount, beforeRetry)
@@ -240,7 +332,7 @@ final class BackupIntentExecutionTests: XCTestCase {
         XCTAssertEqual(progress.completedUnitCount, completed)
         XCTAssertEqual(progress.totalUnitCount, total)
         await reporter.receive(itemProgress(processed: 1))
-        XCTAssertEqual(progress.completedUnitCount, progress.totalUnitCount - 1)
+        XCTAssertEqual(progress.completedUnitCount, progress.totalUnitCount * 90 / 100)
     }
 
     func testDuplicateTransferEventsDoNotInventProgress() async throws {
@@ -273,7 +365,7 @@ final class BackupIntentExecutionTests: XCTestCase {
             countsTowardTransferSpeed: false, stageDescription: "Preparing"
         )))
         XCTAssertGreaterThan(progress.completedUnitCount, 0)
-        XCTAssertLessThan(progress.fractionCompleted, 0.51)
+        XCTAssertEqual(progress.fractionCompleted, 0.675, accuracy: 0.000001)
     }
 
     func testHashProgressReportsRealBytesAndPreservesDigest() throws {
@@ -348,7 +440,7 @@ final class BackupIntentExecutionTests: XCTestCase {
         let reporter = BackupIntentProgressReporter(progress: progress, nodeName: "Home NAS", updateInterval: .zero)
         XCTAssertEqual(progress.localizedDescription, String(format: String(localized: "backupIntent.progress.title"), "Home NAS"))
         await reporter.receive(.preparationProgress(current: 2, total: 5))
-        XCTAssertEqual(progress.localizedAdditionalDescription, String(format: String(localized: "backupIntent.progress.preparingCount"), 2, 5))
+        XCTAssertEqual(progress.localizedAdditionalDescription, String(localized: "backupIntent.progress.preparing") + " (2/5)")
         await reporter.receive(.started(totalAssets: 100, totalBytes: nil))
         await reporter.receive(itemProgress(processed: 12))
         let caption = String(format: String(localized: "backupIntent.progress.backingUp"), 12, 100)
@@ -374,7 +466,7 @@ final class BackupIntentExecutionTests: XCTestCase {
         XCTAssertEqual(progress.completedUnitCount, 0)
         try await Task.sleep(for: .milliseconds(1_100))
         XCTAssertEqual(progress.localizedAdditionalDescription, String(format: String(localized: "backupIntent.progress.backingUp"), 13, 100))
-        XCTAssertEqual(progress.completedUnitCount, (progress.totalUnitCount - 1) / 100 * 13)
+        XCTAssertEqual(progress.completedUnitCount, progress.totalUnitCount * 5085 / 10000)
         await reporter.stop()
     }
 

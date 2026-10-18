@@ -501,6 +501,7 @@ struct BackupParallelExecutor: Sendable {
                 skipped: 0,
                 paused: terminationControl?.shouldDrain == true
             )
+            eventStream.emit(.stageChanged(.finishing))
             await preparedRun.writeMode.stopAndRelease()
             await preparedRun.initialClient.disconnectSafely()
             eventStream.emit(.finished(result))
@@ -584,6 +585,7 @@ struct BackupParallelExecutor: Sendable {
             }
         } catch {
             // Release the lease while the pool (and its seeded initial client) is still connected.
+            eventStream.emit(.stageChanged(.finishing))
             await preparedRun.writeMode.stopAndRelease()
             await clientPool.shutdown()
             if Self.isNetworkUnavailableFatal(error, profile: profile) {
@@ -601,6 +603,7 @@ struct BackupParallelExecutor: Sendable {
         }
 
         // Release the lease while the pool (and its seeded initial client) is still connected.
+        eventStream.emit(.stageChanged(.finishing))
         await preparedRun.writeMode.stopAndRelease()
         await clientPool.shutdown()
 

@@ -1,5 +1,6 @@
 import AppIntents
 import Foundation
+import os
 
 @available(iOS 27.0, *)
 enum IntentBackupScope: String, AppEnum {
@@ -27,6 +28,7 @@ enum IntentBackupScope: String, AppEnum {
 
 @available(iOS 27.0, *)
 struct RunBackupIntent: LongRunningIntent, CancellableIntent {
+    private static let log = Logger(subsystem: "com.zizicici.watermelon", category: "BackupIntent")
     static var title = LocalizedStringResource("backupIntent.title", defaultValue: "Perform Backup")
     static var description = IntentDescription(LocalizedStringResource(
         "backupIntent.description",
@@ -66,15 +68,17 @@ struct RunBackupIntent: LongRunningIntent, CancellableIntent {
         let shortcutSession = AppRuntimeFlags.beginShortcutSession()
         defer { AppRuntimeFlags.endShortcutSession(shortcutSession) }
         try ShortcutsAccessStore.shared.checkEnabled()
-        let selectedSource = try dataSource.resolve(albums: albums)
         let cancellation = BackupCancellationController()
         let reporter = BackupIntentProgressReporter(progress: progress, nodeName: node.title)
+        await reporter.start()
         let profileID = Int64(node.id)
         let monthScope = scope.monthScope
         do {
+            let selectedSource = try dataSource.resolve(albums: albums)
             _ = try await performBackgroundTask {
                 try await BackupIntentExecution.run(cancellation: cancellation) {
                     let result = try await ShortcutsAccess.run {
+                        await reporter.receive(.preparationProgress(current: 1, total: 3))
                         let dependencies = try DependencyContainer.makeForBackgroundTask()
                         let runner = BackgroundBackupRunner(dependencies: dependencies)
                         let result = try await runner.runOnDemand(profileID: profileID, monthScope: monthScope, dataSource: selectedSource) { event in
@@ -88,7 +92,8 @@ struct RunBackupIntent: LongRunningIntent, CancellableIntent {
                     await reporter.complete()
                     return result
                 }
-            } onCancel: { _ in
+            } onCancel: { reason in
+                Self.log.notice("Backup intent cancelled: \(String(describing: reason), privacy: .public)")
                 cancellation.cancel()
             }
         } catch {

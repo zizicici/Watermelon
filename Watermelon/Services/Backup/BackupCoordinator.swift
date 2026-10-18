@@ -43,6 +43,7 @@ final class BackupCoordinator: Sendable {
             request: request,
             eventStream: eventStream
         )
+        eventStream.emit(.stageChanged(.backingUp))
         return try await parallelExecutor.execute(
             preparedRun: preparedRun,
             profile: request.profile,

@@ -240,6 +240,7 @@ struct BackupRunPreparationService: Sendable {
                 )
             }
 
+            eventStream.emit(.stageChanged(.connecting))
             let client = try await connectedClientWithBoundedRecovery(
                 profile: profile,
                 isBackground: request.leaseMode == .background,
@@ -249,6 +250,7 @@ struct BackupRunPreparationService: Sendable {
 
             var writeMode: RepoWriteMode?
             do {
+                eventStream.emit(.stageChanged(.preparingRepository))
                 try request.terminationControl?.checkDrainRequested()
                 let localVolumeClient = client as? LocalVolumeClient
                 let liteProfile: ServerProfileRecord
@@ -346,6 +348,7 @@ struct BackupRunPreparationService: Sendable {
                 }
                 writeMode = activeWriteMode
                 try request.terminationControl?.checkDrainRequested()
+                eventStream.emit(.stageChanged(.scanningRemote))
                 var snapshotSeedLookup: MonthSeedLookup?
 
                 let syncDownloadConcurrency = Self.resolveSyncDownloadConcurrency(
@@ -395,6 +398,7 @@ struct BackupRunPreparationService: Sendable {
                 }
                 try request.terminationControl?.checkDrainRequested()
 
+                eventStream.emit(.stageChanged(.scanningLocal))
                 let retryAssets = loadRetryAssets(from: onlyAssetLocalIdentifiers)
 
                 var monthAssetIDsByMonth: [MonthKey: [String]]

@@ -180,6 +180,7 @@ final class BackgroundBackupRunner {
         }
         defer { appRuntimeFlags.exitExecution(claim) }
         try Task.checkCancellation()
+        await onEvent(.preparationProgress(current: 2, total: 3))
         guard let profile = try databaseManager.fetchServerProfile(id: profileID) else {
             throw BackgroundBackupRunError(message: String(localized: "backgroundBackup.intent.result.notFound"))
         }
@@ -206,6 +207,7 @@ final class BackgroundBackupRunner {
             throw BackgroundBackupRunError(message: String(localized: "backupIntent.error.wifi"))
         }
 
+        await onEvent(.preparationProgress(current: 3, total: 3))
         let writer = ExecutionLogFileStore.beginSession(kind: .manual)
         await writer.appendLog(String(localized: "backupIntent.log.start"), level: .info)
         do {
@@ -294,7 +296,7 @@ final class BackgroundBackupRunner {
                     await writer.appendLog(progress.effectiveLogMessage, level: progress.logLevel)
                 case .started(_, _):
                     didStart = true
-                case .finished, .transferState, .monthChanged, .preparationProgress:
+                case .finished, .transferState, .monthChanged, .preparationProgress, .stageChanged:
                     break
                 }
             }

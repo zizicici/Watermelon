@@ -1,6 +1,17 @@
 import Foundation
 
+enum BackupStage: Int, Sendable {
+    case preparing
+    case connecting
+    case preparingRepository
+    case scanningRemote
+    case scanningLocal
+    case backingUp
+    case finishing
+}
+
 enum BackupEvent: Sendable {
+    case stageChanged(BackupStage)
     case preparationProgress(current: Int, total: Int)
     case progress(BackupProgress)
     case log(String, level: ExecutionLogLevel)
