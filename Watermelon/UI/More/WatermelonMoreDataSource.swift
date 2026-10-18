@@ -9,6 +9,7 @@ import UIKit
 
 class WatermelonMoreDataSource: MoreViewControllerDataSource {
     private enum ItemID {
+        static let pro = "pro"
         static let manageProfiles = "manageProfiles"
         static let storageUsage = "storageUsage"
         static let defaultDeviceScope = "defaultDeviceScope"
@@ -58,7 +59,15 @@ class WatermelonMoreDataSource: MoreViewControllerDataSource {
 
     func sections(for controller: MoreViewController) -> [MoreSectionType] {
         let permissionValues = MainActor.assumeIsolated { (permissions.photosValue, permissions.notificationsValue) }
-        var sections: [MoreSectionType] = [.membership]
+        var sections: [MoreSectionType] = [.custom(MoreCustomSection(id: "pro", items: [
+            MoreCustomItem(
+                id: ItemID.pro,
+                title: WatermelonProBenefits.title,
+                value: MainActor.assumeIsolated { ProStatus.isPro }
+                    ? String(localized: "pro.entry.viewBenefits")
+                    : String(localized: "paywall.choosePlan")
+            )
+        ]))]
 
         sections.append(.custom(MoreCustomSection(
             id: "general",
@@ -253,6 +262,8 @@ class WatermelonMoreDataSource: MoreViewControllerDataSource {
     func moreViewController(_ controller: MoreViewController, didSelectCustomItem item: MoreCustomItem) {
         MainActor.assumeIsolated {
             switch item.id {
+            case ItemID.pro:
+                controller.presentWatermelonPaywall()
             case ItemID.manageProfiles:
                 guard let dependencies else { return }
                 let vc = ManageStorageProfilesViewController(dependencies: dependencies) { [weak self] in
@@ -329,4 +340,13 @@ class WatermelonMoreDataSource: MoreViewControllerDataSource {
         }
     }
 
+
+    func moreViewController(_ controller: MoreViewController, cellFor item: MoreCustomItem) -> UITableViewCell? {
+        guard item.id == ItemID.pro else { return nil }
+        return MainActor.assumeIsolated {
+            WatermelonProEntryCell(isPro: ProStatus.isPro) { [weak controller] in
+                controller?.presentWatermelonPaywall()
+            }
+        }
+    }
 }

@@ -349,45 +349,11 @@ final class HomeExecutionLogViewController: UIViewController {
     private func startFocusModeIfAllowed() {
         guard coordinator.isRunning else { return }
         guard ProStatus.isPro else {
-            presentProUpgradeAlert()
+            presentWatermelonPaywall(highlighting: .focusMode)
             return
         }
         let focus = FocusModeViewController(coordinator: coordinator)
         present(focus, animated: true)
-    }
-
-    private func presentProUpgradeAlert() {
-        let alert = UIAlertController(
-            title: String(localized: "home.alert.upgradeTitle"),
-            message: String(localized: "log.focusMode.upgradeMessage"),
-            preferredStyle: .alert
-        )
-        if let price = Store.shared.membershipDisplayPrice() {
-            alert.addAction(UIAlertAction(
-                title: String(format: String(localized: "home.alert.upgradeAction"), price),
-                style: .default
-            ) { [weak self] _ in
-                Task { [weak self] in
-                    do {
-                        _ = try await Store.shared.purchaseLifetimeMembership()
-                    } catch {
-                        self?.presentPurchaseError(error)
-                    }
-                }
-            })
-        }
-        alert.addAction(UIAlertAction(title: String(localized: "common.cancel"), style: .cancel))
-        present(alert, animated: true)
-    }
-
-    private func presentPurchaseError(_ error: Error) {
-        let alert = UIAlertController(
-            title: nil,
-            message: error.localizedDescription,
-            preferredStyle: .alert
-        )
-        alert.addAction(UIAlertAction(title: String(localized: "common.ok"), style: .default))
-        present(alert, animated: true)
     }
 
     @objc

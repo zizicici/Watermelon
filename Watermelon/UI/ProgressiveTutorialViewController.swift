@@ -144,7 +144,18 @@ class ProgressiveTutorialViewController: UIViewController {
         var snapshot = dataSource.snapshot()
         snapshot.appendSections([index])
         snapshot.appendItems([index], toSection: index)
-        dataSource.apply(snapshot, animatingDifferences: ConsideringUser.animated)
+        dataSource.apply(snapshot, animatingDifferences: ConsideringUser.animated) { [weak self] in
+            guard let self, index == self.revealedCount - 1,
+                  let indexPath = self.dataSource.indexPath(for: index),
+                  indexPath.section < self.tableView.numberOfSections,
+                  indexPath.row < self.tableView.numberOfRows(inSection: indexPath.section) else { return }
+            self.view.layoutIfNeeded()
+            self.tableView.scrollToRow(
+                at: indexPath,
+                at: .bottom,
+                animated: self.view.window != nil && ConsideringUser.animated
+            )
+        }
         if revealedCount == items.count {
             actionButton.configuration?.title = completionButtonTitle
         }

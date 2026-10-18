@@ -226,6 +226,10 @@ extension ICloudPhotoBackupMode: UserDefaultSettable {
 enum BrowserLinkRateLimitSetting: Int, CaseIterable, Codable, Sendable {
     case unlimited = 0
     case standard
+
+    func effectiveValue(isPro: Bool) -> Self {
+        isPro ? self : .standard
+    }
 }
 
 extension BrowserLinkRateLimitSetting: UserDefaultSettable {

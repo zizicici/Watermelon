@@ -250,7 +250,7 @@ final class InboxTransferFlowCoordinator {
         guard !policy.allows(itemCount: items.count) else { return true }
         let message = policy.buttonSubtitle ?? String(localized: "transfer.limit.free")
         activity.fail(message)
-        presentError(message, on: presenter)
+        presenter.presentWatermelonPaywall(highlighting: .transferCount)
         return false
     }
 
@@ -456,7 +456,7 @@ final class InboxTransferFlowCoordinator {
         let connection = BrowserLinkConnectionViewController(
             pairing: pairing,
             transferRateLimitBytesPerSecond: BrowserLinkTransferRatePolicy.maximumBytesPerSecond(
-                rateLimitEnabled: BrowserLinkRateLimitSetting.getValue() == .standard
+                rateLimitEnabled: BrowserLinkRateLimitSetting.getValue().effectiveValue(isPro: ProStatus.isPro) == .standard
             )
         )
         connection.onAuthenticated = { [weak self, weak connection, weak container, weak presenter] client in

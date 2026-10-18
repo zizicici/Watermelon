@@ -1119,28 +1119,6 @@ final class HomeViewController: UIViewController {
     private func makeMoreViewController() -> MoreViewController {
         let configuration = MoreViewControllerConfiguration(
             title: String(localized: "controller.more.title"),
-            promotionConfig: PromotionCellConfiguration(
-                title: String(localized: "store.promotion.title"),
-                titleHighlight: "Pro",
-                features: [
-                    String(localized: "store.promotion.feature.1"),
-                    String(localized: "store.promotion.feature.2"),
-                    String(localized: "store.promotion.feature.3"),
-                ].map { "- \($0)" },
-                gradientColors: [.Material.Green._700, .Material.Green._600],
-                titleHighlightColor: .Material.Amber._200,
-                featureColor: .white.withAlphaComponent(0.85),
-                buttonTextColor: .Material.Green._800,
-                buttonTitle: String(localized: "store.promotion.buttonTitle")
-            ),
-            gratefulConfig: GratefulCellConfiguration(
-                title: String(localized: "store.grateful.title"),
-                titleHighlight: "Pro",
-                content: String(localized: "store.grateful.content"),
-                gradientColors: [.Material.LightGreen._700, .Material.LightGreen._600],
-                titleHighlightColor: .Material.Amber._200,
-                contentColor: .white.withAlphaComponent(0.85)
-            ),
             email: "watermelon@zi.ci",
             appStoreId: "6762260596",
             privacyPolicyURL: Self.privacyPolicyURLString,
@@ -1154,6 +1132,7 @@ final class HomeViewController: UIViewController {
                     .init(type: .license, value: "粤ICP备2025448771号-6A"),
                 ],
                 thirdPartyLibraries: [
+                    .init(name: "MoreKit", version: "2.1.0", urlString: "https://github.com/zizicici/MoreKit"),
                     .init(name: "AMSMB2", version: "main", urlString: "https://github.com/zizicici/AMSMB2"),
                     .init(name: "Citadel", version: "fix/sftp-response-lock", urlString: "https://github.com/zizicici/Citadel"),
                     .init(name: "GRDB", version: "7.10.0", urlString: "https://github.com/groue/GRDB.swift"),
@@ -1181,7 +1160,11 @@ final class HomeViewController: UIViewController {
             }
         )
 
-        return MoreViewController(configuration: configuration, dataSource: dataSource)
+        let controller = MoreViewController(configuration: configuration, dataSource: dataSource)
+        controller.settingsErrorHandler = { controller, error in
+            controller.presentProUpgradeIfNeeded(for: error)
+        }
+        return controller
     }
 
     @objc
@@ -2266,7 +2249,7 @@ final class HomeViewController: UIViewController {
 
     private var browserLinkTransferRateLimitBytesPerSecond: Int? {
         BrowserLinkTransferRatePolicy.maximumBytesPerSecond(
-            rateLimitEnabled: BrowserLinkRateLimitSetting.getValue() == .standard
+            rateLimitEnabled: BrowserLinkRateLimitSetting.getValue().effectiveValue(isPro: ProStatus.isPro) == .standard
         )
     }
 
@@ -2396,8 +2379,8 @@ final class HomeViewController: UIViewController {
     }
 
     private func openNewStorageFlow(_ destination: NewStorageDestination) {
-        if !ProStatus.isPro && store.savedProfiles.count >= 1 {
-            presentProUpgradeAlert()
+        if !ProStatus.isPro && store.savedProfiles.count >= ProStatus.freeMaximumStorageNodes {
+            presentWatermelonPaywall(highlighting: .storageNodes)
             return
         }
 
@@ -2446,8 +2429,8 @@ final class HomeViewController: UIViewController {
         options: InboxTransferOptions,
         from presenter: UIViewController
     ) {
-        if !ProStatus.isPro && store.savedProfiles.count >= 1 {
-            presentProUpgradeAlert(on: presenter)
+        if !ProStatus.isPro && store.savedProfiles.count >= ProStatus.freeMaximumStorageNodes {
+            presenter.presentWatermelonPaywall(highlighting: .storageNodes)
             return
         }
         guard let browser = presenter as? MediaBrowserGridViewController else { return }
@@ -2503,38 +2486,6 @@ final class HomeViewController: UIViewController {
             presentation.prefersGrabberVisible = true
         }
         presenter.present(container, animated: ConsideringUser.animated)
-    }
-
-    private func presentProUpgradeAlert(on requestedPresenter: UIViewController? = nil) {
-        let presenter = requestedPresenter ?? self
-        let alert = UIAlertController(
-            title: String(localized: "home.alert.upgradeTitle"),
-            message: String(localized: "home.alert.upgradeNodeLimitMessage"),
-            preferredStyle: .alert
-        )
-        if let price = Store.shared.membershipDisplayPrice() {
-            alert.addAction(UIAlertAction(title: String(format: String(localized: "home.alert.upgradeAction"), price), style: .default) { [weak self] _ in
-                Task { @MainActor [weak self] in
-                    do {
-                        _ = try await Store.shared.purchaseLifetimeMembership()
-                    } catch {
-                        self?.presentPurchaseError(error, on: presenter)
-                    }
-                }
-            })
-        }
-        alert.addAction(UIAlertAction(title: String(localized: "common.cancel"), style: .cancel))
-        presenter.present(alert, animated: true)
-    }
-
-    private func presentPurchaseError(_ error: Error, on requestedPresenter: UIViewController? = nil) {
-        let alert = UIAlertController(
-            title: nil,
-            message: error.localizedDescription,
-            preferredStyle: .alert
-        )
-        alert.addAction(UIAlertAction(title: String(localized: "common.ok"), style: .default))
-        (requestedPresenter ?? self).present(alert, animated: true)
     }
 
     private func makeNewStorageRootViewController(

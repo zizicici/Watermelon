@@ -1,0 +1,82 @@
+{
+  "identifier": "WatermelonMembershipTests",
+  "nonRenewingSubscriptions": [],
+  "products": [
+    {
+      "displayPrice": "9.99",
+      "familyShareable": true,
+      "internalID": "1001",
+      "localizations": [
+        {
+          "description": "Lifetime",
+          "displayName": "Lifetime",
+          "locale": "en_US"
+        }
+      ],
+      "productID": "com.zizicici.watermelon.pro",
+      "referenceName": "Lifetime",
+      "type": "NonConsumable"
+    }
+  ],
+  "settings": {
+    "_failTransactionsEnabled": false,
+    "_locale": "en_US",
+    "_storefront": "USA",
+    "_storeKitErrors": []
+  },
+  "subscriptionGroups": [
+    {
+      "id": "2000",
+      "localizations": [],
+      "name": "Pro",
+      "subscriptions": [
+        {
+          "displayPrice": "0.99",
+          "familyShareable": false,
+          "internalID": "1002",
+          "localizations": [
+            {
+              "description": "Monthly",
+              "displayName": "Monthly",
+              "locale": "en_US"
+            }
+          ],
+          "productID": "com.zizicici.watermelon.subscription.monthly",
+          "referenceName": "Monthly",
+          "type": "RecurringSubscription",
+          "adHocOffers": [],
+          "codeOffers": [],
+          "groupNumber": 1,
+          "introductoryOffer": null,
+          "recurringSubscriptionPeriod": "P1M",
+          "subscriptionGroupID": "2000"
+        },
+        {
+          "displayPrice": "7.99",
+          "familyShareable": false,
+          "internalID": "1003",
+          "localizations": [
+            {
+              "description": "Yearly",
+              "displayName": "Yearly",
+              "locale": "en_US"
+            }
+          ],
+          "productID": "com.zizicici.watermelon.subscription.yearly",
+          "referenceName": "Yearly",
+          "type": "RecurringSubscription",
+          "adHocOffers": [],
+          "codeOffers": [],
+          "groupNumber": 1,
+          "introductoryOffer": null,
+          "recurringSubscriptionPeriod": "P1Y",
+          "subscriptionGroupID": "2000"
+        }
+      ]
+    }
+  ],
+  "version": {
+    "major": 3,
+    "minor": 0
+  }
+}

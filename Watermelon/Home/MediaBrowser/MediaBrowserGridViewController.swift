@@ -565,7 +565,8 @@ final class MediaBrowserGridViewController: UIViewController {
                 .RemoteMaintenanceDidChange,
                 .ConnectionLifecycleDidChange,
                 .LocalIndexBuildStateDidChange,
-                .SettingsUpdate
+                .SettingsUpdate,
+                .StoreInfoLoaded
             ] {
                 runtimeObservers.insert(center.addObserver(
                     forName: name,
@@ -2590,7 +2591,6 @@ final class MediaBrowserGridViewController: UIViewController {
             )
             let canChooseDestination = transferItemCount > 0
                 && canInteractWithSelection
-                && !exceedsTransferLimit
                 && selectionAction.canChooseDestination()
                 && !selectionActionUIState.isPerforming
                 && !transferFileSelection.isWorking
@@ -2621,8 +2621,17 @@ final class MediaBrowserGridViewController: UIViewController {
             updateTransferLocalLibraryButton()
             onTransferModeSwitchAvailabilityChanged?(allowsModeChanges)
             updateSelectionActivityPanel()
-            selectionActionButton.menu = selectionAction.makeMenu { [weak self] destination in
-                self?.handleSelectionAction(destination)
+            if exceedsTransferLimit {
+                selectionActionButton.menu = UIMenu(children: [UIAction(
+                    title: String(localized: "pro.entry.discover"),
+                    image: UIImage(systemName: "star.circle")
+                ) { [weak self] _ in
+                    self?.presentWatermelonPaywall(highlighting: .transferCount)
+                }])
+            } else {
+                selectionActionButton.menu = selectionAction.makeMenu { [weak self] destination in
+                    self?.handleSelectionAction(destination)
+                }
             }
             return
         }

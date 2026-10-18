@@ -194,7 +194,18 @@ final class OnboardingViewController: UIViewController {
         var snapshot = diffableDataSource.snapshot()
         snapshot.appendSections([section])
         snapshot.appendItems([item], toSection: section)
-        diffableDataSource.apply(snapshot, animatingDifferences: ConsideringUser.animated)
+        diffableDataSource.apply(snapshot, animatingDifferences: ConsideringUser.animated) { [weak self] in
+            guard let self, section.rawValue == self.revealedCount - 1,
+                  let indexPath = self.diffableDataSource.indexPath(for: item),
+                  indexPath.section < self.tableView.numberOfSections,
+                  indexPath.row < self.tableView.numberOfRows(inSection: indexPath.section) else { return }
+            self.view.layoutIfNeeded()
+            self.tableView.scrollToRow(
+                at: indexPath,
+                at: .bottom,
+                animated: self.view.window != nil && ConsideringUser.animated
+            )
+        }
 
         if revealedCount == items.count {
             actionButton.configuration?.title = String(localized: "onboarding.button.start")

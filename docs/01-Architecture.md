@@ -437,7 +437,7 @@ Lite 仓库的单写者租约。锁文件位于 `.watermelon/locks/<writerID>.lo
 6. `画中画进度` → `画中画进度`（Pro），开启后再露出 `画中画提示音`
 7. `诊断` → `执行日志历史`（DEBUG 构建额外露出 `Test Crash`）
 
-再叠加 MoreKit 自带的 `membership / contact / appjun / about` 段落。
+会员入口使用紧凑的 `WatermelonProEntryCell`，进入全屏 `WatermelonPaywallViewController`；其余 `contact / appjun / about` 段落由 MoreKit 提供。
 
 ## 10. 自动化测试
 

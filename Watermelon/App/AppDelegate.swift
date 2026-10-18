@@ -28,6 +28,7 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
         ProStatus.migrateLegacyCacheIfNeeded()
         MoreKit.configure(
             productID: ProStatus.productID,
+            subscriptionProductIDs: ProStatus.subscriptionProductIDs,
             membershipKey: ProStatus.membershipKey
         )
         MoreKitAppearance.shared.tintColor = .appTint
