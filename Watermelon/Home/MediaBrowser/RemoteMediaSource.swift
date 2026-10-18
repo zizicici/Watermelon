@@ -102,7 +102,8 @@ final class RemoteMediaSource: MediaBrowserSource, @unchecked Sendable {
                                 videoContentHash: asset.videoContentHash,
                                 storageMonth: asset.month,
                                 isIncomplete: asset.isIncomplete
-                            )
+                            ),
+                            fileSize: asset.fileSize
                         )
                     )
                 }

@@ -34,9 +34,6 @@ struct MediaBrowserThumbnailReloadTracker: Sendable {
     }
 }
 
-// Source-driven media grid (local / remote / merged). Month sections, date-descending. Cells show a
-// thumbnail plus type (video/live) and presence badges. Tapping opens the full-screen paging viewer.
-// Modes are switchable via a segmented control whose availability tracks the remote connection live.
 @MainActor
 final class MediaBrowserGridViewController: UIViewController {
     // One selectable mode. `isAvailable` is re-evaluated on connection changes to enable/disable its tab.
@@ -125,8 +122,13 @@ final class MediaBrowserGridViewController: UIViewController {
         let files: Int
     }
 
-    private typealias DataSource = UICollectionViewDiffableDataSource<LibraryMonthKey, MediaBrowserItemID>
-    private typealias Snapshot = NSDiffableDataSourceSnapshot<LibraryMonthKey, MediaBrowserItemID>
+    private struct LoadedContent: Sendable {
+        let content: MediaBrowserContent
+        let includesFileSizes: Bool
+    }
+
+    private typealias DataSource = UICollectionViewDiffableDataSource<MediaBrowserSectionID, MediaBrowserItemID>
+    private typealias Snapshot = NSDiffableDataSourceSnapshot<MediaBrowserSectionID, MediaBrowserItemID>
     private static let headerKind = "month-header"
     private static let fallbackCellReuseID = "media-browser-fallback-cell"
 
@@ -148,6 +150,8 @@ final class MediaBrowserGridViewController: UIViewController {
     private let sessionToken: () -> AnyHashable?
     private var currentMode: MediaBrowserMode
     private var currentFilter = MediaBrowserFilter.all
+    private var currentMediaFilter = MediaBrowserMediaFilter.all
+    private var currentSortOrder = MediaBrowserSortOrder.month
     private var effectiveFilter: MediaBrowserFilter {
         currentMode.availableFilters.contains(currentFilter) ? currentFilter : .all
     }
@@ -158,10 +162,12 @@ final class MediaBrowserGridViewController: UIViewController {
 
     private let browserSession = MediaBrowserSession()
     private var browserSnapshot: MediaBrowserSnapshot { browserSession.snapshot }
-    private var months: [LibraryMonthKey] { browserSession.snapshot.months }
+    private var sectionIDs: [MediaBrowserSectionID] { browserSnapshot.sectionIDs }
     private var dataSource: DataSource?
     private var loadTask: Task<Void, Never>?
     private var loadGeneration = 0
+    private var loadedContent: LoadedContent?
+    private var contentGeneration = 0
     private var isScopeReloading = false
     private var thumbnailReloadTracker = MediaBrowserThumbnailReloadTracker()
     private weak var segmentedControl: UISegmentedControl?
@@ -303,7 +309,7 @@ final class MediaBrowserGridViewController: UIViewController {
             }
         }
 
-        if effectiveFilter != .all {
+        if effectiveFilter != .all || currentMediaFilter != .all {
             return makeAlbumEmptyStateView(
                 title: String(localized: "mediaBrowser.filter.empty.title"),
                 message: String(localized: "mediaBrowser.filter.empty.message")
@@ -583,6 +589,7 @@ final class MediaBrowserGridViewController: UIViewController {
 
     private func scheduleLibraryChangeReload() {
         guard isContentActive else { return }
+        invalidateLoadedContent()
         // Remote mode reloads too: membership is PhotoKit-independent, but the device handles bound at load
         // are not — a Photos edit must reproject the record (stale handle drops → `.remoteOnly`).
         thumbnailReloadTracker.requestReload()
@@ -622,6 +629,7 @@ final class MediaBrowserGridViewController: UIViewController {
     private func reloadRespectingActionGate(trigger: String) {
         guard isContentActive else { return }
         if defersSnapshotReload {
+            invalidateLoadedContent()
             deferredReloadTrigger = trigger
             return
         }
@@ -778,7 +786,8 @@ final class MediaBrowserGridViewController: UIViewController {
             cell.configure(
                 with: item,
                 remoteImage: self.remoteStorageImage(),
-                showsPresenceBadge: !self.isMediaDrop
+                showsPresenceBadge: !self.isMediaDrop,
+                showsFileSize: self.browserSnapshot.sortOrder == .fileSize
             )
             cell.setSelecting(self.isSelecting, selected: self.selectedItemIDs.contains(item.id))
             cell.onSelectionButtonTapped = { [weak self] in
@@ -801,8 +810,8 @@ final class MediaBrowserGridViewController: UIViewController {
         let headerRegistration = UICollectionView.SupplementaryRegistration<MediaBrowserHeaderView>(
             elementKind: Self.headerKind
         ) { [weak self] header, _, indexPath in
-            guard let self, indexPath.section < self.months.count else { return }
-            header.configure(title: self.months[indexPath.section].displayText)
+            guard let self, self.sectionIDs.indices.contains(indexPath.section) else { return }
+            header.configure(title: self.sectionIDs[indexPath.section].title)
         }
         dataSource.supplementaryViewProvider = { collectionView, _, indexPath in
             collectionView.dequeueConfiguredReusableSupplementary(using: headerRegistration, for: indexPath)
@@ -810,8 +819,16 @@ final class MediaBrowserGridViewController: UIViewController {
         self.dataSource = dataSource
     }
 
-    private func load(trigger: String, staleAttempt: Int = 0) {
+    private func invalidateLoadedContent() {
+        loadedContent = nil
+        contentGeneration += 1
+    }
+
+    private func load(trigger: String, staleAttempt: Int = 0, reusingContent: Bool = false) {
         guard isContentActive else { return }
+        if !reusingContent {
+            invalidateLoadedContent()
+        }
         if !defersSnapshotReload {
             deferredReloadTrigger = nil
         }
@@ -821,19 +838,30 @@ final class MediaBrowserGridViewController: UIViewController {
         let thumbnailReloadGeneration = thumbnailReloadTracker.requestedGeneration
         let source = source
         let filter = effectiveFilter
+        let mediaFilter = currentMediaFilter
+        let sortOrder = currentSortOrder
+        let contentGeneration = contentGeneration
+        let needsFileSizes = sortOrder == .fileSize
+        let cachedContent = loadedContent.flatMap { needsFileSizes && !$0.includesFileSizes ? nil : $0 }
+        let includesFileSizes = cachedContent?.includesFileSizes ?? needsFileSizes
         let trace = MediaBrowserLoadTrace.makeContext(mode: source.mode)
         MediaBrowserLoadTrace.emit(
             "start",
             context: trace,
             details: "generation=\(generation) trigger=\(trigger)"
         )
-        if months.isEmpty {
+        if browserSnapshot.isEmpty {
             collectionView.backgroundView = makeLoadingState()
         }
         loadTask = Task { [weak self] in
             await MediaBrowserLoadTrace.$context.withValue(trace) {
                 let sectionsStartedAt = CFAbsoluteTimeGetCurrent()
-                let result = await source.load()
+                let result: MediaBrowserLoadResult
+                if let cachedContent {
+                    result = .loaded(cachedContent.content)
+                } else {
+                    result = await source.load(includeFileSizes: needsFileSizes)
+                }
                 let content: MediaBrowserContent
                 switch result {
                 case .loaded(let loaded):
@@ -848,9 +876,11 @@ final class MediaBrowserGridViewController: UIViewController {
                     await MainActor.run {
                         guard let self,
                               !Task.isCancelled,
-                              self.loadGeneration == generation else { return }
+                              self.loadGeneration == generation,
+                              self.contentGeneration == contentGeneration else { return }
                         DispatchQueue.main.asyncAfter(deadline: .now() + retryDelay) { [weak self] in
-                            guard let self, self.loadGeneration == generation else { return }
+                            guard let self, self.loadGeneration == generation,
+                                  self.contentGeneration == contentGeneration else { return }
                             if self.defersSnapshotReload {
                                 self.reloadRespectingActionGate(trigger: "staleDeferred")
                             } else {
@@ -867,7 +897,7 @@ final class MediaBrowserGridViewController: UIViewController {
                     return
                 }
                 let snapshot = await withCancellableDetachedValue(priority: .userInitiated) {
-                    MediaBrowserSnapshot(sections: content.sections, filter: filter)
+                    MediaBrowserSnapshot(sections: content.sections, filter: filter, mediaFilter: mediaFilter, sortOrder: sortOrder)
                 }
                 let itemCount = snapshot.itemCount
                 MediaBrowserLoadTrace.emit(
@@ -884,7 +914,8 @@ final class MediaBrowserGridViewController: UIViewController {
                 await MainActor.run {
                     // Drop a completion from a superseded source (rapid tab switch / session change) so it can't
                     // overwrite the current snapshot — !Task.isCancelled alone can race a past-await continuation.
-                    guard let self, !Task.isCancelled, self.loadGeneration == generation else {
+                    guard let self, !Task.isCancelled, self.loadGeneration == generation,
+                          self.contentGeneration == contentGeneration else {
                         MediaBrowserLoadTrace.emit(
                             "dropped",
                             context: trace,
@@ -897,7 +928,10 @@ final class MediaBrowserGridViewController: UIViewController {
                         self.reloadRespectingActionGate(trigger: "loadDeferred")
                         return
                     }
-                    let changedItemIDs = snapshot.changedItemIDs(comparedTo: self.browserSnapshot)
+                    self.loadedContent = LoadedContent(content: content, includesFileSizes: includesFileSizes)
+                    let changedItemIDs = snapshot.sortOrder == self.browserSnapshot.sortOrder
+                        ? snapshot.changedItemIDs(comparedTo: self.browserSnapshot)
+                        : Set(snapshot.itemIDs)
                     self.browserSession.replace(with: snapshot)
                     self.isScopeReloading = false
                     self.applySnapshot(
@@ -906,7 +940,7 @@ final class MediaBrowserGridViewController: UIViewController {
                         loadGeneration: generation,
                         trace: trace
                     )
-                    self.collectionView.backgroundView = self.months.isEmpty ? self.makeEmptyState() : nil
+                    self.collectionView.backgroundView = self.browserSnapshot.isEmpty ? self.makeEmptyState() : nil
                     self.scrollToPendingMonthIfNeeded()
                     self.updateSelectBarButton()
                     if self.isMediaDrop, !self.isSelecting {
@@ -915,7 +949,7 @@ final class MediaBrowserGridViewController: UIViewController {
                     // Content may have changed under an active selection (a background refresh / a just-finished batch):
                     // leave selection if the grid emptied; otherwise drop stale ids and re-derive which actions still apply.
                     if self.isSelecting {
-                        if self.months.isEmpty, self.selectionAction == nil {
+                        if self.browserSnapshot.isEmpty, self.selectionAction == nil {
                             self.exitSelection()
                         } else {
                             self.recomputeBatchBar()
@@ -937,7 +971,7 @@ final class MediaBrowserGridViewController: UIViewController {
 
     // Consumed once, on first load: jumps to the month the browser was opened at.
     private func scrollToPendingMonthIfNeeded() {
-        guard let month = pendingScrollMonth, let section = months.firstIndex(of: month) else { return }
+        guard let month = pendingScrollMonth, let section = sectionIDs.firstIndex(of: .month(month)) else { return }
         pendingScrollMonth = nil
         collectionView.layoutIfNeeded()
         collectionView.scrollToItem(at: IndexPath(item: 0, section: section), at: .top, animated: false)
@@ -951,14 +985,14 @@ final class MediaBrowserGridViewController: UIViewController {
     ) {
         let buildStartedAt = CFAbsoluteTimeGetCurrent()
         var snapshot = Snapshot()
-        snapshot.appendSections(months)
+        snapshot.appendSections(sectionIDs)
         let visibleItemIDs = collectionView.indexPathsForVisibleItems.compactMap {
             dataSource?.itemIdentifier(for: $0)
         }
-        for sectionIndex in months.indices {
+        for sectionIndex in sectionIDs.indices {
             snapshot.appendItems(
                 browserSnapshot.itemIDs(inSection: sectionIndex),
-                toSection: months[sectionIndex]
+                toSection: sectionIDs[sectionIndex]
             )
         }
         let reconfiguredItemIDs = visibleItemIDs.filter {
@@ -2162,18 +2196,41 @@ final class MediaBrowserGridViewController: UIViewController {
             updateTransferOptionsButton()
             return
         }
-        filterBarButtonItem.menu = UIMenu(options: .singleSelection, children: currentMode.availableFilters.map { filter in
-            UIAction(title: filter.title, state: effectiveFilter == filter ? .on : .off) { [weak self] _ in
-                self?.setFilter(filter)
+        let filters = UIMenu(
+            title: currentMode.filterGroupTitle,
+            options: [.displayInline, .singleSelection],
+            children: currentMode.availableFilters.map { filter in
+                UIAction(title: filter.title(in: currentMode), state: effectiveFilter == filter ? .on : .off) { [weak self] _ in
+                    self?.setFilter(filter)
+                }
             }
-        })
+        )
+        let sorting = UIMenu(
+            title: String(localized: "mediaBrowser.sort"),
+            options: [.displayInline, .singleSelection],
+            children: MediaBrowserSortOrder.allCases.map { sortOrder in
+                UIAction(title: sortOrder.title, state: currentSortOrder == sortOrder ? .on : .off) { [weak self] _ in
+                    self?.setSortOrder(sortOrder)
+                }
+            }
+        )
+        let mediaTypes = UIMenu(
+            title: String(localized: "mediaBrowser.filter.mediaType"),
+            options: [.displayInline, .singleSelection],
+            children: MediaBrowserMediaFilter.allCases.map { filter in
+                UIAction(title: filter.title, state: currentMediaFilter == filter ? .on : .off) { [weak self] _ in
+                    self?.setMediaFilter(filter)
+                }
+            }
+        )
+        filterBarButtonItem.menu = UIMenu(children: [sorting, mediaTypes, filters])
         filterBarButtonItem.isEnabled = !isAnyActionRunning
-        filterBarButtonItem.accessibilityValue = effectiveFilter.title
+        filterBarButtonItem.accessibilityValue = "\(currentSortOrder.title), \(currentMediaFilter.title), \(effectiveFilter.title(in: currentMode))"
         selectionBarButtonItem.accessibilityLabel = isSelecting
             ? String(localized: "common.cancel")
             : String(localized: "mediaBrowser.select")
         selectionBarButtonItem.action = isSelecting ? #selector(cancelSelection) : #selector(enterSelection)
-        selectionBarButtonItem.isEnabled = !isAnyActionRunning && !isScopeReloading && (isSelecting || !months.isEmpty)
+        selectionBarButtonItem.isEnabled = !isAnyActionRunning && !isScopeReloading && (isSelecting || !browserSnapshot.isEmpty)
         selectAllBarButtonItem.isEnabled = isSelecting && !browserSnapshot.isEmpty && canInteractWithSelection
 
         let updateAppearance = {
@@ -2206,11 +2263,32 @@ final class MediaBrowserGridViewController: UIViewController {
         currentFilter = filter
         pendingScrollMonth = nil
         updateSelectBarButton()
-        load(trigger: "filter")
+        load(trigger: "filter", reusingContent: true)
+    }
+
+    func setSortOrder(_ sortOrder: MediaBrowserSortOrder) {
+        guard selectionAction == nil, sortOrder != currentSortOrder, !defersSnapshotReload else { return }
+        isScopeReloading = true
+        exitSelection()
+        currentSortOrder = sortOrder
+        pendingScrollMonth = nil
+        collectionView.setContentOffset(CGPoint(x: 0, y: -collectionView.adjustedContentInset.top), animated: false)
+        updateSelectBarButton()
+        load(trigger: "sort", reusingContent: true)
+    }
+
+    func setMediaFilter(_ filter: MediaBrowserMediaFilter) {
+        guard selectionAction == nil, filter != currentMediaFilter, !defersSnapshotReload else { return }
+        isScopeReloading = true
+        exitSelection()
+        currentMediaFilter = filter
+        pendingScrollMonth = nil
+        updateSelectBarButton()
+        load(trigger: "mediaFilter", reusingContent: true)
     }
 
     @objc private func enterSelection() {
-        guard !isAnyActionRunning, !isScopeReloading, !months.isEmpty || selectionAction != nil,
+        guard !isAnyActionRunning, !isScopeReloading, !browserSnapshot.isEmpty || selectionAction != nil,
               selection.enter() else { return }
         setBatchBarVisible(selectionAction == nil, animated: false)
         updateSelectBarButton(animated: true)
@@ -2667,7 +2745,7 @@ extension MediaBrowserGridViewController: UICollectionViewDelegate {
     private func presentViewer(at indexPath: IndexPath) {
         guard !isAnyActionRunning else { return }
         guard presentedViewController == nil else { return }
-        guard months.indices.contains(indexPath.section) else { return }
+        guard sectionIDs.indices.contains(indexPath.section) else { return }
         guard let item = item(at: indexPath) else { return }
         let viewer = MediaBrowserViewerViewController(
             source: source,
@@ -2690,7 +2768,7 @@ extension MediaBrowserGridViewController: UICollectionViewDelegate {
         _ collectionView: UICollectionView,
         shouldBeginMultipleSelectionInteractionAt indexPath: IndexPath
     ) -> Bool {
-        canInteractWithSelection && !months.isEmpty
+        canInteractWithSelection && !browserSnapshot.isEmpty
     }
 
     func collectionView(
@@ -2811,6 +2889,8 @@ private final class MediaBrowserGridCell: UICollectionViewCell {
     private let livePhotoIconView = UIImageView()
     private let presenceIconView = UIImageView()
     private let incompleteIconView = UIImageView()
+    private let fileSizeLabel = UILabel()
+    private var incompleteBottomConstraint: NSLayoutConstraint?
     private let needsLoadIconView = UIImageView()
     private let placeholderIconView = UIImageView()
     private let selectionIconView = UIImageView()
@@ -2862,6 +2942,8 @@ private final class MediaBrowserGridCell: UICollectionViewCell {
         livePhotoIconView.isHidden = true
         presenceIconView.isHidden = true
         incompleteIconView.isHidden = true
+        fileSizeLabel.isHidden = true
+        fileSizeLabel.text = nil
         incompleteIconView.alpha = 1
         needsLoadIconView.isHidden = true
         placeholderIconView.isHidden = true
@@ -2889,7 +2971,8 @@ private final class MediaBrowserGridCell: UICollectionViewCell {
     func configure(
         with item: MediaBrowserItem,
         remoteImage: UIImage?,
-        showsPresenceBadge: Bool
+        showsPresenceBadge: Bool,
+        showsFileSize: Bool = false
     ) {
         if currentItemID != item.id {
             cancelLoading()
@@ -2902,7 +2985,12 @@ private final class MediaBrowserGridCell: UICollectionViewCell {
             placeholderIconView.isHidden = false
         }
 
-        bottomGradientView.isHidden = !item.isVideo
+        bottomGradientView.isHidden = !item.isVideo && !showsFileSize
+        fileSizeLabel.isHidden = !showsFileSize
+        fileSizeLabel.text = showsFileSize ? item.fileSize.map {
+            ByteCountFormatter.string(fromByteCount: $0, countStyle: .file)
+        } ?? "—" : nil
+        incompleteBottomConstraint?.constant = showsFileSize ? -24 : -6
         videoIconView.isHidden = !item.isVideo
         livePhotoIconView.isHidden = !item.isLivePhoto
         needsLoadIconView.isHidden = true
@@ -3006,6 +3094,18 @@ private final class MediaBrowserGridCell: UICollectionViewCell {
         incompleteIconView.image = UIImage(systemName: "exclamationmark.triangle.fill")
         incompleteIconView.tintColor = .systemYellow
 
+        fileSizeLabel.font = .monospacedDigitSystemFont(ofSize: 10, weight: .semibold)
+        fileSizeLabel.textColor = .white
+        fileSizeLabel.textAlignment = .right
+        fileSizeLabel.adjustsFontSizeToFitWidth = true
+        fileSizeLabel.minimumScaleFactor = 0.8
+        fileSizeLabel.layer.shadowColor = UIColor.black.cgColor
+        fileSizeLabel.layer.shadowOpacity = 0.5
+        fileSizeLabel.layer.shadowRadius = 2
+        fileSizeLabel.layer.shadowOffset = CGSize(width: 0, height: 1)
+        fileSizeLabel.accessibilityIdentifier = "mediaBrowser.fileSize"
+        fileSizeLabel.isHidden = true
+
         needsLoadIconView.image = UIImage(systemName: "arrow.down.circle")
         needsLoadIconView.tintColor = .secondaryLabel
         needsLoadIconView.contentMode = .scaleAspectFit
@@ -3035,13 +3135,16 @@ private final class MediaBrowserGridCell: UICollectionViewCell {
         contentView.addSubview(livePhotoIconView)
         contentView.addSubview(presenceIconView)
         contentView.addSubview(incompleteIconView)
+        contentView.addSubview(fileSizeLabel)
         contentView.addSubview(needsLoadIconView)
         contentView.addSubview(selectionIconView)
         contentView.addSubview(selectionButton)
 
-        for v in [imageView, placeholderIconView, bottomGradientView, videoIconView, livePhotoIconView, presenceIconView, incompleteIconView, needsLoadIconView, selectionIconView, selectionButton] {
+        for v in [imageView, placeholderIconView, bottomGradientView, videoIconView, livePhotoIconView, presenceIconView, incompleteIconView, fileSizeLabel, needsLoadIconView, selectionIconView, selectionButton] {
             v.translatesAutoresizingMaskIntoConstraints = false
         }
+        let incompleteBottom = incompleteIconView.bottomAnchor.constraint(equalTo: contentView.bottomAnchor, constant: -6)
+        incompleteBottomConstraint = incompleteBottom
         NSLayoutConstraint.activate([
             imageView.topAnchor.constraint(equalTo: contentView.topAnchor),
             imageView.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
@@ -3059,12 +3162,16 @@ private final class MediaBrowserGridCell: UICollectionViewCell {
             videoIconView.heightAnchor.constraint(equalToConstant: 18),
 
             incompleteIconView.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -6),
-            incompleteIconView.bottomAnchor.constraint(equalTo: contentView.bottomAnchor, constant: -6),
+            incompleteBottom,
             incompleteIconView.widthAnchor.constraint(equalToConstant: 16),
             incompleteIconView.heightAnchor.constraint(equalToConstant: 16),
 
+            fileSizeLabel.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -6),
+            fileSizeLabel.centerYAnchor.constraint(equalTo: videoIconView.centerYAnchor),
+            fileSizeLabel.leadingAnchor.constraint(greaterThanOrEqualTo: contentView.leadingAnchor, constant: 28),
+
             livePhotoIconView.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 6),
-            livePhotoIconView.bottomAnchor.constraint(equalTo: contentView.bottomAnchor, constant: -6),
+            livePhotoIconView.centerYAnchor.constraint(equalTo: videoIconView.centerYAnchor),
             livePhotoIconView.widthAnchor.constraint(equalToConstant: 16),
             livePhotoIconView.heightAnchor.constraint(equalToConstant: 16),
 

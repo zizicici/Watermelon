@@ -1445,7 +1445,10 @@ final class HomeViewController: UIViewController {
                 photoLibraryService: dependencies.photoLibraryService,
                 hashIndexRepository: dependencies.hashIndexRepository,
                 presenceIndex: presenceIndex,
-                query: query
+                query: query,
+                fileSizeLoader: { [dataManager = store.dataManager] identifiers in
+                    await dataManager.browserFileSizes(for: identifiers)
+                }
             )
         }
         func makeRemoteService() -> RemoteThumbnailService? {

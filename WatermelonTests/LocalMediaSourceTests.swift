@@ -3,6 +3,58 @@ import XCTest
 @testable import Watermelon
 
 final class LocalMediaSourceTests: XCTestCase {
+    private actor SizeLoader {
+        private(set) var requests: [Set<String>] = []
+
+        func load(_ identifiers: Set<String>) -> [String: Int64] {
+            requests.append(identifiers)
+            return ["sized": 12_345]
+        }
+    }
+
+    @MainActor
+    func testSizeLoadingIsOptInAndPreservesLocalIdentity() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let dependencies = DependencyContainer(
+            databaseManager: try DatabaseManager(databaseURL: directory.appendingPathComponent("index.sqlite")),
+            reconcileOneDriveAccounts: false
+        )
+        defer { try? dependencies.databaseManager.dbQueue.close() }
+        let seed = HomeBrowserLocalSeed(localIDByFingerprint: [:], assets: [
+            .init(localIdentifier: "sized", month: .init(year: 2026, month: 1), kind: .livePhoto,
+                  creationDateMs: 1, fingerprint: nil),
+            .init(localIdentifier: "unknown", month: .init(year: 2026, month: 1), kind: .video,
+                  creationDateMs: 2, fingerprint: nil),
+        ], monthGroupingTimeZone: .frozenCurrent())
+        let presence = LibraryPresenceIndex(
+            hashIndexRepository: dependencies.hashIndexRepository,
+            coordinator: dependencies.backupCoordinator,
+            profileKey: { nil },
+            homeLocalSeedProvider: { seed }
+        )
+        let loader = SizeLoader()
+        let source: MediaBrowserSource = LocalMediaSource(
+            photoLibraryService: dependencies.photoLibraryService,
+            hashIndexRepository: dependencies.hashIndexRepository,
+            presenceIndex: presence,
+            fileSizeLoader: { await loader.load($0) }
+        )
+        guard case .loaded(let months) = await source.load(),
+              case .loaded(let sized) = await source.load(includeFileSizes: true) else {
+            return XCTFail("Expected seeded local content")
+        }
+        let requests = await loader.requests
+        XCTAssertEqual(requests, [["sized", "unknown"]])
+        XCTAssertEqual(months.sections.flatMap(\.items).map(\.id), sized.sections.flatMap(\.items).map(\.id))
+        XCTAssertTrue(months.sections.flatMap(\.items).allSatisfy { $0.fileSize == nil })
+        let byID = Dictionary(uniqueKeysWithValues: sized.sections.flatMap(\.items).map { ($0.id, $0) })
+        XCTAssertEqual(byID[.local("sized")]?.fileSize, 12_345)
+        XCTAssertNil(byID[.local("unknown")]?.fileSize)
+        XCTAssertEqual(byID[.local("sized")]?.kind, .livePhoto)
+    }
+
     func testHomeSeedProjectionGroupsSortsAndAppliesPresence() throws {
         let january = LibraryMonthKey(year: 2026, month: 1)
         let february = LibraryMonthKey(year: 2026, month: 2)

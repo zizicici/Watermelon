@@ -106,6 +106,7 @@ protocol MediaBrowserSource: AnyObject, Sendable {
     var mode: MediaBrowserMode { get }
 
     func load() async -> MediaBrowserLoadResult
+    func load(includeFileSizes: Bool) async -> MediaBrowserLoadResult
 
     // Grid thumbnail (small, cached). Nil → the cell shows a placeholder.
     func thumbnail(for item: MediaBrowserItem) async -> UIImage?
@@ -131,6 +132,10 @@ protocol MediaBrowserSource: AnyObject, Sendable {
 }
 
 extension MediaBrowserSource {
+    func load(includeFileSizes: Bool) async -> MediaBrowserLoadResult {
+        await load()
+    }
+
     func actions(for item: MediaBrowserItem) -> [MediaBrowserActionKind] {
         MediaBrowserActionPolicy.actions(
             for: item,

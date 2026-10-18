@@ -19,6 +19,12 @@ enum MediaBrowserMode: Hashable, Sendable {
         case .merged: [.all, .localOnly, .remoteOnly]
         }
     }
+
+    var filterGroupTitle: String {
+        self == .local
+            ? String(localized: "mediaBrowser.filter.backupStatus")
+            : String(localized: "mediaBrowser.filter.location")
+    }
 }
 
 enum MediaBrowserFilter: Sendable {
@@ -27,10 +33,12 @@ enum MediaBrowserFilter: Sendable {
     case backedUp
     case remoteOnly
 
-    var title: String {
+    func title(in mode: MediaBrowserMode) -> String {
         switch self {
         case .all: String(localized: "mediaBrowser.filter.all")
-        case .localOnly: String(localized: "mediaBrowser.filter.localOnly")
+        case .localOnly: mode == .local
+            ? String(localized: "mediaBrowser.filter.notBackedUp")
+            : String(localized: "mediaBrowser.filter.localOnly")
         case .backedUp: String(localized: "mediaBrowser.filter.backedUp")
         case .remoteOnly: String(localized: "mediaBrowser.filter.remoteOnly")
         }
@@ -42,6 +50,91 @@ enum MediaBrowserFilter: Sendable {
         case .localOnly: item.presence == .localOnly
         case .backedUp: item.presence == .both
         case .remoteOnly: item.presence == .remoteOnly
+        }
+    }
+}
+
+enum MediaBrowserSortOrder: CaseIterable, Sendable {
+    case month
+    case fileSize
+
+    var title: String {
+        switch self {
+        case .month: String(localized: "mediaBrowser.sort.month")
+        case .fileSize: String(localized: "mediaBrowser.sort.fileSize")
+        }
+    }
+}
+
+enum MediaBrowserMediaFilter: CaseIterable, Sendable {
+    case all
+    case photos
+    case videos
+
+    var title: String {
+        switch self {
+        case .all: String(localized: "mediaBrowser.filter.all")
+        case .photos: String(localized: "home.localSource.photos")
+        case .videos: String(localized: "home.localSource.videos")
+        }
+    }
+
+    func includes(_ item: MediaBrowserItem) -> Bool {
+        switch self {
+        case .all: true
+        case .photos: !item.isVideo
+        case .videos: item.isVideo
+        }
+    }
+}
+
+enum MediaBrowserSizeRange: CaseIterable, Hashable, Sendable {
+    case atLeast1GB
+    case from100MBTo1GB
+    case from10MBTo100MB
+    case from1MBTo10MB
+    case below1MB
+    case unknown
+
+    static func containing(_ fileSize: Int64?) -> Self {
+        guard let fileSize, fileSize >= 0 else { return .unknown }
+        switch fileSize {
+        case 1_000_000_000...: return .atLeast1GB
+        case 100_000_000...: return .from100MBTo1GB
+        case 10_000_000...: return .from10MBTo100MB
+        case 1_000_000...: return .from1MBTo10MB
+        default: return .below1MB
+        }
+    }
+
+    var title: String {
+        func size(_ bytes: Int64) -> String {
+            ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
+        }
+        switch self {
+        case .atLeast1GB:
+            return String(format: String(localized: "mediaBrowser.size.atLeast"), size(1_000_000_000))
+        case .from100MBTo1GB:
+            return String(format: String(localized: "mediaBrowser.size.range"), size(100_000_000), size(1_000_000_000))
+        case .from10MBTo100MB:
+            return String(format: String(localized: "mediaBrowser.size.range"), size(10_000_000), size(100_000_000))
+        case .from1MBTo10MB:
+            return String(format: String(localized: "mediaBrowser.size.range"), size(1_000_000), size(10_000_000))
+        case .below1MB:
+            return String(format: String(localized: "mediaBrowser.size.below"), size(1_000_000))
+        case .unknown: return String(localized: "mediaBrowser.size.unknown")
+        }
+    }
+}
+
+enum MediaBrowserSectionID: Hashable, Sendable {
+    case month(LibraryMonthKey)
+    case fileSize(MediaBrowserSizeRange)
+
+    var title: String {
+        switch self {
+        case .month(let month): month.displayText
+        case .fileSize(let range): range.title
         }
     }
 }
@@ -91,6 +184,7 @@ struct MediaBrowserItem: Hashable, Sendable {
     let id: MediaBrowserItemID
     let kind: AlbumMediaKind
     let creationDateMs: Int64
+    var fileSize: Int64?
     private(set) var backing: MediaBrowserBacking
 
     var presence: MediaPresence {
@@ -163,11 +257,13 @@ struct MediaBrowserItem: Hashable, Sendable {
         creationDateMs: Int64,
         localIdentifier: String,
         fingerprint: Data?,
-        isBackedUp: Bool
+        isBackedUp: Bool,
+        fileSize: Int64? = nil
     ) {
         id = .local(localIdentifier)
         self.kind = kind
         self.creationDateMs = creationDateMs
+        self.fileSize = fileSize
         backing = .local(
             LocalMediaReference(identifier: localIdentifier, fingerprint: fingerprint),
             isBackedUp: isBackedUp
@@ -178,7 +274,8 @@ struct MediaBrowserItem: Hashable, Sendable {
         kind: AlbumMediaKind,
         creationDateMs: Int64,
         localIdentifier: String?,
-        remote: RemoteMediaReference
+        remote: RemoteMediaReference,
+        fileSize: Int64? = nil
     ) {
         id = .remote(
             fingerprint: remote.fingerprint,
@@ -186,6 +283,7 @@ struct MediaBrowserItem: Hashable, Sendable {
         )
         self.kind = kind
         self.creationDateMs = creationDateMs
+        self.fileSize = fileSize
         backing = .remote(
             remote,
             local: localIdentifier.map { LocalMediaReference(identifier: $0, fingerprint: remote.fingerprint) }
@@ -289,18 +387,56 @@ struct MediaBrowserSection: Hashable, Sendable {
 struct MediaBrowserSnapshot: Sendable {
     static let empty = MediaBrowserSnapshot(sections: [])
 
-    let months: [LibraryMonthKey]
-    private let sections: [MediaBrowserSection]
+    private struct Section: Sendable {
+        let id: MediaBrowserSectionID
+        let items: [MediaBrowserItem]
+    }
+
+    let sectionIDs: [MediaBrowserSectionID]
+    let sortOrder: MediaBrowserSortOrder
+    var months: [LibraryMonthKey] {
+        sectionIDs.compactMap { if case .month(let month) = $0 { month } else { nil } }
+    }
+    private let sections: [Section]
     private let sectionOffsets: [Int]
     private let itemIndexByID: [MediaBrowserItemID: Int]
 
-    init(sections: [MediaBrowserSection], filter: MediaBrowserFilter = .all) {
-        let sections = filter == .all ? sections : sections.compactMap { section in
-            let items = section.items.filter { filter.includes($0) }
+    init(
+        sections: [MediaBrowserSection],
+        filter: MediaBrowserFilter = .all,
+        mediaFilter: MediaBrowserMediaFilter = .all,
+        sortOrder: MediaBrowserSortOrder = .month
+    ) {
+        let sourceSections = filter == .all && mediaFilter == .all ? sections : sections.compactMap { section in
+            let items = section.items.filter { filter.includes($0) && mediaFilter.includes($0) }
             return items.isEmpty ? nil : MediaBrowserSection(month: section.month, items: items)
         }
-        self.sections = sections
-        months = sections.map(\.month)
+        let displaySections: [Section]
+        switch sortOrder {
+        case .month:
+            displaySections = sourceSections.map { Section(id: .month($0.month), items: $0.items) }
+        case .fileSize:
+            let items = sourceSections.flatMap(\.items).sorted { lhs, rhs in
+                let lhsSize = max(-1, lhs.fileSize ?? -1)
+                let rhsSize = max(-1, rhs.fileSize ?? -1)
+                if lhsSize != rhsSize {
+                    return lhsSize > rhsSize
+                }
+                if lhs.creationDateMs != rhs.creationDateMs {
+                    return lhs.creationDateMs > rhs.creationDateMs
+                }
+                return lhs.id < rhs.id
+            }
+            let bySize = Dictionary(grouping: items) { MediaBrowserSizeRange.containing($0.fileSize) }
+            displaySections = MediaBrowserSizeRange.allCases.compactMap { range in
+                guard let items = bySize[range] else { return nil }
+                return Section(id: .fileSize(range), items: items)
+            }
+        }
+        self.sections = displaySections
+        self.sortOrder = sortOrder
+        sectionIDs = displaySections.map(\.id)
+        let sections = displaySections
         let itemCount = sections.reduce(0) { $0 + $1.items.count }
         var offsets: [Int] = []
         offsets.reserveCapacity(sections.count + 1)

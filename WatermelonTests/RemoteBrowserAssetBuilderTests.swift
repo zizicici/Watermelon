@@ -39,6 +39,41 @@ final class RemoteBrowserAssetBuilderTests: XCTestCase {
         XCTAssertFalse(MonthManifestStore.hasBackedUpMedia(links: [], isResourceAvailable: isAvail))
     }
 
+    func testFileSizeUsesResolvedResourcesInsteadOfDeclaredAssetTotal() throws {
+        let photoHash = Data([1])
+        let videoHash = Data([2])
+        let adjustmentHash = Data([3])
+        let variants = [
+            [(photoHash, ResourceTypeCode.photo), (videoHash, ResourceTypeCode.pairedVideo), (adjustmentHash, ResourceTypeCode.adjustmentData)],
+            [(photoHash, ResourceTypeCode.photo), (Data([9]), ResourceTypeCode.pairedVideo)],
+            [(photoHash, ResourceTypeCode.photo), (photoHash, ResourceTypeCode.fullSizePhoto)],
+        ]
+        var assets: [RemoteManifestAsset] = []
+        var links: [RemoteAssetResourceLink] = []
+        for variant in variants {
+            let prototypes = variant.map { link(Data(), $0.0, role: $0.1) }
+            let fp = fingerprint(of: prototypes)
+            assets.append(asset(fp, count: variant.count))
+            links += variant.map { link(fp, $0.0, role: $0.1) }
+        }
+        let delta = RemoteLibraryMonthDelta(
+            month: monthKey,
+            resources: [resource("photo.jpg", photoHash, role: ResourceTypeCode.photo),
+                        resource("video.mov", videoHash, role: ResourceTypeCode.pairedVideo),
+                        resource("adjustment.aae", adjustmentHash, role: ResourceTypeCode.adjustmentData)],
+            assets: assets,
+            assetResourceLinks: links
+        )
+        let built = RemoteBrowserAssetBuilder.build(from: .init(
+            revision: 1, isFullSnapshot: true, monthDeltas: [delta], profileKey: "p"
+        ))
+        let byFingerprint = Dictionary(uniqueKeysWithValues: (built.assetsByMonth[monthKey] ?? []).map { ($0.fingerprint, $0) })
+        XCTAssertEqual(try XCTUnwrap(byFingerprint[assets[0].assetFingerprint]).fileSize, 300)
+        XCTAssertEqual(try XCTUnwrap(byFingerprint[assets[1].assetFingerprint]).fileSize, 100)
+        XCTAssertEqual(try XCTUnwrap(byFingerprint[assets[2].assetFingerprint]).fileSize, 100)
+        XCTAssertTrue(try XCTUnwrap(byFingerprint[assets[1].assetFingerprint]).isIncomplete)
+    }
+
     func testBuilderFlagsIncompleteAndDropsUndisplayable() {
         let hPhoto = Data([1]); let hPhotoB = Data([2]); let hMissing = Data([9]); let hMeta = Data([7])
 
@@ -76,6 +111,7 @@ final class RemoteBrowserAssetBuilderTests: XCTestCase {
         XCTAssertEqual(byFp[fpPartial], true, "partial-but-has-media asset shown, flagged incomplete")
         XCTAssertNil(byFp[fpMeta], "config-only (metadata) asset is dropped (no real media, not a backup)")
         XCTAssertNil(byFp[fpGhost], "fully-unresolvable asset is dropped (nothing to display)")
+        XCTAssertTrue((built.assetsByMonth[monthKey] ?? []).allSatisfy { $0.fileSize == 100 })
 
         var metrics: RemoteBrowserProjectionMetrics?
         let projection = RemoteBrowserAssetBuilder.buildProjection(

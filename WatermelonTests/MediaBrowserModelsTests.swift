@@ -163,6 +163,115 @@ final class MediaBrowserModelsTests: XCTestCase {
         XCTAssertEqual(current.changedItemIDs(comparedTo: previous), [updated.id])
     }
 
+    func testFileSizeSortSpansMonthsAndUsesStableTiesWithUnknownSizesLast() {
+        func item(_ id: String, size: Int64?, date: Int64) -> MediaBrowserItem {
+            MediaBrowserItem(kind: .photo, creationDateMs: date, localIdentifier: id,
+                             fingerprint: nil, isBackedUp: false, fileSize: size)
+        }
+        let unknown = item("unknown", size: nil, date: 10)
+        let small = item("small", size: 10, date: 9)
+        let tieB = item("b", size: 100, date: 5)
+        let tieA = item("a", size: 100, date: 5)
+        let recent = item("recent", size: 100, date: 6)
+        let large = item("large", size: 1_000, date: 1)
+        let sections = [
+            MediaBrowserSection(month: .init(year: 2024, month: 2), items: [unknown, small, tieB]),
+            MediaBrowserSection(month: month, items: [tieA, recent, large]),
+        ]
+        let sorted = MediaBrowserSnapshot(sections: sections, sortOrder: .fileSize)
+        let expected = [large, recent, tieA, tieB, small, unknown]
+
+        XCTAssertEqual(sorted.sectionIDs, [.fileSize(.below1MB), .fileSize(.unknown)])
+        XCTAssertEqual(sorted.itemCount, expected.count)
+        XCTAssertEqual(sorted.itemIDs(inSection: 0), expected.dropLast().map(\.id))
+        XCTAssertEqual(sorted.itemIDs(inSection: 1), [unknown.id])
+        XCTAssertEqual(sorted.items(inDisplayOrderFor: Set(expected.map(\.id))), expected)
+        for (index, item) in expected.enumerated() {
+            XCTAssertEqual(sorted.item(at: index), item)
+            XCTAssertEqual(sorted.index(of: item.id), index)
+        }
+        let restored = MediaBrowserSnapshot(sections: sections)
+        XCTAssertEqual(restored.months, sections.map(\.month))
+        XCTAssertEqual(restored.item(at: 0), unknown)
+    }
+
+    func testFileSizeSortCombinesWithPresenceFilterAndEmptyResults() {
+        let unbacked = MediaBrowserItem(kind: .photo, creationDateMs: 1, localIdentifier: "unbacked",
+                                       fingerprint: nil, isBackedUp: false, fileSize: 100)
+        let backed = MediaBrowserItem(kind: .photo, creationDateMs: 2, localIdentifier: "backed",
+                                     fingerprint: Data([1]), isBackedUp: true, fileSize: 1_000)
+        let sections = [MediaBrowserSection(month: month, items: [backed, unbacked])]
+        let filtered = MediaBrowserSnapshot(sections: sections, filter: .localOnly, sortOrder: .fileSize)
+        XCTAssertEqual(filtered.itemIDs(inSection: 0), [unbacked.id])
+        XCTAssertNil(filtered.item(id: backed.id))
+        let empty = MediaBrowserSnapshot(sections: sections, filter: .remoteOnly, sortOrder: .fileSize)
+        XCTAssertTrue(empty.isEmpty)
+        XCTAssertTrue(empty.sectionIDs.isEmpty)
+    }
+
+    func testSizeSectionBoundariesUseDecimalBytesAndKeepUnknownLast() {
+        let cases: [(Int64?, MediaBrowserSizeRange)] = [
+            (nil, .unknown), (-1, .unknown), (0, .below1MB), (999_999, .below1MB),
+            (1_000_000, .from1MBTo10MB), (9_999_999, .from1MBTo10MB),
+            (10_000_000, .from10MBTo100MB), (99_999_999, .from10MBTo100MB),
+            (100_000_000, .from100MBTo1GB), (999_999_999, .from100MBTo1GB),
+            (1_000_000_000, .atLeast1GB), (Int64.max, .atLeast1GB),
+        ]
+        let items = cases.enumerated().map { index, value in
+            MediaBrowserItem(kind: .photo, creationDateMs: Int64(index), localIdentifier: "asset-\(index)",
+                             fingerprint: nil, isBackedUp: false, fileSize: value.0)
+        }
+        for (size, expected) in cases {
+            XCTAssertEqual(MediaBrowserSizeRange.containing(size), expected)
+        }
+        let snapshot = MediaBrowserSnapshot(sections: [
+            .init(month: month, items: items),
+        ], sortOrder: .fileSize)
+        XCTAssertEqual(snapshot.sectionIDs, MediaBrowserSizeRange.allCases.map { .fileSize($0) })
+        let expectedOrder = [11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0].map { items[$0] }
+        XCTAssertEqual(snapshot.items(inDisplayOrderFor: Set(items.map(\.id))), expectedOrder)
+        for (index, item) in expectedOrder.enumerated() {
+            XCTAssertEqual(snapshot.item(at: index), item)
+            XCTAssertEqual(snapshot.index(of: item.id), index)
+        }
+    }
+
+    func testMediaFilterIncludesLivePhotosAndCombinesWithPresenceAndBothSortOrders() {
+        let photo = MediaBrowserItem(kind: .photo, creationDateMs: 4, localIdentifier: "photo",
+                                     fingerprint: nil, isBackedUp: false, fileSize: 2_000_000)
+        let live = MediaBrowserItem(kind: .livePhoto, creationDateMs: 3, localIdentifier: "live",
+                                    fingerprint: nil, isBackedUp: true, fileSize: 12_000_000)
+        let video = MediaBrowserItem(kind: .video, creationDateMs: 2, localIdentifier: "video",
+                                     fingerprint: nil, isBackedUp: false, fileSize: 200_000_000)
+        let remoteVideo = MediaBrowserItem(kind: .video, creationDateMs: 1, localIdentifier: nil,
+            remote: .init(fingerprint: Data([4]), photoRelativePath: nil, videoRelativePath: "video.mov",
+                          photoContentHash: nil, videoContentHash: nil, storageMonth: month, isIncomplete: false),
+            fileSize: 1_000_000_000)
+        let sections = [
+            MediaBrowserSection(month: .init(year: 2024, month: 2), items: [photo, live]),
+            MediaBrowserSection(month: month, items: [video, remoteVideo]),
+        ]
+        for order in MediaBrowserSortOrder.allCases {
+            let photos = MediaBrowserSnapshot(sections: sections, mediaFilter: .photos, sortOrder: order)
+            XCTAssertEqual(Set(photos.itemIDs), [photo.id, live.id])
+            let videos = MediaBrowserSnapshot(sections: sections, mediaFilter: .videos, sortOrder: order)
+            XCTAssertEqual(Set(videos.itemIDs), [video.id, remoteVideo.id])
+            let backedPhotos = MediaBrowserSnapshot(sections: sections, filter: .backedUp, mediaFilter: .photos, sortOrder: order)
+            XCTAssertEqual(Set(backedPhotos.itemIDs), [live.id])
+            let localVideos = MediaBrowserSnapshot(sections: sections, filter: .localOnly, mediaFilter: .videos, sortOrder: order)
+            XCTAssertEqual(Set(localVideos.itemIDs), [video.id])
+            let remoteVideos = MediaBrowserSnapshot(sections: sections, filter: .remoteOnly, mediaFilter: .videos, sortOrder: order)
+            XCTAssertEqual(Set(remoteVideos.itemIDs), [remoteVideo.id])
+            let empty = MediaBrowserSnapshot(sections: sections, filter: .remoteOnly, mediaFilter: .photos, sortOrder: order)
+            XCTAssertTrue(empty.isEmpty)
+            XCTAssertTrue(empty.sectionIDs.isEmpty)
+        }
+        let photosByMonth = MediaBrowserSnapshot(sections: sections, mediaFilter: .photos)
+        XCTAssertEqual(photosByMonth.months, [.init(year: 2024, month: 2)])
+        let photosBySize = MediaBrowserSnapshot(sections: sections, mediaFilter: .photos, sortOrder: .fileSize)
+        XCTAssertEqual(photosBySize.sectionIDs, [.fileSize(.from10MBTo100MB), .fileSize(.from1MBTo10MB)])
+    }
+
     func testSnapshotReportsNoChangesForEquivalentReload() {
         let item = MediaBrowserItem(
             kind: .video,

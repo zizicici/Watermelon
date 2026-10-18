@@ -18,6 +18,7 @@ struct RemoteBrowserAsset: Hashable, Sendable {
     // The manifest record is incomplete: only the resolvable subset can be downloaded, producing a new,
     // differently-fingerprinted asset. Shown (marked), not hidden — the user decides at download time.
     let isIncomplete: Bool
+    let fileSize: Int64?
 
     var fingerprintHex: String { fingerprint.hexString }
 }
@@ -396,6 +397,7 @@ enum RemoteBrowserAssetBuilder {
         let isVideo: Bool
         let photoResource: RemoteManifestResource?
         let videoResource: RemoteManifestResource?
+        let fileSize: Int64?
     }
 
     private static func analyzeLinks(
@@ -410,6 +412,8 @@ enum RemoteBrowserAssetBuilder {
         var hasPairedVideo = false
         var photo = PreferredResource()
         var video = PreferredResource()
+        var sizedHashes = Set<Data>()
+        var totalFileSize: Int64 = 0
 
         for link in links {
             if !ResourceRole.isMetadataOnly(link.role) {
@@ -418,6 +422,9 @@ enum RemoteBrowserAssetBuilder {
             guard let resource = resourceByHash[link.resourceHash] else {
                 allResourcesAvailable = false
                 continue
+            }
+            if sizedHashes.insert(link.resourceHash).inserted {
+                totalFileSize += max(0, resource.fileSize)
             }
             if let rank = ResourceRole.displaySelectionRank(
                 role: link.role,
@@ -459,7 +466,8 @@ enum RemoteBrowserAssetBuilder {
             isLivePhoto: classification.isLivePhoto,
             isVideo: classification.isVideo,
             photoResource: photo.resource,
-            videoResource: video.resource
+            videoResource: video.resource,
+            fileSize: totalFileSize > 0 ? totalFileSize : nil
         )
     }
 
@@ -481,7 +489,8 @@ enum RemoteBrowserAssetBuilder {
             videoRemoteRelativePath: analysis.videoResource?.remoteRelativePath,
             photoContentHash: recordedHash(analysis.photoResource),
             videoContentHash: recordedHash(analysis.videoResource),
-            isIncomplete: analysis.isIncomplete
+            isIncomplete: analysis.isIncomplete,
+            fileSize: analysis.fileSize
         )
     }
 

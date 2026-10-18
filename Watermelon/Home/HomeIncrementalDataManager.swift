@@ -54,6 +54,10 @@ final class HomeIncrementalDataManager: NSObject, PHPhotoLibraryChangeObserver {
         await processingWorker.browserLocalSeed(expectedScope: expectedScope)
     }
 
+    func browserFileSizes(for identifiers: Set<String>) async -> [String: Int64] {
+        await processingWorker.browserFileSizes(for: identifiers)
+    }
+
     @discardableResult
     func ensureLocalIndexLoaded() async -> Bool {
         await loadLocalIndex(forceReload: false)

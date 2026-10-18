@@ -12,31 +12,57 @@ final class LocalMediaSource: MediaBrowserSource, @unchecked Sendable {
     private let presenceIndex: LibraryPresenceIndex
     // Which on-device assets this source browses.
     private let query: PhotoLibraryQuery
+    private let fileSizeLoader: @Sendable (Set<String>) async -> [String: Int64]
 
-    init(photoLibraryService: PhotoLibraryService, hashIndexRepository: ContentHashIndexRepository, presenceIndex: LibraryPresenceIndex, query: PhotoLibraryQuery = .library(.all)) {
+    init(
+        photoLibraryService: PhotoLibraryService,
+        hashIndexRepository: ContentHashIndexRepository,
+        presenceIndex: LibraryPresenceIndex,
+        query: PhotoLibraryQuery = .library(.all),
+        fileSizeLoader: @escaping @Sendable (Set<String>) async -> [String: Int64]
+    ) {
         self.photoLibraryService = photoLibraryService
         self.hashIndexRepository = hashIndexRepository
         self.presenceIndex = presenceIndex
         self.query = query
+        self.fileSizeLoader = fileSizeLoader
     }
 
     func load() async -> MediaBrowserLoadResult {
+        await load(includeFileSizes: false)
+    }
+
+    func load(includeFileSizes: Bool) async -> MediaBrowserLoadResult {
         let presenceStartedAt = CFAbsoluteTimeGetCurrent()
         guard await presenceIndex.refresh(notifyOnCommit: false) else {
             return Task.isCancelled ? .cancelled : .stale
         }
         MediaBrowserLoadTrace.emit("localPresence", startedAt: presenceStartedAt)
-        return await loadUsingCurrentPresence()
+        return await loadUsingCurrentPresence(includeFileSizes: includeFileSizes)
     }
 
-    func loadUsingCurrentPresence(
+    @concurrent func loadUsingCurrentPresence(
         excludingBackedUpFingerprints: Set<Data> = [],
-        monthGroupingTimeZone: MonthGroupingTimeZonePreference = .frozenCurrent()
+        monthGroupingTimeZone: MonthGroupingTimeZonePreference = .frozenCurrent(),
+        includeFileSizes: Bool = false
     ) async -> MediaBrowserLoadResult {
-        let sections = await projectUsingCurrentPresence(
+        var sections = await projectUsingCurrentPresence(
             excludingBackedUpFingerprints: excludingBackedUpFingerprints,
             monthGroupingTimeZone: monthGroupingTimeZone
         )
+        if includeFileSizes, !Task.isCancelled {
+            let identifiers = Set(sections.flatMap { $0.items.compactMap(\.localIdentifier) })
+            let sizes = await fileSizeLoader(identifiers)
+            sections = await withCancellableDetachedValue(priority: .userInitiated) { [sections] in
+                sections.map { section in
+                    MediaBrowserSection(month: section.month, items: section.items.map { item in
+                        var item = item
+                        item.fileSize = item.localIdentifier.flatMap { sizes[$0] }
+                        return item
+                    })
+                }
+            }
+        }
         guard !Task.isCancelled else { return .cancelled }
         guard monthGroupingTimeZone == .frozenCurrent() else { return .stale }
         return .loaded(MediaBrowserContent(sections: sections))

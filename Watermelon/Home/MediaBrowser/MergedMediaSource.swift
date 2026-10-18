@@ -17,6 +17,10 @@ final class MergedMediaSource: MediaBrowserSource, @unchecked Sendable {
     }
 
     func load() async -> MediaBrowserLoadResult {
+        await load(includeFileSizes: false)
+    }
+
+    func load(includeFileSizes: Bool) async -> MediaBrowserLoadResult {
         let childrenStartedAt = CFAbsoluteTimeGetCurrent()
         let projection: RemoteBrowserProjection
         switch await remoteSource.prepareProjection() {
@@ -30,7 +34,8 @@ final class MergedMediaSource: MediaBrowserSource, @unchecked Sendable {
         async let remote = remoteSource.load(projection: projection)
         async let local = localSource.loadUsingCurrentPresence(
             excludingBackedUpFingerprints: projection.backedUpFingerprints,
-            monthGroupingTimeZone: projection.monthGroupingTimeZone
+            monthGroupingTimeZone: projection.monthGroupingTimeZone,
+            includeFileSizes: includeFileSizes
         )
         let (remoteResult, localResult) = await (remote, local)
         guard !Task.isCancelled else { return .cancelled }

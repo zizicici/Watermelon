@@ -97,6 +97,46 @@ final class HomeDataProcessingWorker: @unchecked Sendable {
         }
     }
 
+    @concurrent func browserFileSizes(for identifiers: Set<String>) async -> [String: Int64] {
+        guard !identifiers.isEmpty, !Task.isCancelled else { return [:] }
+        let repository = contentHashIndexRepository
+        let cache = await withCancellableDetachedValue(priority: .userInitiated) {
+            (try? repository.fetchAssetSizes()) ?? [:]
+        }
+        let identifiers = Array(identifiers)
+        var sizes: [String: Int64] = [:]
+        sizes.reserveCapacity(identifiers.count)
+        for start in stride(from: 0, to: identifiers.count, by: 200) {
+            guard !Task.isCancelled else { return [:] }
+            let batch = Set(identifiers[start ..< min(start + 200, identifiers.count)])
+            let assets: [PHAsset] = await withCheckedContinuation { continuation in
+                processingQueue.async {
+                    continuation.resume(returning: self.photoLibraryService.fetchAssets(localIdentifiers: batch))
+                }
+            }
+            let batchSizes: [String: Int64] = autoreleasepool {
+                var result: [String: Int64] = [:]
+                for asset in assets {
+                    guard !Task.isCancelled else { return [:] }
+                    if let cached = cache[asset.localIdentifier],
+                       let mtime = asset.modificationDate?.millisecondsSinceEpoch,
+                       cached.modificationDateMs == mtime {
+                        result[asset.localIdentifier] = cached.totalFileSizeBytes
+                        continue
+                    }
+                    let resources = PHAssetResource.assetResources(for: asset)
+                    let size = resources.reduce(Int64(0)) {
+                        $0 + max(0, PhotoLibraryService.resourceFileSize($1))
+                    }
+                    if size > 0 { result[asset.localIdentifier] = size }
+                }
+                return result
+            }
+            sizes.merge(batchSizes) { _, new in new }
+        }
+        return sizes
+    }
+
     // Helpers bound to the processing queue: the engines that accept these closures
     // are only invoked while we're already executing on processingQueue.
     //

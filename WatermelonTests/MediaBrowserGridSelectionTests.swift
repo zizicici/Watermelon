@@ -5,6 +5,162 @@ import XCTest
 
 @MainActor
 final class MediaBrowserGridSelectionTests: XCTestCase {
+    func testSizeSortMenuSelectionLabelsAndSwitchBack() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let dependencies = DependencyContainer(databaseManager: try DatabaseManager(databaseURL: directory.appendingPathComponent("index.sqlite")),
+            reconcileOneDriveAccounts: false)
+        defer { try? dependencies.databaseManager.dbQueue.close() }
+        let presence = LibraryPresenceIndex(hashIndexRepository: dependencies.hashIndexRepository,
+            coordinator: dependencies.backupCoordinator, profileKey: { nil })
+        let runner = MediaBrowserActionRunner(env: .init(appSession: dependencies.appSession,
+            backupCoordinator: dependencies.backupCoordinator, restoreService: dependencies.restoreService,
+            photoLibraryService: dependencies.photoLibraryService, hashIndexRepository: dependencies.hashIndexRepository,
+            localHashIndexBuildService: dependencies.localHashIndexBuildService,
+            localIndexChangePublisher: dependencies.localIndexChangePublisher, allAccessibleAssetIDs: { [] },
+            presenceIndex: presence, appRuntimeFlags: dependencies.appRuntimeFlags, isTaskActive: { false },
+            iCloudPhotoBackupMode: { .disable }, monthGroupingTimeZone: { .frozenCurrent() }))
+        let small = MediaBrowserItem(kind: .photo, creationDateMs: 2, localIdentifier: "small",
+                                     fingerprint: nil, isBackedUp: false, fileSize: 1_000_000)
+        let large = MediaBrowserItem(kind: .livePhoto, creationDateMs: 1, localIdentifier: "large",
+                                     fingerprint: nil, isBackedUp: true, fileSize: 100_000_000)
+        let unknown = MediaBrowserItem(kind: .video, creationDateMs: 0, localIdentifier: "unknown",
+                                       fingerprint: nil, isBackedUp: false)
+        let source = SelectionSource(items: [small, large, unknown])
+        let controller = MediaBrowserGridViewController(
+            specs: [.init(mode: .local, isAvailable: { true }, makeSource: { source }),
+                    .init(mode: .remote, isAvailable: { true }, makeSource: { source })],
+            initialMode: .local, initialMonth: nil, remoteStorageImage: { nil }, sessionToken: { nil },
+            actionRunner: runner, presenceIndex: presence, title: "Browser")
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let previousKeyWindow = scene.keyWindow
+        let window = UIWindow(windowScene: scene)
+        window.rootViewController = UINavigationController(rootViewController: controller)
+        window.makeKeyAndVisible()
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+            previousKeyWindow?.makeKey()
+        }
+        controller.loadViewIfNeeded()
+        let collection = try XCTUnwrap(controller.view.subviews.compactMap { $0 as? UICollectionView }.first)
+        try await waitUntil {
+            controller.view.layoutIfNeeded()
+            return collection.numberOfSections == 1 && collection.numberOfItems(inSection: 0) == 3
+        }
+        let dataSource = try XCTUnwrap(collection.dataSource as? UICollectionViewDiffableDataSource<MediaBrowserSectionID, MediaBrowserItemID>)
+        XCTAssertEqual(source.loadRequests, [false])
+        let filterButton = try XCTUnwrap(controller.navigationItem.trailingItemGroups.first?.barButtonItems.first)
+        let groups = try XCTUnwrap(filterButton.menu).children.compactMap { $0 as? UIMenu }
+        XCTAssertEqual(groups.count, 3)
+        XCTAssertTrue(groups.allSatisfy { $0.options.contains(.displayInline) && $0.options.contains(.singleSelection) })
+        XCTAssertEqual(groups.map(\.title), [String(localized: "mediaBrowser.sort"), String(localized: "mediaBrowser.filter.mediaType"), MediaBrowserMode.local.filterGroupTitle])
+        XCTAssertEqual(groups[0].children.count, 2)
+        XCTAssertEqual(groups[1].children.count, 3)
+        XCTAssertEqual(groups[2].children.count, 3)
+        XCTAssertEqual(groups[2].children.compactMap { ($0 as? UIAction)?.title }, MediaBrowserMode.local.availableFilters.map { $0.title(in: .local) })
+
+        controller.perform(NSSelectorFromString("enterSelection"))
+        controller.perform(NSSelectorFromString("selectAllItems"))
+        controller.setSortOrder(.fileSize)
+        let sizeSections: [MediaBrowserSectionID] = [.fileSize(.from100MBTo1GB), .fileSize(.from1MBTo10MB), .fileSize(.unknown)]
+        try await waitUntil { dataSource.snapshot().sectionIdentifiers == sizeSections }
+        XCTAssertEqual(source.loadRequests, [false, true])
+        collection.layoutIfNeeded()
+        XCTAssertEqual(dataSource.snapshot().itemIdentifiers, [large.id, small.id, unknown.id])
+        XCTAssertTrue(collection.indexPathsForSelectedItems?.isEmpty ?? true)
+        XCTAssertFalse(collection.visibleSupplementaryViews(ofKind: "month-header").isEmpty)
+        for (index, expected) in [large, small, unknown].enumerated() {
+            let cell = try XCTUnwrap(collection.cellForItem(at: IndexPath(item: 0, section: index)))
+            let label = try XCTUnwrap(cell.contentView.subviews.compactMap { $0 as? UILabel }.first)
+            XCTAssertFalse(label.isHidden)
+            XCTAssertEqual(label.text, expected.fileSize.map { ByteCountFormatter.string(fromByteCount: $0, countStyle: .file) } ?? "—")
+            XCTAssertEqual(label.frame.maxX, cell.contentView.bounds.maxX - 6, accuracy: 0.5)
+            let icons = cell.contentView.subviews.compactMap { $0 as? UIImageView }.filter {
+                !$0.isHidden && abs($0.frame.minX - 6) < 0.5 && $0.frame.midY > cell.contentView.bounds.midY
+            }
+            if expected.isVideo || expected.isLivePhoto {
+                XCTAssertEqual(icons.count, 1)
+                XCTAssertEqual(label.frame.midY, try XCTUnwrap(icons.first).frame.midY, accuracy: 0.5)
+            }
+        }
+        let preview = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
+            window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
+        }
+        let attachment = XCTAttachment(image: preview)
+        attachment.name = "Browser file size sort"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+
+        controller.perform(NSSelectorFromString("enterSelection"))
+        controller.perform(NSSelectorFromString("selectAllItems"))
+        controller.setMediaFilter(.videos)
+        try await waitUntil { dataSource.snapshot().itemIdentifiers == [unknown.id] }
+        XCTAssertEqual(dataSource.snapshot().sectionIdentifiers, [.fileSize(.unknown)])
+        XCTAssertTrue(collection.indexPathsForSelectedItems?.isEmpty ?? true)
+        controller.setFilter(.backedUp)
+        try await waitUntil { dataSource.snapshot().sectionIdentifiers.isEmpty }
+        XCTAssertTrue(filterButton.isEnabled)
+        controller.setMediaFilter(.photos)
+        try await waitUntil { dataSource.snapshot().itemIdentifiers == [large.id] }
+        controller.setFilter(.localOnly)
+        try await waitUntil { dataSource.snapshot().itemIdentifiers == [small.id] }
+        XCTAssertEqual(source.loadRequests, [false, true])
+        let switcher = try XCTUnwrap(controller.navigationItem.titleView as? UISegmentedControl)
+        switcher.selectedSegmentIndex = 1
+        switcher.sendActions(for: .valueChanged)
+        try await waitUntil { dataSource.snapshot().itemIdentifiers == [large.id, small.id] }
+        XCTAssertEqual(source.loadRequests, [false, true, true])
+        XCTAssertEqual(dataSource.snapshot().sectionIdentifiers, Array(sizeSections.prefix(2)))
+        XCTAssertEqual(filterButton.menu?.children.last?.title, MediaBrowserMode.remote.filterGroupTitle)
+        switcher.selectedSegmentIndex = 0
+        switcher.sendActions(for: .valueChanged)
+        try await waitUntil { dataSource.snapshot().itemIdentifiers == [small.id] }
+        XCTAssertEqual(source.loadRequests, [false, true, true, true])
+        controller.setSortOrder(.month)
+        try await waitUntil { dataSource.snapshot().sectionIdentifiers == [.month(.init(year: 2026, month: 1))] }
+        collection.layoutIfNeeded()
+        for cell in collection.visibleCells {
+            XCTAssertTrue(try XCTUnwrap(cell.contentView.subviews.compactMap { $0 as? UILabel }.first).isHidden)
+        }
+        XCTAssertFalse(collection.visibleSupplementaryViews(ofKind: "month-header").isEmpty)
+        controller.setFilter(.all)
+        controller.setMediaFilter(.all)
+        controller.setSortOrder(.fileSize)
+        try await waitUntil { dataSource.snapshot().itemIdentifiers == [large.id, small.id, unknown.id] }
+        XCTAssertEqual(source.loadRequests, [false, true, true, true])
+        var resized = large
+        resized.fileSize = 500_000
+        source.replace(items: [small, resized, unknown])
+        NotificationCenter.default.post(name: .LibraryPresenceDidChange, object: presence)
+        try await waitUntil { dataSource.snapshot().itemIdentifiers == [small.id, large.id, unknown.id] }
+        collection.layoutIfNeeded()
+        XCTAssertEqual(dataSource.snapshot().sectionIdentifiers, [.fileSize(.from1MBTo10MB), .fileSize(.below1MB), .fileSize(.unknown)])
+        let resizedCell = try XCTUnwrap(collection.cellForItem(at: IndexPath(item: 0, section: 1)))
+        let sizeLabel = try XCTUnwrap(resizedCell.contentView.subviews.compactMap { $0 as? UILabel }.first)
+        XCTAssertEqual(sizeLabel.text, ByteCountFormatter.string(fromByteCount: 500_000, countStyle: .file))
+        XCTAssertEqual(source.loadRequests, [false, true, true, true, true])
+
+        let refreshGate = LoadGate()
+        defer { Task { await refreshGate.finish() } }
+        source.holdNextLoad(refreshGate)
+        NotificationCenter.default.post(name: .LibraryPresenceDidChange, object: presence)
+        try await waitUntil { source.loadRequests.count == 6 }
+        let freshVideo = MediaBrowserItem(kind: .video, creationDateMs: 3, localIdentifier: "fresh-video",
+                                          fingerprint: nil, isBackedUp: false, fileSize: 20_000_000)
+        source.replace(items: [freshVideo])
+        controller.setMediaFilter(.videos)
+        try await waitUntil { dataSource.snapshot().itemIdentifiers == [freshVideo.id] }
+        XCTAssertEqual(source.loadRequests.count, 7)
+        await refreshGate.finish()
+        try await Task.sleep(for: .milliseconds(30))
+        controller.setMediaFilter(.all)
+        try await Task.sleep(for: .milliseconds(30))
+        XCTAssertEqual(dataSource.snapshot().itemIdentifiers, [freshVideo.id])
+        XCTAssertEqual(source.loadRequests.count, 7)
+    }
+
     func testLargeSelectAllSurvivesIdleReloadScrollAndNativeDeselection() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -49,7 +205,7 @@ final class MediaBrowserGridSelectionTests: XCTestCase {
             return collection.numberOfSections == 1 && collection.numberOfItems(inSection: 0) == items.count
                 && !collection.indexPathsForVisibleItems.isEmpty
         }
-        let dataSource = try XCTUnwrap(collection.dataSource as? UICollectionViewDiffableDataSource<LibraryMonthKey, MediaBrowserItemID>)
+        let dataSource = try XCTUnwrap(collection.dataSource as? UICollectionViewDiffableDataSource<MediaBrowserSectionID, MediaBrowserItemID>)
         let firstPath = IndexPath(item: 0, section: 0)
         let firstCell = try XCTUnwrap(collection.cellForItem(at: firstPath))
         let firstCheckbox = try checkbox(in: firstCell)
@@ -226,17 +382,46 @@ final class MediaBrowserGridSelectionTests: XCTestCase {
         throw NSError(domain: "SelectionTestTimeout", code: 1)
     }
 
+    private actor LoadGate {
+        private var isFinished = false
+        private var continuation: CheckedContinuation<Void, Never>?
+
+        func wait() async {
+            guard !isFinished else { return }
+            await withCheckedContinuation { continuation = $0 }
+        }
+
+        func finish() {
+            isFinished = true
+            continuation?.resume()
+            continuation = nil
+        }
+    }
+
     private final class SelectionSource: MediaBrowserSource, @unchecked Sendable {
         let mode = MediaBrowserMode.local
         private let lock = NSLock()
         private var items: [MediaBrowserItem]
+        private var requests: [Bool] = []
+        private var nextLoadGate: LoadGate?
+
+        var loadRequests: [Bool] { lock.withLock { requests } }
 
         init(items: [MediaBrowserItem]) { self.items = items }
         func replace(items: [MediaBrowserItem]) { lock.withLock { self.items = items } }
+        func holdNextLoad(_ gate: LoadGate) { lock.withLock { nextLoadGate = gate } }
         func load() async -> MediaBrowserLoadResult {
-            lock.withLock {
-                return .loaded(.init(sections: [.init(month: .init(year: 2026, month: 1), items: items)]))
+            await load(includeFileSizes: false)
+        }
+        func load(includeFileSizes: Bool) async -> MediaBrowserLoadResult {
+            let (content, gate): (MediaBrowserContent, LoadGate?) = lock.withLock {
+                requests.append(includeFileSizes)
+                let gate = nextLoadGate
+                nextLoadGate = nil
+                return (.init(sections: [.init(month: .init(year: 2026, month: 1), items: items)]), gate)
             }
+            await gate?.wait()
+            return .loaded(content)
         }
         func thumbnail(for item: MediaBrowserItem) async -> UIImage? { nil }
         func photoImage(for item: MediaBrowserItem) async -> UIImage? { nil }
