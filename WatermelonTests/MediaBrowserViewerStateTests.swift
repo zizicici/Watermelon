@@ -51,6 +51,9 @@ final class MediaBrowserViewerStateTests: XCTestCase {
         XCTAssertFalse(bar.isHidden)
         XCTAssertFalse(hasDeleteButton(in: bar))
         try await waitUntil { collection.numberOfSections == 0 && !bar.isHidden && self.hasDeleteButton(in: bar) }
+        let deleteButton = try button(titled: String(localized: "mediaBrowser.action.delete"), in: bar)
+        XCTAssertTrue(deleteButton.showsMenuAsPrimaryAction)
+        XCTAssertEqual((deleteButton.menu?.children.first as? UIMenu)?.children.compactMap { ($0 as? UIAction)?.title }, [MediaBrowserActionKind.deleteLocal.title])
         try await Task.sleep(for: .milliseconds(350))
         XCTAssertEqual(source.loadCount, loadsBeforeBackgrounding + 1)
         XCTAssertEqual(viewer.heroCurrentItemID, original.id)
@@ -88,6 +91,8 @@ final class MediaBrowserViewerStateTests: XCTestCase {
         try await waitUntil { viewer.isDisplayed && viewer.heroDestination() != nil }
         let bar = try XCTUnwrap(descendants(of: viewer.view).compactMap { $0 as? MediaActionBar }.first)
         let oldDeleteButton = try button(titled: String(localized: "mediaBrowser.action.delete"), in: bar)
+        XCTAssertTrue(oldDeleteButton.showsMenuAsPrimaryAction)
+        XCTAssertEqual((oldDeleteButton.menu?.children.first as? UIMenu)?.children.compactMap { ($0 as? UIAction)?.title }, [MediaBrowserActionKind.deleteLocal.title])
         let initialLoads = source.loadCount
         let runtime = AppRuntimeFlags()
         var claim: AppRuntimeFlags.ExecutionClaim? = try XCTUnwrap(runtime.tryEnterExecution())

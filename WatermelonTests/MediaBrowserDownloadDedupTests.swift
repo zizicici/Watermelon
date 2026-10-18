@@ -342,19 +342,18 @@ final class MediaBrowserDownloadDedupTests: XCTestCase {
     func testRetainedDeviceDeleteFingerprintsSelectsOnlyBackupRetainedBoth() {
         let incompleteFP = Data([1])
         let completeFP = Data([2])
+        let mergedFP = Data([3])
         let items = [
-            // Local-tab shape (no remoteMonth → backup retained): incomplete backup counts, complete doesn't.
             item(id: "a", presence: .both, localID: "La", fp: incompleteFP, month: nil),
             item(id: "b", presence: .both, localID: "Lb", fp: completeFP, month: nil),
-            // Remote/merged-tab shape (remoteMonth → also remote-deleted here): delete-everywhere is exempt.
-            item(id: "c", presence: .both, localID: "Lc", fp: incompleteFP, month: monthA),
+            item(id: "c", presence: .both, localID: "Lc", fp: mergedFP, month: monthA),
             // No backup claim / no device leg / no fingerprint: never counted.
             item(id: "d", presence: .localOnly, localID: "Ld", fp: nil, month: nil),
             item(id: "e", presence: .remoteOnly, localID: nil, fp: incompleteFP, month: monthA),
             item(id: "f", presence: .both, localID: "Lf", fp: nil, month: nil),
         ]
         let fingerprints = MediaBrowserActionRunner.retainedDeviceDeleteFingerprints(items)
-        XCTAssertEqual(fingerprints, [incompleteFP, completeFP])
+        XCTAssertEqual(fingerprints, [incompleteFP, completeFP, mergedFP])
     }
 
     func testRetainedDeviceDeleteClaimsGateOnlyFetchedBackupRetainedBoth() {
@@ -365,7 +364,6 @@ final class MediaBrowserDownloadDedupTests: XCTestCase {
             item(id: "a", presence: .both, localID: "La", fp: fpA, month: nil),
             // Unfetched (limited access): never deleted by the change request, so not gated.
             item(id: "b", presence: .both, localID: "Lb", fp: fpB, month: nil),
-            // Delete-everywhere shape (remoteMonth): exempt.
             item(id: "c", presence: .both, localID: "Lc", fp: fpA, month: monthA),
             // No backup claim / no device leg / no fingerprint: never gated.
             item(id: "d", presence: .localOnly, localID: "Ld", fp: nil, month: nil),
@@ -373,7 +371,7 @@ final class MediaBrowserDownloadDedupTests: XCTestCase {
             item(id: "f", presence: .both, localID: "Lf", fp: nil, month: nil),
         ]
         let claims = MediaBrowserActionRunner.retainedDeviceDeleteClaims(items, fetchedIDs: ["La", "Lc", "Ld", "Lf"])
-        XCTAssertEqual(claims, ["La": fpA], "only the fetched backup-retained `.both` device delete must re-prove its bytes")
+        XCTAssertEqual(claims, ["La": fpA, "Lc": fpA], "local deletion retains the remote copy in every mode")
     }
 
     // MARK: - Fresh completeness resolution (download consent must read the LIVE record, not projection metadata)

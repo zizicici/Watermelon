@@ -61153,89 +61153,90 @@
       }
     },
     "mediaBrowser.action.deleteAll" : {
+      "extractionState" : "manual",
       "localizations" : {
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Überall löschen"
+            "value" : "Lokal und remote löschen"
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Delete Everywhere"
+            "value" : "Delete from Local and Remote"
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Eliminar en todas partes"
+            "value" : "Eliminar del dispositivo y del destino remoto"
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Eliminar en todas partes"
+            "value" : "Eliminar del dispositivo y del destino remoto"
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Supprimer partout"
+            "value" : "Supprimer en local et à distance"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "デバイスとバックアップから削除"
+            "value" : "ローカルとリモートから削除"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "모든 곳에서 삭제"
+            "value" : "로컬 및 원격에서 삭제"
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Excluir de tudo"
+            "value" : "Apagar do dispositivo e do destino remoto"
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Eliminar de tudo"
+            "value" : "Apagar do dispositivo e do destino remoto"
           }
         },
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Удалить везде"
+            "value" : "Удалить локально и удалённо"
           }
         },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Видалити всюди"
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "删除全部"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "全部刪除"
+            "value" : "Видалити локально та з віддаленого сховища"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "全部刪除"
+            "value" : "從本機和遠端一併刪除"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "从本地和远端都删除"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "從本機和遠端一併刪除"
           }
         }
       }
@@ -61245,13 +61246,13 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Vom Gerät löschen"
+            "value" : "Lokal löschen"
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Delete from Device"
+            "value" : "Delete from Local"
           }
         },
         "es" : {
@@ -61269,61 +61270,61 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Supprimer de l'appareil"
+            "value" : "Supprimer en local"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "デバイスから削除"
+            "value" : "ローカルから削除"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "기기에서 삭제"
+            "value" : "로컬에서 삭제"
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Excluir do dispositivo"
+            "value" : "Apagar do dispositivo"
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Eliminar do dispositivo"
+            "value" : "Apagar do dispositivo"
           }
         },
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Удалить с устройства"
+            "value" : "Удалить локально"
           }
         },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Видалити з пристрою"
+            "value" : "Видалити локально"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "从设备删除"
+            "value" : "从本地删除"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "從裝置刪除"
+            "value" : "從本機刪除"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "從裝置刪除"
+            "value" : "從本機刪除"
           }
         }
       }
@@ -61333,85 +61334,85 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Aus Sicherung löschen"
+            "value" : "Remote löschen"
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Delete from Backup"
+            "value" : "Delete from Remote"
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Eliminar de la copia de seguridad"
+            "value" : "Eliminar del destino remoto"
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Eliminar del respaldo"
+            "value" : "Eliminar del destino remoto"
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Supprimer de la sauvegarde"
+            "value" : "Supprimer à distance"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "バックアップから削除"
+            "value" : "リモートから削除"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "백업에서 삭제"
+            "value" : "원격에서 삭제"
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Excluir do backup"
+            "value" : "Apagar do destino remoto"
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Eliminar da cópia de segurança"
+            "value" : "Apagar do destino remoto"
           }
         },
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Удалить из резервной копии"
+            "value" : "Удалить удалённо"
           }
         },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Видалити з резервної копії"
+            "value" : "Видалити з віддаленого сховища"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "从备份删除"
+            "value" : "从远端删除"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "從備份刪除"
+            "value" : "從遠端刪除"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "從備份刪除"
+            "value" : "從遠端刪除"
           }
         }
       }
@@ -61421,85 +61422,85 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Dies entfernt das Objekt dauerhaft aus der Sicherung. Das kann nicht rückgängig gemacht werden."
+            "value" : "Das Objekt wird dauerhaft aus dem Remote-Speicher gelöscht. Dies kann nicht rückgängig gemacht werden."
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "This permanently removes the item from the backup. This can't be undone."
+            "value" : "This permanently removes the item from remote storage. This can’t be undone."
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Esto elimina el elemento de la copia de seguridad de forma permanente. Esta acción no se puede deshacer."
+            "value" : "El elemento se eliminará permanentemente del almacenamiento remoto. Esta acción no se puede deshacer."
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Esto elimina el elemento del respaldo de forma permanente. Esta acción no se puede deshacer."
+            "value" : "El elemento se eliminará permanentemente del almacenamiento remoto. Esta acción no se puede deshacer."
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Cela supprime définitivement l'élément de la sauvegarde. Action irréversible."
+            "value" : "Cet élément sera définitivement supprimé du stockage distant. Cette action est irréversible."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "この項目をバックアップから完全に削除します。取り消せません。"
+            "value" : "この項目をリモートストレージから完全に削除します。この操作は取り消せません。"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "이 항목이 백업에서 영구적으로 삭제됩니다. 되돌릴 수 없습니다."
+            "value" : "이 항목이 원격 저장소에서 영구적으로 삭제됩니다. 이 작업은 되돌릴 수 없습니다."
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Isso remove o item do backup permanentemente. Não pode ser desfeito."
+            "value" : "O item será removido permanentemente do armazenamento remoto. Esta ação não pode ser desfeita."
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Isto remove o item da cópia de segurança permanentemente. Não pode ser anulado."
+            "value" : "O item será removido permanentemente do armazenamento remoto. Esta ação não pode ser anulada."
           }
         },
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Объект будет навсегда удалён из резервной копии. Отменить нельзя."
+            "value" : "Объект будет безвозвратно удалён из удалённого хранилища. Это действие нельзя отменить."
           }
         },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Об’єкт буде назавжди видалено з резервної копії. Скасувати неможливо."
+            "value" : "Об’єкт буде назавжди видалено з віддаленого сховища. Цю дію неможливо скасувати."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "这将从备份中永久删除该项，且无法撤销。"
+            "value" : "这将从远端永久删除该项，且无法撤销。"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "這將從備份中永久刪除該項，且無法復原。"
+            "value" : "這將從遠端永久刪除此項目，且無法還原。"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "這將從備份中永久刪除該項，且無法復原。"
+            "value" : "這將從遠端永久刪除此項目，且無法還原。"
           }
         }
       }
@@ -61509,85 +61510,85 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Aus Sicherung löschen?"
+            "value" : "Remote löschen?"
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Delete from Backup?"
+            "value" : "Delete from Remote?"
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "¿Eliminar de la copia de seguridad?"
+            "value" : "¿Eliminar del destino remoto?"
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "¿Eliminar del respaldo?"
+            "value" : "¿Eliminar del destino remoto?"
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Supprimer de la sauvegarde ?"
+            "value" : "Supprimer à distance ?"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "バックアップから削除しますか？"
+            "value" : "リモートから削除しますか？"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "백업에서 삭제할까요?"
+            "value" : "원격에서 삭제할까요?"
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Excluir do backup?"
+            "value" : "Apagar do destino remoto?"
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Eliminar da cópia de segurança?"
+            "value" : "Apagar do destino remoto?"
           }
         },
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Удалить из резервной копии?"
+            "value" : "Удалить удалённо?"
           }
         },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Видалити з резервної копії?"
+            "value" : "Видалити з віддаленого сховища?"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "从备份删除？"
+            "value" : "从远端删除？"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "從備份刪除？"
+            "value" : "從遠端刪除？"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "從備份刪除？"
+            "value" : "從遠端刪除？"
           }
         }
       }
@@ -61861,85 +61862,85 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Diese Sicherung ist unvollständig. Die Kopie auf dem Gerät ist die einzige vollständige Kopie."
+            "value" : "Das Remote-Objekt ist unvollständig. Die lokale Kopie ist die einzige vollständige Kopie."
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "This backup is incomplete. The device copy is the only complete copy."
+            "value" : "The remote item is incomplete. The local copy is the only complete copy."
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Esta copia de seguridad está incompleta. La copia del dispositivo es la única copia completa."
+            "value" : "El elemento remoto está incompleto. La copia local es la única copia completa."
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Este respaldo está incompleto. La copia del dispositivo es la única copia completa."
+            "value" : "El elemento remoto está incompleto. La copia local es la única copia completa."
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Cette sauvegarde est incomplète. La copie sur l'appareil est la seule copie complète."
+            "value" : "L’élément distant est incomplet. La copie locale est la seule copie complète."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "このバックアップは不完全です。デバイス上のコピーが唯一の完全なコピーです。"
+            "value" : "リモートの項目は不完全です。ローカルのコピーが唯一の完全なコピーです。"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "이 백업은 불완전합니다. 기기의 사본이 유일한 완전한 사본입니다."
+            "value" : "원격 항목이 불완전합니다. 로컬 사본이 유일한 완전한 사본입니다."
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Este backup está incompleto. A cópia no dispositivo é a única cópia completa."
+            "value" : "O item remoto está incompleto. A cópia local é a única cópia completa."
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Esta cópia de segurança está incompleta. A cópia no dispositivo é a única cópia completa."
+            "value" : "O item remoto está incompleto. A cópia local é a única cópia completa."
           }
         },
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Эта резервная копия неполная. Копия на устройстве — единственная полная копия."
+            "value" : "Удалённый объект неполон. Локальная копия — единственная полная копия."
           }
         },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Ця резервна копія неповна. Копія на пристрої — єдина повна копія."
+            "value" : "Віддалений об’єкт неповний. Локальна копія — єдина повна копія."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "此备份不完整。设备上的副本是唯一完整的副本。"
+            "value" : "远端资源不完整。本地副本是唯一完整的副本。"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "此備份不完整。裝置上的副本是唯一完整的副本。"
+            "value" : "遠端資源不完整。本機副本是唯一完整的副本。"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "此備份不完整。裝置上的副本是唯一完整的副本。"
+            "value" : "遠端資源不完整。本機副本是唯一完整的副本。"
           }
         }
       }
@@ -61949,85 +61950,85 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Diese Sicherung ist unvollständig. Beim Herunterladen entsteht ein neues, separates Objekt, das nicht zur Sicherung passt und bei einer erneuten Sicherung als neues Objekt gesichert werden kann."
+            "value" : "Das Remote-Objekt ist unvollständig. Beim Herunterladen entsteht ein separates Objekt, das vom Remote-Eintrag abweicht und erneut als neu hochgeladen werden kann."
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "This backup is incomplete. Downloading creates a new, separate asset that doesn't match the backup and may be backed up again as new."
+            "value" : "The remote item is incomplete. Downloading creates a separate item that differs from the remote record and may be uploaded again as new."
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Esta copia de seguridad está incompleta. Al descargarla se crea un elemento nuevo e independiente que no coincide con la copia de seguridad y podría volver a incluirse como nuevo en otra copia de seguridad."
+            "value" : "El elemento remoto está incompleto. La descarga crea un elemento independiente que difiere del registro remoto y puede volver a subirse como nuevo."
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Este respaldo está incompleto. Al descargarlo se crea un elemento nuevo e independiente que no coincide con el respaldo y podría volver a respaldarse como nuevo."
+            "value" : "El elemento remoto está incompleto. La descarga crea un elemento independiente que difiere del registro remoto y puede volver a subirse como nuevo."
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Cette sauvegarde est incomplète. Le téléchargement crée un nouvel élément distinct qui ne correspond pas à la sauvegarde et pourra être sauvegardé à nouveau en tant que nouvel élément."
+            "value" : "L’élément distant est incomplet. Le téléchargement crée un élément distinct du contenu distant, qui pourra être à nouveau téléversé comme nouvel élément."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "このバックアップは不完全です。ダウンロードすると、バックアップと一致しない新しい項目が作成され、今後のバックアップで新しい項目として再びバックアップされる場合があります。"
+            "value" : "リモートの項目は不完全です。ダウンロードするとリモートの記録とは異なる別の項目が作成され、新しい項目として再アップロードされる場合があります。"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "이 백업은 불완전합니다. 다운로드하면 백업과 일치하지 않는 새 항목이 생성되며 다시 백업하면 새 항목으로 백업될 수 있습니다."
+            "value" : "원격 항목이 불완전합니다. 다운로드하면 원격 기록과 다른 별도 항목이 생성되며 새 항목으로 다시 업로드될 수 있습니다."
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Este backup está incompleto. Baixar cria um item novo e separado que não corresponde ao backup e pode ser copiado novamente como um item novo."
+            "value" : "O item remoto está incompleto. O download cria um item separado que difere do registro remoto e pode ser enviado novamente como novo."
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Esta cópia de segurança está incompleta. Transferir cria um item novo e separado que não corresponde à cópia e pode ser copiado novamente como um item novo."
+            "value" : "O item remoto está incompleto. A descarga cria um item separado que difere do registo remoto e pode ser carregado novamente como novo."
           }
         },
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Эта резервная копия неполная. При загрузке создаётся новый отдельный объект, который не соответствует копии и может быть снова выгружен как новый объект."
+            "value" : "Удалённый объект неполон. При скачивании создаётся отдельный объект, отличающийся от удалённой записи, который может быть загружен повторно как новый."
           }
         },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Ця резервна копія неповна. Під час завантаження створюється новий окремий об’єкт, який не відповідає копії й може бути знову вивантажений як новий об’єкт."
+            "value" : "Віддалений об’єкт неповний. Завантаження створить окремий об’єкт, який відрізняється від віддаленого запису та може бути повторно вивантажений як новий."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "此备份不完整。下载会创建一个与备份记录不匹配的新项目，并在再次备份时可能作为新项目重新备份。"
+            "value" : "远端资源不完整。下载会创建一个与远端记录不匹配的新项目，并在再次上传时可能作为新项目上传。"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "此備份不完整。下載會建立一個與備份記錄不符的新項目，並在再次備份時可能作為新項目重新備份。"
+            "value" : "遠端資源不完整。下載會建立與遠端記錄不相符的新項目，之後可能會作為新項目再次上傳。"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "此備份不完整。下載會建立一個與備份記錄不符的新項目，並在再次備份時可能作為新項目重新備份。"
+            "value" : "遠端資源不完整。下載會建立與遠端記錄不相符的新項目，之後可能會作為新項目再次上傳。"
           }
         }
       }
@@ -62037,85 +62038,85 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Unvollständige Sicherung"
+            "value" : "Unvollständiges Remote-Objekt"
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Incomplete backup"
+            "value" : "Incomplete Remote Item"
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Copia de seguridad incompleta"
+            "value" : "Elemento remoto incompleto"
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Respaldo incompleto"
+            "value" : "Elemento remoto incompleto"
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Sauvegarde incomplète"
+            "value" : "Élément distant incomplet"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "不完全なバックアップ"
+            "value" : "リモートの項目が不完全"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "불완전한 백업"
+            "value" : "불완전한 원격 항목"
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Backup incompleto"
+            "value" : "Item remoto incompleto"
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Cópia de segurança incompleta"
+            "value" : "Item remoto incompleto"
           }
         },
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Неполная резервная копия"
+            "value" : "Неполный удалённый объект"
           }
         },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Неповна резервна копія"
+            "value" : "Неповний віддалений об’єкт"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "备份不完整"
+            "value" : "远端资源不完整"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "備份不完整"
+            "value" : "遠端資源不完整"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "備份不完整"
+            "value" : "遠端資源不完整"
           }
         }
       }
@@ -62301,85 +62302,85 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Stellen Sie zuerst eine Verbindung zu einem Backup her."
+            "value" : "Verbinde zuerst einen Remote-Speicher."
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Connect to a backup first."
+            "value" : "Connect to remote storage first."
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Conéctate primero a una copia de seguridad."
+            "value" : "Conéctate primero al almacenamiento remoto."
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Conéctate primero a un respaldo."
+            "value" : "Conéctate primero al almacenamiento remoto."
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Connectez-vous d'abord à une sauvegarde."
+            "value" : "Connectez-vous d’abord au stockage distant."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "先にバックアップに接続してください。"
+            "value" : "先にリモートストレージに接続してください。"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "먼저 백업에 연결하세요."
+            "value" : "먼저 원격 저장소에 연결하세요."
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Conecte-se a um backup primeiro."
+            "value" : "Conecte-se primeiro ao armazenamento remoto."
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Ligue-se primeiro a uma cópia de segurança."
+            "value" : "Ligue-se primeiro ao armazenamento remoto."
           }
         },
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Сначала подключитесь к резервной копии."
+            "value" : "Сначала подключитесь к удалённому хранилищу."
           }
         },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Спочатку під’єднайтеся до резервної копії."
+            "value" : "Спочатку підключіться до віддаленого сховища."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "请先连接备份节点。"
+            "value" : "请先连接远端节点。"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "請先連接備份節點。"
+            "value" : "請先連接遠端節點。"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "請先連接備份節點。"
+            "value" : "請先連接遠端節點。"
           }
         }
       }
@@ -62829,85 +62830,85 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Wird gesichert…"
+            "value" : "Wird hochgeladen…"
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Backing up…"
+            "value" : "Uploading…"
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Haciendo copia de seguridad…"
+            "value" : "Subiendo…"
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Respaldando…"
+            "value" : "Subiendo…"
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Sauvegarde…"
+            "value" : "Téléversement…"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "バックアップ中…"
+            "value" : "アップロード中…"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "백업 중…"
+            "value" : "업로드 중…"
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Fazendo backup…"
+            "value" : "Enviando…"
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "A fazer cópia…"
+            "value" : "A carregar…"
           }
         },
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Резервное копирование…"
+            "value" : "Выгрузка…"
           }
         },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Резервне копіювання…"
+            "value" : "Вивантаження…"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "正在备份…"
+            "value" : "正在上传…"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "正在備份…"
+            "value" : "正在上傳…"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "正在備份…"
+            "value" : "正在上傳…"
           }
         }
       }
@@ -62917,85 +62918,85 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Dieses Objekt konnte nicht gesichert werden."
+            "value" : "Dieses Objekt konnte nicht hochgeladen werden."
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "This item couldn't be backed up."
+            "value" : "This item couldn’t be uploaded."
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "No se pudo incluir este elemento en la copia de seguridad."
+            "value" : "No se pudo subir este elemento."
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "No se pudo respaldar este elemento."
+            "value" : "No se pudo subir este elemento."
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Impossible de sauvegarder cet élément."
+            "value" : "Cet élément n’a pas pu être téléversé."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "この項目をバックアップできませんでした。"
+            "value" : "この項目をアップロードできませんでした。"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "이 항목을 백업할 수 없습니다."
+            "value" : "이 항목을 업로드할 수 없습니다."
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Não foi possível fazer backup deste item."
+            "value" : "Não foi possível enviar este item."
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Não foi possível fazer a cópia deste item."
+            "value" : "Não foi possível carregar este item."
           }
         },
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Не удалось создать резервную копию этого объекта."
+            "value" : "Не удалось выгрузить этот объект."
           }
         },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Не вдалося створити резервну копію цього об’єкта."
+            "value" : "Не вдалося вивантажити цей об’єкт."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "无法备份此项。"
+            "value" : "无法上传此项。"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "無法備份此項。"
+            "value" : "無法上傳此項目。"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "無法備份此項。"
+            "value" : "無法上傳此項目。"
           }
         }
       }
@@ -63093,13 +63094,13 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Vom Gerät löschen: %lld"
+            "value" : "Lokal löschen: %lld"
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Delete from device: %lld"
+            "value" : "Delete from local: %lld"
           }
         },
         "es" : {
@@ -63117,61 +63118,61 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Supprimer de l'appareil : %lld"
+            "value" : "Supprimer en local : %lld"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "デバイスから削除：%lld"
+            "value" : "ローカルから削除：%lld"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "기기에서 삭제: %lld"
+            "value" : "로컬에서 삭제: %lld"
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Excluir do dispositivo: %lld"
+            "value" : "Apagar do dispositivo: %lld"
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Eliminar do dispositivo: %lld"
+            "value" : "Apagar do dispositivo: %lld"
           }
         },
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Удалить с устройства: %lld"
+            "value" : "Удалить локально: %lld"
           }
         },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Видалити з пристрою: %lld"
+            "value" : "Видалити локально: %lld"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "从设备删除：%lld"
+            "value" : "从本地删除：%lld"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "從裝置刪除：%lld"
+            "value" : "從本機刪除：%lld"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "從裝置刪除：%lld"
+            "value" : "從本機刪除：%lld"
           }
         }
       }
@@ -63181,85 +63182,85 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Nicht aus dem Backup entfernt: %lld."
+            "value" : "Remote konnten %lld Objekte nicht gelöscht werden."
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Couldn't remove %lld from the backup."
+            "value" : "Couldn’t delete %lld from remote storage."
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "No se pudieron eliminar %lld elementos de la copia de seguridad."
+            "value" : "No se pudieron eliminar %lld elementos del almacenamiento remoto."
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "No se pudieron eliminar %lld elementos del respaldo."
+            "value" : "No se pudieron eliminar %lld elementos del almacenamiento remoto."
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Impossible de retirer %lld de la sauvegarde."
+            "value" : "Impossible de supprimer %lld éléments du stockage distant."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%lld 件をバックアップから削除できませんでした。"
+            "value" : "リモートストレージから%lld項目を削除できませんでした。"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%lld개를 백업에서 제거하지 못했습니다."
+            "value" : "원격 저장소에서 %lld개 항목을 삭제하지 못했습니다."
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Não foi possível remover %lld do backup."
+            "value" : "Não foi possível apagar %lld itens do armazenamento remoto."
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Não foi possível remover %lld da cópia de segurança."
+            "value" : "Não foi possível apagar %lld itens do armazenamento remoto."
           }
         },
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Не удалось удалить %lld из резервной копии."
+            "value" : "Не удалось удалить объекты из удалённого хранилища: %lld."
           }
         },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Не вдалося видалити %lld з резервної копії."
+            "value" : "Не вдалося видалити об’єкти з віддаленого сховища: %lld."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "有 %lld 项无法从备份中移除。"
+            "value" : "有 %lld 项无法从远端删除。"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "有 %lld 項無法從備份中移除。"
+            "value" : "有 %lld 個項目無法從遠端刪除。"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "有 %lld 項無法從備份中移除。"
+            "value" : "有 %lld 個項目無法從遠端刪除。"
           }
         }
       }
@@ -63269,85 +63270,85 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Aus Sicherung entfernen: %lld"
+            "value" : "Remote löschen: %lld"
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Remove from backup: %lld"
+            "value" : "Delete from remote: %lld"
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Eliminar de la copia de seguridad: %lld"
+            "value" : "Eliminar del destino remoto: %lld"
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Eliminar del respaldo: %lld"
+            "value" : "Eliminar del destino remoto: %lld"
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Retirer de la sauvegarde : %lld"
+            "value" : "Supprimer à distance : %lld"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "バックアップから削除：%lld"
+            "value" : "リモートから削除：%lld"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "백업에서 제거: %lld"
+            "value" : "원격에서 삭제: %lld"
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Remover do backup: %lld"
+            "value" : "Apagar do destino remoto: %lld"
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Remover da cópia de segurança: %lld"
+            "value" : "Apagar do destino remoto: %lld"
           }
         },
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Удалить из резервной копии: %lld"
+            "value" : "Удалить удалённо: %lld"
           }
         },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Видалити з резервної копії: %lld"
+            "value" : "Видалити з віддаленого сховища: %lld"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "从备份移除：%lld"
+            "value" : "从远端删除：%lld"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "從備份移除：%lld"
+            "value" : "從遠端刪除：%lld"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "從備份移除：%lld"
+            "value" : "從遠端刪除：%lld"
           }
         }
       }
@@ -63357,85 +63358,85 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Unvollständige Sicherungen: %lld. Die Kopien auf dem Gerät sind die einzigen vollständigen Kopien."
+            "value" : "Unvollständige Remote-Objekte: %lld. Die lokalen Kopien sind die einzigen vollständigen Kopien."
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Incomplete backups: %lld. The device copies are the only complete copies."
+            "value" : "Incomplete remote items: %lld. The local copies are the only complete copies."
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Copias de seguridad incompletas: %lld. Las copias del dispositivo son las únicas copias completas."
+            "value" : "Elementos remotos incompletos: %lld. Las copias locales son las únicas copias completas."
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Respaldos incompletos: %lld. Las copias del dispositivo son las únicas copias completas."
+            "value" : "Elementos remotos incompletos: %lld. Las copias locales son las únicas copias completas."
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Sauvegardes incomplètes : %lld. Les copies sur l'appareil sont les seules copies complètes."
+            "value" : "Éléments distants incomplets : %lld. Les copies locales sont les seules copies complètes."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "不完全なバックアップ：%lld。デバイス上のコピーが唯一の完全なコピーです。"
+            "value" : "不完全なリモート項目：%lld。ローカルのコピーが唯一の完全なコピーです。"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "불완전한 백업: %lld. 기기의 사본이 유일한 완전한 사본입니다."
+            "value" : "불완전한 원격 항목: %lld. 로컬 사본이 유일한 완전한 사본입니다."
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Backups incompletos: %lld. As cópias no dispositivo são as únicas cópias completas."
+            "value" : "Itens remotos incompletos: %lld. As cópias locais são as únicas cópias completas."
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Cópias de segurança incompletas: %lld. As cópias no dispositivo são as únicas cópias completas."
+            "value" : "Itens remotos incompletos: %lld. As cópias locais são as únicas cópias completas."
           }
         },
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Неполные резервные копии: %lld. Копии на устройстве — единственные полные копии."
+            "value" : "Неполные удалённые объекты: %lld. Локальные копии — единственные полные копии."
           }
         },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Неповні резервні копії: %lld. Копії на пристрої — єдині повні копії."
+            "value" : "Неповні віддалені об’єкти: %lld. Локальні копії — єдині повні копії."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "备份不完整：%lld。设备上的副本是唯一完整的副本。"
+            "value" : "远端资源不完整：%lld 项。本地副本是唯一完整的副本。"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "備份不完整：%lld。裝置上的副本是唯一完整的副本。"
+            "value" : "遠端資源不完整：%lld 項。本機副本是唯一完整的副本。"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "備份不完整：%lld。裝置上的副本是唯一完整的副本。"
+            "value" : "遠端資源不完整：%lld 項。本機副本是唯一完整的副本。"
           }
         }
       }
@@ -63704,90 +63705,178 @@
         }
       }
     },
-    "mediaBrowser.batch.uploaded" : {
+    "mediaBrowser.batch.incompleteDownload.message" : {
       "localizations" : {
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Gesichert: %lld"
+            "value" : "Unvollständige Remote-Objekte: %lld. Beim Herunterladen entstehen separate Objekte, die von den Remote-Einträgen abweichen und erneut als neu hochgeladen werden können."
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Backed up: %lld"
+            "value" : "Incomplete remote items: %lld. Downloading creates separate items that differ from the remote records and may be uploaded again as new."
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Incluidos en la copia de seguridad: %lld"
+            "value" : "Elementos remotos incompletos: %lld. La descarga crea elementos independientes que difieren de los registros remotos y pueden volver a subirse como nuevos."
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Respaldado: %lld"
+            "value" : "Elementos remotos incompletos: %lld. La descarga crea elementos independientes que difieren de los registros remotos y pueden volver a subirse como nuevos."
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Sauvegardé : %lld"
+            "value" : "Éléments distants incomplets : %lld. Le téléchargement crée des éléments distincts du contenu distant, qui pourront être à nouveau téléversés comme nouveaux éléments."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%lld 件をバックアップしました"
+            "value" : "不完全なリモート項目：%lld。ダウンロードするとリモートの記録とは異なる別の項目が作成され、新しい項目として再アップロードされる場合があります。"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%lld개 백업됨"
+            "value" : "불완전한 원격 항목: %lld. 다운로드하면 원격 기록과 다른 별도 항목이 생성되며 새 항목으로 다시 업로드될 수 있습니다."
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Backup concluído: %lld"
+            "value" : "Itens remotos incompletos: %lld. O download cria itens separados que diferem dos registros remotos e podem ser enviados novamente como novos."
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Cópia concluída: %lld"
+            "value" : "Itens remotos incompletos: %lld. A descarga cria itens separados que diferem dos registos remotos e podem ser carregados novamente como novos."
           }
         },
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Сохранено: %lld"
+            "value" : "Неполные удалённые объекты: %lld. При скачивании создаются отдельные объекты, отличающиеся от удалённых записей, которые могут быть выгружены повторно как новые."
           }
         },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Збережено: %lld"
+            "value" : "Неповні віддалені об’єкти: %lld. Завантаження створить окремі об’єкти, які відрізняються від віддалених записів та можуть бути повторно вивантажені як нові."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "已备份 %lld 项"
+            "value" : "远端资源不完整：%lld 项。下载会创建与远端记录不匹配的新项目，并在再次上传时可能作为新项目上传。"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "已備份 %lld 項"
+            "value" : "遠端資源不完整：%lld 項。下載會建立與遠端記錄不相符的新項目，之後可能會作為新項目再次上傳。"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "已備份 %lld 項"
+            "value" : "遠端資源不完整：%lld 項。下載會建立與遠端記錄不相符的新項目，之後可能會作為新項目再次上傳。"
+          }
+        }
+      }
+    },
+    "mediaBrowser.batch.uploaded" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hochgeladen: %lld"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Uploaded: %lld"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Subidos: %lld"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Subidos: %lld"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Téléversés : %lld"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "アップロード済み：%lld"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "업로드됨: %lld"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Enviados: %lld"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Carregados: %lld"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Выгружено: %lld"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Вивантажено: %lld"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已上传 %lld 项"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已上傳 %lld 項"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已上傳 %lld 項"
           }
         }
       }
@@ -63797,85 +63886,85 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Sichern: %lld…"
+            "value" : "%lld werden hochgeladen…"
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Backing up %lld…"
+            "value" : "Uploading %lld…"
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Haciendo copia de seguridad de %lld…"
+            "value" : "Subiendo %lld…"
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Respaldando %lld…"
+            "value" : "Subiendo %lld…"
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Sauvegarde de %lld…"
+            "value" : "Téléversement de %lld éléments…"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%lld 件をバックアップ中…"
+            "value" : "%lld項目をアップロード中…"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%lld개 백업 중…"
+            "value" : "%lld개 업로드 중…"
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Fazendo backup de %lld…"
+            "value" : "Enviando %lld…"
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "A fazer cópia de %lld…"
+            "value" : "A carregar %lld…"
           }
         },
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Резервное копирование %lld…"
+            "value" : "Выгрузка: %lld…"
           }
         },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Резервне копіювання %lld…"
+            "value" : "Вивантаження: %lld…"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "正在备份 %lld 项…"
+            "value" : "正在上传 %lld 项…"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "正在備份 %lld 項…"
+            "value" : "正在上傳 %lld 項…"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "正在備份 %lld 項…"
+            "value" : "正在上傳 %lld 項…"
           }
         }
       }
@@ -63885,85 +63974,85 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Gesichert: %1$lld, übersprungen: %2$lld."
+            "value" : "%1$lld hochgeladen, %2$lld übersprungen."
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Backed up %1$lld, skipped %2$lld."
+            "value" : "Uploaded %1$lld, skipped %2$lld."
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Se incluyeron %1$lld elementos en la copia de seguridad y se omitieron %2$lld."
+            "value" : "Subidos: %1$lld; omitidos: %2$lld."
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Se respaldaron %1$lld, se omitieron %2$lld."
+            "value" : "Subidos: %1$lld; omitidos: %2$lld."
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%1$lld sauvegardés, %2$lld ignorés."
+            "value" : "%1$lld téléversés, %2$lld ignorés."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%1$lld 件をバックアップ、%2$lld 件をスキップしました。"
+            "value" : "%1$lld項目をアップロードし、%2$lld項目をスキップしました。"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%1$lld개 백업, %2$lld개 건너뜀."
+            "value" : "%1$lld개 업로드, %2$lld개 건너뜀."
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Backup concluído: %1$lld, ignorados: %2$lld."
+            "value" : "%1$lld enviados, %2$lld ignorados."
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Cópia concluída: %1$lld, ignorados: %2$lld."
+            "value" : "%1$lld carregados, %2$lld ignorados."
           }
         },
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Сохранено: %1$lld, пропущено: %2$lld."
+            "value" : "Выгружено: %1$lld, пропущено: %2$lld."
           }
         },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Збережено: %1$lld, пропущено: %2$lld."
+            "value" : "Вивантажено: %1$lld, пропущено: %2$lld."
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "已备份 %1$lld 项，跳过 %2$lld 项。"
+            "value" : "已上传 %1$lld 项，跳过 %2$lld 项。"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "已備份 %1$lld 項，略過 %2$lld 項。"
+            "value" : "已上傳 %1$lld 項，略過 %2$lld 項。"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "已備份 %1$lld 項，略過 %2$lld 項。"
+            "value" : "已上傳 %1$lld 項，略過 %2$lld 項。"
           }
         }
       }
@@ -64325,85 +64414,85 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Gesichert"
+            "value" : "Remote vorhanden"
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Backed Up"
+            "value" : "On Remote"
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Con copia de seguridad"
+            "value" : "En el destino remoto"
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Con respaldo"
+            "value" : "En el destino remoto"
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Sauvegardés"
+            "value" : "Présent à distance"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "バックアップ済み"
+            "value" : "リモートに存在"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "백업됨"
+            "value" : "원격에 있음"
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Com backup"
+            "value" : "No destino remoto"
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Com cópia de segurança"
+            "value" : "No destino remoto"
           }
         },
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "С резервной копией"
+            "value" : "Есть удалённо"
           }
         },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "З резервною копією"
+            "value" : "Є у віддаленому сховищі"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "已有备份"
+            "value" : "远端已有"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "已有備份"
+            "value" : "遠端已有"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "已有備份"
+            "value" : "遠端已有"
           }
         }
       }
@@ -64413,85 +64502,85 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Sicherungsstatus"
+            "value" : "Remote-Status"
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Backup Status"
+            "value" : "Remote Status"
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Estado de copia de seguridad"
+            "value" : "Estado remoto"
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Estado del respaldo"
+            "value" : "Estado remoto"
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "État de sauvegarde"
+            "value" : "État distant"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "バックアップ状態"
+            "value" : "リモートの状態"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "백업 상태"
+            "value" : "원격 상태"
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Status do backup"
+            "value" : "Status remoto"
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Estado da cópia de segurança"
+            "value" : "Estado remoto"
           }
         },
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Статус резервной копии"
+            "value" : "Удалённое состояние"
           }
         },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Стан резервної копії"
+            "value" : "Віддалений стан"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "备份状态"
+            "value" : "远端状态"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "備份狀態"
+            "value" : "遠端狀態"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "備份狀態"
+            "value" : "遠端狀態"
           }
         }
       }
@@ -64941,85 +65030,85 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Noch nicht gesichert"
+            "value" : "Remote nicht vorhanden"
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Not Yet Backed Up"
+            "value" : "Not on Remote"
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Aún sin copia de seguridad"
+            "value" : "No está en el destino remoto"
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Aún sin respaldo"
+            "value" : "No está en el destino remoto"
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Pas encore sauvegardés"
+            "value" : "Absent à distance"
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "未バックアップ"
+            "value" : "リモートに未存在"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "아직 백업되지 않음"
+            "value" : "원격에 없음"
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Ainda sem backup"
+            "value" : "Fora do destino remoto"
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Ainda sem cópia de segurança"
+            "value" : "Fora do destino remoto"
           }
         },
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Ещё не сохранено"
+            "value" : "Нет удалённо"
           }
         },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Ще не збережено"
+            "value" : "Немає у віддаленому сховищі"
           }
         },
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "尚未备份"
+            "value" : "远端尚无"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "尚未備份"
+            "value" : "遠端尚無"
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "尚未備份"
+            "value" : "遠端尚無"
           }
         }
       }
@@ -66080,6 +66169,94 @@
         }
       }
     },
+    "mediaBrowser.selection.count" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld ausgewählt"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld Selected"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld seleccionados"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld seleccionados"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld sélectionnés"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld項目を選択中"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld개 선택됨"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld selecionados"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld selecionados"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Выбрано: %lld"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Вибрано: %lld"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已选 %lld 项"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已選 %lld 項"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已選 %lld 項"
+          }
+        }
+      }
+    },
     "mediaBrowser.size.atLeast" : {
       "localizations" : {
         "de" : {
@@ -66699,10 +66876,70 @@
     "mediaBrowser.viewer.unavailable" : {
       "extractionState" : "manual",
       "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dieses Objekt ist nicht mehr verfügbar."
+          }
+        },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "This item is no longer available."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Este elemento ya no está disponible."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Este elemento ya no está disponible."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cet élément n’est plus disponible."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "この項目は利用できなくなりました。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 항목은 더 이상 사용할 수 없습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Este item não está mais disponível."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Este item já não está disponível."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Этот объект больше недоступен."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Цей об’єкт більше недоступний."
           }
         },
         "zh-Hans" : {
@@ -66712,6 +66949,12 @@
           }
         },
         "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此資源已無法使用。"
+          }
+        },
+        "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "此資源已無法使用。"

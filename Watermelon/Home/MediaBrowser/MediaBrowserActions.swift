@@ -615,7 +615,7 @@ final class MediaBrowserActionRunner {
     // MARK: - Delete from backup (irreversible; requires confirmation)
 
     private func deleteRemote(_ item: MediaBrowserItem, from presenter: UIViewController, onChanged: @escaping @MainActor (Bool) -> Void) async {
-        guard let fingerprint = item.fingerprint, let month = item.remoteMonth else {
+        guard item.isRemoteDeletable, let fingerprint = item.fingerprint else {
             presentError(String(localized: "mediaBrowser.action.error"), on: presenter); return
         }
         let remoteSession = env.appSession.snapshot
@@ -660,47 +660,83 @@ final class MediaBrowserActionRunner {
                 return
             }
             let hud = HUD.show(String(localized: "mediaBrowser.action.deletingRemote"), on: presenter)
+            defer { hud.dismiss() }
+            guard let plan = await self.remoteDeletionPlan(for: [item], expectedProfileKey: RemoteIndexSyncService.remoteProfileKey(profile)),
+                  let months = plan[item.id], !months.isEmpty else {
+                self.presentError(String(localized: "mediaBrowser.action.error"), on: presenter)
+                return
+            }
             do {
-                try await self.env.backupCoordinator.deleteRemoteAsset(profile: profile, password: password, month: month, assetFingerprint: fingerprint)
-                hud.dismiss()
+                for month in months {
+                    guard self.sessionStillMatches(profile, generation: sessionGeneration) else {
+                        self.presentError(String(localized: "mediaBrowser.action.notConnected"), on: presenter)
+                        return
+                    }
+                    try await self.env.backupCoordinator.deleteRemoteAsset(profile: profile, password: password, month: month, assetFingerprint: fingerprint)
+                }
                 onChanged(true)
             } catch {
-                hud.dismiss()
                 self.presentError(String(localized: "mediaBrowser.action.error"), on: presenter)
             }
         }
     }
 
-    // MARK: - Batch / multi-target operations (grid multi-select + viewer "delete all")
-
-    // Delete-all for a single viewer item (removes it from every place it lives). Same core as the batch delete.
-    func runDeleteAll(_ item: MediaBrowserItem, from presenter: UIViewController, onChanged: @escaping @MainActor (_ hadFailures: Bool) -> Void) {
-        guard canRun(.deleteRemote) else {
-            presentError(String(localized: "mediaBrowser.action.taskInProgress"), on: presenter); return
+    private func remoteDeletionPlan(for items: [MediaBrowserItem], expectedProfileKey: String) async -> [MediaBrowserItemID: [LibraryMonthKey]]? {
+        let coordinator = env.backupCoordinator
+        return await withCancellableDetachedValue(priority: .userInitiated) {
+            Self.remoteDeletionPlan(for: items, snapshot: coordinator.currentRemoteSnapshotState(since: nil),
+                                    expectedProfileKey: expectedProfileKey)
         }
-        runGated { await self.performDeletion(items: [item], from: presenter, onChanged: onChanged) }
+    }
+
+    nonisolated static func remoteDeletionPlan(for items: [MediaBrowserItem], snapshot: RemoteLibrarySnapshotState,
+                                               expectedProfileKey: String) -> [MediaBrowserItemID: [LibraryMonthKey]]? {
+        guard snapshot.isAuthoritative, RemoteSnapshotOwnership.matches(ownerProfileKey: snapshot.profileKey,
+                                                                       expectedProfileKey: expectedProfileKey) else { return nil }
+        var monthsByFingerprint: [Data: Set<LibraryMonthKey>] = [:]
+        for delta in snapshot.monthDeltas {
+            for asset in delta.assets { monthsByFingerprint[asset.assetFingerprint, default: []].insert(delta.month) }
+            for link in delta.assetResourceLinks { monthsByFingerprint[link.assetFingerprint, default: []].insert(delta.month) }
+        }
+        return Dictionary(uniqueKeysWithValues: items.compactMap { item in
+            guard item.isRemoteDeletable, let fingerprint = item.fingerprint else { return nil }
+            let months = item.remoteMonth.map { [$0] } ?? monthsByFingerprint[fingerprint, default: []].sorted()
+            return (item.id, months)
+        })
+    }
+
+    // MARK: - Batch operations
+
+    func runDeleteAll(_ item: MediaBrowserItem, from presenter: UIViewController, onChanged: @escaping @MainActor (Bool) -> Void) {
+        guard canRun(.deleteRemote) else {
+            presentError(String(localized: "mediaBrowser.action.taskInProgress"), on: presenter)
+            return
+        }
+        runGated { await self.performDeletion(target: .all, items: [item], from: presenter, onChanged: onChanged) }
     }
 
     // Grid multi-select entry point. Availability is decided by BatchActionResolver before this is called.
     func runBatch(_ action: BatchAction, items: [MediaBrowserItem], from presenter: UIViewController, onChanged: @escaping @MainActor () -> Void) {
-        let gate: MediaBrowserActionKind = action == .download ? .download : (action == .upload ? .upload : .deleteRemote)
+        let gate: MediaBrowserActionKind
+        switch action {
+        case .upload: gate = .upload
+        case .download: gate = .download
+        case .delete(let target): gate = target.actionKind
+        }
         guard canRun(gate) else {
             presentError(String(localized: "mediaBrowser.action.taskInProgress"), on: presenter); return
         }
         switch action {
         case .upload: runGated { await self.batchUpload(items, from: presenter, onChanged: onChanged) }
         case .download: runGated { await self.batchDownload(items, from: presenter, onChanged: onChanged) }
-        case .delete: runGated { await self.performDeletion(items: items, from: presenter, onChanged: { _ in onChanged() }) }
+        case .delete(let target): runGated { await self.performDeletion(target: target, items: items, from: presenter, onChanged: { _ in onChanged() }) }
         }
     }
 
-    // Delete `items` from EVERY place they live: on-device ones from the Photos library (one change + hash-index
-    // purge), on-remote ones from the backup (looped — no batch delete API). A backup removal is involved → confirm
-    // first (device-only deletes are confirmed by PhotoKit's own system sheet). Device is deleted first so a cancel
-    // at the system sheet leaves the backup intact.
-    private func performDeletion(items: [MediaBrowserItem], from presenter: UIViewController, onChanged: @escaping @MainActor (_ hadFailures: Bool) -> Void) async {
-        let deviceItems = items.filter(\.isDeviceDeletable)
-        let remoteItems = items.filter(\.isRemoteDeletable)
+    private func performDeletion(target: MediaBrowserDeleteTarget, items: [MediaBrowserItem], from presenter: UIViewController, onChanged: @escaping @MainActor (Bool) -> Void) async {
+        let targetItems = target.items(in: items)
+        let deviceItems = target == .remote ? [] : targetItems.filter(\.isDeviceDeletable)
+        let remoteItems = target == .local ? [] : targetItems.filter(\.isRemoteDeletable)
         guard !deviceItems.isEmpty || !remoteItems.isEmpty else { return }
 
         // Capture the target credentials before any await: a profile switch mid-operation (during the
@@ -719,7 +755,9 @@ final class MediaBrowserActionRunner {
         await withExecutionLease(on: presenter) {
             let hud = HUD.show(String(localized: "mediaBrowser.action.deletingRemote"), on: presenter)
             defer { hud.dismiss() }
-            let retainedFingerprints = Self.retainedDeviceDeleteFingerprints(deviceItems)
+            let retainedFingerprints = target == .all ? [] : Self.retainedDeviceDeleteFingerprints(deviceItems)
+            var unresolvedDeviceIDs = Set<String>()
+            var hadFailures = false
             var acceptedRiskFingerprints = Set<Data>()
             if !retainedFingerprints.isEmpty {
                 _ = await self.env.presenceIndex.refresh(notifyOnCommit: false)
@@ -738,8 +776,6 @@ final class MediaBrowserActionRunner {
                     acceptedRiskFingerprints.formUnion(atRisk)
                 }
             }
-            // `.both` device copies a limited-access fetch couldn't reach — their backup must be preserved (below).
-            var unresolvedDeviceIDs = Set<String>()
             if !deviceItems.isEmpty {
                 let localIDs = deviceItems.compactMap(\.localIdentifier)
                 let assets = PHAsset.fetchAssets(withLocalIdentifiers: localIDs, options: PhotoLibraryService.makeAssetFetchOptions())
@@ -749,7 +785,7 @@ final class MediaBrowserActionRunner {
                     // Same act gate as the single-item deleteLocal: a RETAINED `.both` device delete is justified
                     // by "the backup holds these bytes" — re-prove each claim at the act, since the batch defers
                     // grid reloads and a mid-confirmation Photos edit never reprojects before the delete.
-                    let claims = Self.retainedDeviceDeleteClaims(deviceItems, fetchedIDs: fetched)
+                    let claims = target == .all ? [:] : Self.retainedDeviceDeleteClaims(deviceItems, fetchedIDs: fetched)
                     if !claims.isEmpty {
                         let presenceIndex = self.env.presenceIndex
                         let matches = await withCancellableDetachedValue(priority: .userInitiated) {
@@ -757,7 +793,6 @@ final class MediaBrowserActionRunner {
                         }
                         guard matches else {
                             self.presentError(String(localized: "mediaBrowser.action.error"), on: presenter)
-                            // hadFailures: a delete-all viewer must stay open with the error; the reload reprojects.
                             onChanged(true)
                             return
                         }
@@ -785,7 +820,6 @@ final class MediaBrowserActionRunner {
                         try await self.performLibraryChange { PHAssetChangeRequest.deleteAssets(assets) }
                     } catch {
                         let ns = error as NSError
-                        // User backed out at the system delete sheet — abort before the irreversible backup delete.
                         if ns.domain == PHPhotosErrorDomain && ns.code == PHPhotosError.userCancelled.rawValue { return }
                         self.presentError(String(localized: "mediaBrowser.action.error"), on: presenter)
                         return
@@ -798,29 +832,27 @@ final class MediaBrowserActionRunner {
                     purgeIDs = localIDs.filter { fetched.contains($0) }
                     unresolvedDeviceIDs = Set(localIDs.filter { !fetched.contains($0) })
                     if purgeIDs.count < localIDs.count {
+                        hadFailures = true
                         self.presentError(String(localized: "mediaBrowser.action.noPhotoAccess"), on: presenter)
                     }
                 }
                 try? self.env.hashIndexRepository.deleteIndexEntries(assetIDs: purgeIDs)
             }
 
-            // Any device deletions above already happened; still fall through to the final reconcile so the grid
-            // reflects them even if the remote leg can't run (disconnected) or some deletes fail.
-            var remoteDeleteFailed = false
             if !remoteItems.isEmpty {
                 if let profile, let password {
+                    guard let plan = await self.remoteDeletionPlan(for: remoteItems, expectedProfileKey: RemoteIndexSyncService.remoteProfileKey(profile)) else {
+                        self.presentError(String(localized: "mediaBrowser.action.notConnected"), on: presenter)
+                        onChanged(true)
+                        return
+                    }
                     hud.update(self.deletingProgressText(0, remoteItems.count))
                     var completed = 0
                     var failed = 0
-                    var skippedForAccess = 0
                     for item in remoteItems {
                         if Task.isCancelled { break }
-                        guard let fp = item.fingerprint, let month = item.remoteMonth else { continue }
-                        // A `.both` item whose device copy couldn't be deleted (excluded from the limited Photos
-                        // selection) keeps its backup — mirror the single deleteLocal abort so a limited-access
-                        // miss never strips the only reachable copy while the device copy still exists.
+                        guard let fp = item.fingerprint else { continue }
                         if let localID = item.localIdentifier, unresolvedDeviceIDs.contains(localID) {
-                            skippedForAccess += 1
                             completed += 1
                             hud.update(self.deletingProgressText(completed, remoteItems.count))
                             continue
@@ -843,7 +875,13 @@ final class MediaBrowserActionRunner {
                                 break
                             }
                             do {
-                                try await self.env.backupCoordinator.deleteRemoteAsset(profile: profile, password: password, month: month, assetFingerprint: fp)
+                                guard let months = plan[item.id], !months.isEmpty else {
+                                    throw CocoaError(.fileNoSuchFile)
+                                }
+                                for month in months {
+                                    guard self.sessionStillMatches(profile, generation: sessionGeneration) else { throw CancellationError() }
+                                    try await self.env.backupCoordinator.deleteRemoteAsset(profile: profile, password: password, month: month, assetFingerprint: fp)
+                                }
                             } catch {
                                 failed += 1
                                 actionLog.error("batch deleteRemote failed for \(fp.hexString, privacy: .public): \(String(describing: error), privacy: .public)")
@@ -859,32 +897,25 @@ final class MediaBrowserActionRunner {
                     // Surface a partial failure (the single-item delete does too) so the user isn't left thinking
                     // every backup item was removed when some remote deletes errored.
                     if failed > 0 {
-                        remoteDeleteFailed = true
+                        hadFailures = true
                         self.presentError(String.localizedStringWithFormat(String(localized: "mediaBrowser.batch.delete.failed"), failed), on: presenter)
-                    } else if skippedForAccess > 0 {
-                        // Backups preserved for device copies we couldn't delete under limited access — keep the
-                        // viewer open (noPhotoAccess was already surfaced) instead of dismissing as fully done.
-                        remoteDeleteFailed = true
                     }
                 } else {
-                    remoteDeleteFailed = true
+                    hadFailures = true
                     self.presentError(String(localized: "mediaBrowser.action.notConnected"), on: presenter)
                 }
             }
 
-            onChanged(remoteDeleteFailed)
+            onChanged(hadFailures)
         }
     }
 
-    // The `.both` claims a batch's device leg must re-prove before deleting (the single-item act gate's rule):
-    // retained device deletes (not remote-deletable here) keyed by localIdentifier, valued by the fingerprint
-    // the backup is trusted to hold. Delete-everywhere items are exempt (total removal is the stated intent);
-    // unfetched IDs are never deleted by the change request, so they are not gated. Pure + unit-testable.
+    // Local deletion must revalidate backup claims in every browser mode.
     nonisolated static func retainedDeviceDeleteClaims(_ items: [MediaBrowserItem], fetchedIDs: Set<String>) -> [String: Data] {
         var claims: [String: Data] = [:]
         for item in items {
             guard let id = item.localIdentifier, fetchedIDs.contains(id),
-                  item.presence == .both, !item.isRemoteDeletable, let fp = item.fingerprint else { continue }
+                  item.presence == .both, let fp = item.fingerprint else { continue }
             claims[id] = fp
         }
         return claims
@@ -895,7 +926,6 @@ final class MediaBrowserActionRunner {
     ) -> Set<Data> {
         Set(items.compactMap { item in
             guard item.isDeviceDeletable,
-                  !item.isRemoteDeletable,
                   item.presence == .both else { return nil }
             return item.fingerprint
         })
@@ -1100,9 +1130,8 @@ final class MediaBrowserActionRunner {
             let once = ActionOnce()
             let resume: (IncompleteDownloadPolicy?) -> Void = { value in if once.take() { continuation.resume(returning: value) } }
             let token = DeinitObserver { resume(nil) }
-            // Reuse Home's whole-month restore consent strings (same semantics, fully plural-localized in all locales).
-            let message = String.localizedStringWithFormat(String(localized: "home.incompleteDownload.message"), count)
-            let alert = UIAlertController(title: String(localized: "home.incompleteDownload.title"), message: message, preferredStyle: .alert)
+            let message = String.localizedStringWithFormat(String(localized: "mediaBrowser.batch.incompleteDownload.message"), count)
+            let alert = UIAlertController(title: String(localized: "mediaBrowser.action.incompleteDownload.confirmTitle"), message: message, preferredStyle: .alert)
             alert.addAction(UIAlertAction(title: String(localized: "home.incompleteDownload.createAll"), style: .default) { _ in _ = token; resume(.createNewAsset) })
             alert.addAction(UIAlertAction(title: String(localized: "home.incompleteDownload.skip"), style: .default) { _ in _ = token; resume(.skip) })
             alert.addAction(UIAlertAction(title: String(localized: "common.cancel"), style: .cancel) { _ in _ = token; resume(nil) })

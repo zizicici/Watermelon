@@ -286,6 +286,21 @@ final class LocalMediaSource: MediaBrowserSource, @unchecked Sendable {
         return lhs.id < rhs.id
     }
 
+    func fileSizes(for items: [MediaBrowserItem]) async -> [MediaBrowserItemID: Int64] {
+        var result = Dictionary(uniqueKeysWithValues: items.compactMap { item in
+            item.fileSize.map { (item.id, $0) }
+        })
+        let identifiers = Set(items.filter { $0.fileSize == nil }.compactMap(\.localIdentifier))
+        guard !identifiers.isEmpty, !Task.isCancelled else { return result }
+        let sizes = await fileSizeLoader(identifiers)
+        for item in items where item.fileSize == nil {
+            if let identifier = item.localIdentifier, let size = sizes[identifier] {
+                result[item.id] = size
+            }
+        }
+        return result
+    }
+
     func thumbnail(for item: MediaBrowserItem) async -> UIImage? {
         guard let id = item.localIdentifier else { return nil }
         guard let fingerprint = item.fingerprint else {

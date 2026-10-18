@@ -244,10 +244,9 @@ struct MediaBrowserItem: Hashable, Sendable {
     var isLivePhoto: Bool { kind == .livePhoto }
     var fingerprintHex: String? { fingerprint?.hexString }
 
-    // Deletable from the backup: on the remote AND carries the fingerprint+month the manifest delete needs.
     var isRemoteDeletable: Bool {
         if case .remote = backing { return true }
-        return false
+        return presence == .both && fingerprint != nil
     }
     // Deletable from the device: has a live PHAsset handle.
     var isDeviceDeletable: Bool { localIdentifier != nil }
@@ -291,22 +290,36 @@ struct MediaBrowserItem: Hashable, Sendable {
     }
 }
 
-// Which batch actions a grid multi-selection offers, decided purely from the selected items. Kept out of the
-// view controller so the rules are unit-testable. Rules (user-specified):
-//  · Upload only when EVERY item is local-only; Download only when EVERY item is remote-only — a mixed
-//    selection offers neither (no download-then-upload "complement").
-//  · Delete is always available (one button); its confirmation states the from-backup / from-device breakdown,
-//    and it removes each item from every place it lives (a "both" item is counted on both sides).
-// The three multi-select batch operations (a synthetic "delete" that maps onto per-item deleteLocal/deleteRemote).
 enum BatchAction: Hashable {
     case upload
     case download
-    case delete
+    case delete(MediaBrowserDeleteTarget)
 }
 
-// `remoteCount` counts only items that can actually be deleted from the backup (fingerprint + remote month). The
-// Local tab's source carries no remote month, so a backed-up on-device item there is device-only by design — a
-// delete in the on-device view must not silently remove the cloud backup.
+enum MediaBrowserDeleteTarget: CaseIterable, Hashable {
+    case local
+    case remote
+    case all
+
+    var actionKind: MediaBrowserActionKind {
+        self == .local ? .deleteLocal : .deleteRemote
+    }
+
+    var title: String {
+        self == .all ? String(localized: "mediaBrowser.action.deleteAll") : actionKind.title
+    }
+
+    func items(in selection: [MediaBrowserItem]) -> [MediaBrowserItem] {
+        selection.filter {
+            switch self {
+            case .local: $0.isDeviceDeletable
+            case .remote: $0.isRemoteDeletable
+            case .all: $0.isDeviceDeletable || $0.isRemoteDeletable
+            }
+        }
+    }
+}
+
 enum BatchActionResolver {
     struct Result: Equatable {
         let showsUpload: Bool
@@ -314,6 +327,16 @@ enum BatchActionResolver {
         let deviceCount: Int   // items that will be deleted from the device
         let remoteCount: Int   // items that will be removed from the backup
         var showsDelete: Bool { deviceCount > 0 || remoteCount > 0 }
+
+        var deleteTargets: [MediaBrowserDeleteTarget] {
+            MediaBrowserDeleteTarget.allCases.filter {
+                switch $0 {
+                case .local: deviceCount > 0
+                case .remote: remoteCount > 0
+                case .all: deviceCount > 0 && remoteCount > 0
+                }
+            }
+        }
     }
 
     static func resolve(_ items: some Sequence<MediaBrowserItem>) -> Result {
@@ -532,6 +555,11 @@ struct MediaBrowserSnapshot: Sendable {
     func itemIDs(inSection sectionIndex: Int) -> [MediaBrowserItemID] {
         guard sections.indices.contains(sectionIndex) else { return [] }
         return sections[sectionIndex].items.map(\.id)
+    }
+
+    func month(for id: MediaBrowserItemID) -> LibraryMonthKey? {
+        guard let location = sourceLocations[id] else { return nil }
+        return sourceSections[location.section].month
     }
 
     func itemCount(inSection sectionIndex: Int) -> Int {

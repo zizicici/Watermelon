@@ -212,8 +212,21 @@ final class MediaBrowserGridViewController: UIViewController {
     private var selection: MediaBrowserSelection { browserSession.selection }
     private var isSelecting: Bool { selection.isSelecting }
     private var selectedItemIDs: Set<MediaBrowserItemID> { selection.selectedIDs }
-    private var renderedBatchActions: [BatchAction] = []
-    private var batchToolbarItems: [BatchAction: UIBarButtonItem] = [:]
+    private enum BatchToolbarAction { case upload, download, delete }
+    private var renderedBatchActions: [BatchToolbarAction] = []
+    private var batchToolbarItems: [BatchToolbarAction: UIBarButtonItem] = [:]
+    private lazy var selectionCountToolbarItem: UIBarButtonItem = {
+        let item = UIBarButtonItem(title: "", style: .plain, target: nil, action: nil)
+        item.accessibilityIdentifier = "mediaBrowser.selection.count"
+        item.tintColor = .label
+        item.preferredMenuElementOrder = .fixed
+        item.menu = UIMenu(children: [UIDeferredMenuElement.uncached { [weak self] completion in
+            MainActor.assumeIsolated {
+                completion(self?.selectedItemsMenus() ?? [])
+            }
+        }])
+        return item
+    }()
     private var isBrowserVisible = false
     private var isNativeMultipleSelectionInteraction = false
     private weak var activeSelectionDragGesture: UILongPressGestureRecognizer?
@@ -2620,7 +2633,7 @@ final class MediaBrowserGridViewController: UIViewController {
     private func updateBatchToolbar() {
         let result = selection.summary.actions
         let remoteReady = actionRunner.isRemoteReachable && presenceIndex.isRemotePresenceAuthoritative
-        var actions: [BatchAction] = []
+        var actions: [BatchToolbarAction] = []
         if isSelecting {
             if result.showsUpload && remoteReady { actions.append(.upload) }
             if result.showsDownload && remoteReady { actions.append(.download) }
@@ -2628,20 +2641,112 @@ final class MediaBrowserGridViewController: UIViewController {
         }
         if actions != renderedBatchActions {
             renderedBatchActions = actions
-            var items: [UIBarButtonItem] = []
+            var items: [UIBarButtonItem] = actions.isEmpty ? [] : [selectionCountToolbarItem]
             for action in actions {
-                if action == .delete { items.append(.flexibleSpace()) }
+                items.append(.flexibleSpace())
                 items.append(batchToolbarItem(for: action))
             }
             setToolbarItems(items, animated: false)
         }
+        selectionCountToolbarItem.title = String.localizedStringWithFormat(
+            String(localized: "mediaBrowser.selection.count"), selection.summary.count
+        )
+        selectionCountToolbarItem.isEnabled = canInteractWithSelection && !actions.isEmpty
         for (action, item) in batchToolbarItems {
             item.isEnabled = canInteractWithSelection && actions.contains(action)
+            if action == .delete {
+                let revision = selection.revision
+                item.menu = MediaBrowserDeleteMenu.make(targets: batchDeleteTargets) { target in
+                    let count: Int
+                    switch target {
+                    case .local: count = selection.summary.deviceCount
+                    case .remote: count = selection.summary.remoteCount
+                    case .all: count = selection.summary.count
+                    }
+                    return UIAction(title: "\(target.title) (\(count.formatted()))", attributes: .destructive) { [weak self] _ in
+                        guard let self, self.selection.revision == revision else { return }
+                        self.runBatchAction(.delete(target))
+                    }
+                }
+            }
         }
         updateBatchToolbarVisibility(animated: viewIfLoaded?.window != nil)
     }
 
-    private func batchToolbarItem(for action: BatchAction) -> UIBarButtonItem {
+    func selectedItemsMenus() -> [UIMenu] {
+        guard canInteractWithSelection, isSelecting else { return [] }
+        let counts = selectedMediaItems().reduce(into: [LibraryMonthKey: Int]()) { counts, item in
+            guard let month = browserSnapshot.month(for: item.id) else { return }
+            counts[month, default: 0] += 1
+        }
+        return counts.keys.sorted().map { month in
+            UIMenu(title: "\(month.displayText) (\(counts[month, default: 0].formatted()))", children: [UIDeferredMenuElement.uncached { [weak self] completion in
+                Task { @MainActor [weak self] in
+                    completion(await self?.selectedItemsMenuActions(in: month) ?? [])
+                }
+            }])
+        }
+    }
+
+    func selectedItemsMenuActions(in month: LibraryMonthKey) async -> [UIAction] {
+        guard canInteractWithSelection, isSelecting else { return [] }
+        let revision = selection.revision
+        let items = selectedMediaItems().filter { browserSnapshot.month(for: $0.id) == month }.sorted {
+            if $0.creationDateMs != $1.creationDateMs { return $0.creationDateMs < $1.creationDateMs }
+            return $0.id < $1.id
+        }
+        let source = source
+        async let sizes = source.fileSizes(for: items)
+        let thumbnails = await withTaskGroup(of: (Int, UIImage?).self, returning: [Int: UIImage].self) { group in
+            var next = 0
+            func enqueue() {
+                guard next < items.count else { return }
+                let index = next
+                let item = items[index]
+                next += 1
+                group.addTask {
+                    guard !Task.isCancelled, let image = await source.thumbnail(for: item) else { return (index, nil) }
+                    let thumbnail = await image.byPreparingThumbnail(ofSize: CGSize(width: 44, height: 44)) ?? image
+                    return (index, thumbnail.withRenderingMode(.alwaysOriginal))
+                }
+            }
+            for _ in 0..<4 { enqueue() }
+            var images: [Int: UIImage] = [:]
+            for await (index, image) in group {
+                guard !Task.isCancelled, selection.revision == revision else {
+                    group.cancelAll()
+                    break
+                }
+                images[index] = image
+                enqueue()
+            }
+            return images
+        }
+        let fileSizes = await sizes
+        guard !Task.isCancelled, canInteractWithSelection, isSelecting,
+              selection.revision == revision else { return [] }
+        return items.enumerated().map { index, item in
+            let date = Date(timeIntervalSince1970: TimeInterval(item.creationDateMs) / 1_000)
+                .formatted(date: .abbreviated, time: .standard)
+            let symbol = item.isVideo ? "video" : (item.isLivePhoto ? "livephoto" : "photo")
+            let action = UIAction(title: date, image: thumbnails[index] ?? UIImage(systemName: symbol)) { [weak self] _ in
+                guard let self, self.canInteractWithSelection, self.isSelecting,
+                      self.selectedItemIDs.contains(item.id),
+                      let indexPath = self.dataSource?.indexPath(for: item.id) else { return }
+                self.collectionView.scrollToItem(at: indexPath, at: .centeredVertically,
+                                                 animated: !UIAccessibility.isReduceMotionEnabled)
+            }
+            action.subtitle = fileSizes[item.id].map(Self.formattedFileSize)
+                ?? String(localized: "mediaBrowser.size.unknown")
+            return action
+        }
+    }
+
+    private var batchDeleteTargets: [MediaBrowserDeleteTarget] {
+        selection.summary.actions.deleteTargets
+    }
+
+    private func batchToolbarItem(for action: BatchToolbarAction) -> UIBarButtonItem {
         if let item = batchToolbarItems[action] { return item }
         let content: (title: String, identifier: String)
         switch action {
@@ -2653,10 +2758,12 @@ final class MediaBrowserGridViewController: UIViewController {
             content = (String(localized: "mediaBrowser.action.delete"), "delete")
         }
         let item = UIBarButtonItem(title: content.title, style: .plain,
-                                 target: self, action: #selector(batchToolbarTapped(_:)))
+                                 target: action == .delete ? nil : self,
+                                 action: action == .delete ? nil : #selector(batchToolbarTapped(_:)))
         item.accessibilityLabel = content.title
         item.accessibilityIdentifier = "mediaBrowser.batch.\(content.identifier)"
         item.tintColor = action == .delete ? .systemRed : .label
+        if action == .delete { item.preferredMenuElementOrder = .fixed }
         batchToolbarItems[action] = item
         return item
     }
@@ -2671,7 +2778,17 @@ final class MediaBrowserGridViewController: UIViewController {
 
     @objc private func batchToolbarTapped(_ sender: UIBarButtonItem) {
         guard let action = batchToolbarItems.first(where: { $0.value === sender })?.key,
-              renderedBatchActions.contains(action), canInteractWithSelection, isSelecting else { return }
+              renderedBatchActions.contains(action) else { return }
+        switch action {
+        case .upload: runBatchAction(.upload)
+        case .download: runBatchAction(.download)
+        case .delete: break
+        }
+    }
+
+    private func runBatchAction(_ action: BatchAction) {
+        guard canInteractWithSelection, isSelecting else { return }
+        if case .delete(let target) = action, !batchDeleteTargets.contains(target) { return }
         let items = selectedMediaItems()
         guard !items.isEmpty else { return }
         actionRunner.runBatch(action, items: items, from: self) { [weak self] in

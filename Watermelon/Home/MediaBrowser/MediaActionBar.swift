@@ -1,5 +1,18 @@
 import UIKit
 
+@MainActor
+enum MediaBrowserDeleteMenu {
+    static func make(targets: [MediaBrowserDeleteTarget], makeAction: (MediaBrowserDeleteTarget) -> UIAction) -> UIMenu {
+        var children: [UIMenuElement] = []
+        if targets.contains(.all) { children.append(makeAction(.all)) }
+        let singleActions = [MediaBrowserDeleteTarget.local, .remote].filter(targets.contains).map(makeAction)
+        if !singleActions.isEmpty {
+            children.append(UIMenu(options: .displayInline, children: singleActions))
+        }
+        return UIMenu(children: children)
+    }
+}
+
 // A horizontal row of vertical (SF-symbol-over-label) action buttons. Centers when the buttons fit the
 // width, scrolls when they overflow. Generic over a caller tag so a screen can mix real action kinds with
 // synthetic entries (e.g. a single "Delete" that opens its own menu).
@@ -9,12 +22,14 @@ final class MediaActionBar: UIView {
         let symbolName: String
         let title: String
         let isDestructive: Bool
+        let menu: UIMenu?
 
-        init(id: AnyHashable, symbolName: String, title: String, isDestructive: Bool = false) {
+        init(id: AnyHashable, symbolName: String, title: String, isDestructive: Bool = false, menu: UIMenu? = nil) {
             self.id = id
             self.symbolName = symbolName
             self.title = title
             self.isDestructive = isDestructive
+            self.menu = menu
         }
     }
 
@@ -24,10 +39,6 @@ final class MediaActionBar: UIView {
     private let scrollView = UIScrollView()
     private let stack = UIStackView()
     private var onTap: ((AnyHashable) -> Void)?
-    private var buttonsByID: [AnyHashable: UIButton] = [:]
-
-    // The button view for an entry — lets a caller anchor a popover (iPad) to the specific action, not the bar.
-    func buttonView(for id: AnyHashable) -> UIView? { buttonsByID[id] }
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -62,10 +73,8 @@ final class MediaActionBar: UIView {
     func configure(entries: [Entry], onTap: @escaping (AnyHashable) -> Void) {
         self.onTap = onTap
         stack.arrangedSubviews.forEach { $0.removeFromSuperview() }
-        buttonsByID.removeAll()
         for entry in entries {
             let button = makeButton(for: entry)
-            buttonsByID[entry.id] = button
             stack.addArrangedSubview(button)
         }
         setNeedsLayout()
@@ -89,7 +98,13 @@ final class MediaActionBar: UIView {
         // The bar has a fixed height; clamp Dynamic Type so a symbol-over-label button can't grow past it and clip.
         button.maximumContentSizeCategory = .extraExtraLarge
         let id = entry.id
-        button.addAction(UIAction { [weak self] _ in self?.onTap?(id) }, for: .touchUpInside)
+        if let menu = entry.menu {
+            button.menu = menu
+            button.preferredMenuElementOrder = .fixed
+            button.showsMenuAsPrimaryAction = true
+        } else {
+            button.addAction(UIAction { [weak self] _ in self?.onTap?(id) }, for: .touchUpInside)
+        }
         return button
     }
 

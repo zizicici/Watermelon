@@ -52,7 +52,10 @@ final class MediaBrowserGridSelectionTests: XCTestCase {
         XCTAssertEqual(deleteItem.accessibilityLabel, String(localized: "mediaBrowser.action.delete"))
         XCTAssertEqual(deleteItem.tintColor, .systemRed)
         XCTAssertTrue(deleteItem.isEnabled)
-        XCTAssertEqual(controller.toolbarItems?.compactMap(\.accessibilityIdentifier), ["mediaBrowser.batch.delete"])
+        XCTAssertEqual(controller.toolbarItems?.compactMap(\.accessibilityIdentifier), ["mediaBrowser.selection.count", "mediaBrowser.batch.delete"])
+        let countItem = try XCTUnwrap(controller.toolbarItems?.first)
+        XCTAssertEqual(countItem.title, String.localizedStringWithFormat(String(localized: "mediaBrowser.selection.count"), 2))
+        let staleAction = try XCTUnwrap((deleteItem.menu?.children.first as? UIMenu)?.children.first as? UIAction)
         try await waitUntil {
             window.layoutIfNeeded()
             return controller.view.safeAreaInsets.bottom > initialBottomInset
@@ -144,9 +147,163 @@ final class MediaBrowserGridSelectionTests: XCTestCase {
         XCTAssertFalse(try checkbox(in: newCell).isSelected)
         XCTAssertTrue(navigation.isToolbarHidden)
         XCTAssertTrue(controller.toolbarItems?.isEmpty ?? true)
-        let staleAction = try XCTUnwrap(deleteItem.action)
-        UIApplication.shared.sendAction(staleAction, to: deleteItem.target, from: deleteItem, for: nil)
+        let control = UIControl()
+        control.addAction(staleAction, for: .primaryActionTriggered)
+        control.sendActions(for: .primaryActionTriggered)
         XCTAssertFalse(runner.isActionRunning)
+    }
+
+    func testDeleteMenuTracksSelectionPresenceAndLocalScope() async throws {
+        let month = LibraryMonthKey(year: 2026, month: 1)
+        let local = lifecycleItem("local")
+        let remoteReference = RemoteMediaReference(fingerprint: Data([1]), photoRelativePath: "2026/01/remote.jpg",
+            videoRelativePath: nil, photoContentHash: nil, videoContentHash: nil, storageMonth: month, isIncomplete: false)
+        let remote = MediaBrowserItem(kind: .photo, creationDateMs: 2, localIdentifier: nil, remote: remoteReference)
+        let shared = MediaBrowserItem(kind: .photo, creationDateMs: 2, localIdentifier: "shared", remote: remoteReference)
+        let source = SelectionSource(items: [local, remote], mode: .merged)
+        let fixture = try MediaBrowserTestFixture(source: source)
+        defer { fixture.close() }
+        let controller = fixture.controller
+        try await waitUntil { fixture.itemIDs.count == 2 }
+        controller.perform(NSSelectorFromString("enterSelection"))
+        controller.perform(NSSelectorFromString("selectAllItems"))
+        let deleteItem = try XCTUnwrap(controller.toolbarItems?.last)
+        func menuActions(_ menu: UIMenu?) -> [UIAction] {
+            menu?.children.flatMap { element -> [UIAction] in
+                if let action = element as? UIAction { return [action] }
+                return (element as? UIMenu)?.children.compactMap { $0 as? UIAction } ?? []
+            } ?? []
+        }
+        func targets() -> [String] { menuActions(deleteItem.menu).map(\.title) }
+        func counted(_ target: MediaBrowserDeleteTarget, _ count: Int) -> String { "\(target.title) (\(count.formatted()))" }
+        XCTAssertNil(deleteItem.action)
+        XCTAssertEqual(targets(), [counted(.all, 2), counted(.local, 1), counted(.remote, 1)])
+        XCTAssertEqual((deleteItem.menu?.children.first as? UIAction)?.title, counted(.all, 2))
+        XCTAssertTrue((deleteItem.menu?.children.last as? UIMenu)?.options.contains(.displayInline) == true)
+        XCTAssertTrue(menuActions(deleteItem.menu).allSatisfy { $0.attributes.contains(.destructive) })
+
+        source.replace(items: [remote])
+        fixture.postPresenceBurst()
+        try await waitUntil { fixture.itemIDs == [remote.id] }
+        XCTAssertEqual(targets(), [counted(.remote, 1)])
+        source.replace(items: [shared])
+        fixture.postPresenceBurst()
+        try await waitUntil { targets().count == 3 }
+        XCTAssertEqual(targets(), [counted(.all, 1), counted(.local, 1), counted(.remote, 1)])
+        XCTAssertEqual(controller.toolbarItems?.first?.title,
+                       String.localizedStringWithFormat(String(localized: "mediaBrowser.selection.count"), 1))
+
+        let backedUpLocal = MediaBrowserItem(kind: .photo, creationDateMs: 0, localIdentifier: "local-both",
+            fingerprint: Data([1]), isBackedUp: true)
+        let localFixture = try MediaBrowserTestFixture(source: SelectionSource(items: [local, backedUpLocal]))
+        defer { localFixture.close() }
+        try await waitUntil { localFixture.itemIDs.count == 2 }
+        localFixture.controller.perform(NSSelectorFromString("enterSelection"))
+        localFixture.controller.perform(NSSelectorFromString("selectAllItems"))
+        XCTAssertEqual(menuActions(localFixture.controller.toolbarItems?.last?.menu).map(\.title),
+                       [counted(.all, 2), counted(.local, 2), counted(.remote, 1)])
+    }
+
+    func testSelectionCountMenuScrollsToSelectedItemWithoutChangingSelection() async throws {
+        let items = (0..<200).map { index in
+            MediaBrowserItem(kind: .photo, creationDateMs: Int64(index) * 1_000,
+                localIdentifier: "selected-\(index)", fingerprint: nil, isBackedUp: false)
+        }
+        let fixture = try MediaBrowserTestFixture(source: SelectionSource(items: items))
+        defer { fixture.close() }
+        let controller = fixture.controller
+        let collection = fixture.collection
+        try await waitUntil {
+            controller.view.layoutIfNeeded()
+            return fixture.itemIDs.count == items.count && !collection.visibleCells.isEmpty
+        }
+        controller.perform(NSSelectorFromString("enterSelection"))
+        controller.perform(NSSelectorFromString("selectAllItems"))
+        let countItem = try XCTUnwrap(controller.toolbarItems?.first)
+        XCTAssertEqual(countItem.accessibilityIdentifier, "mediaBrowser.selection.count")
+        XCTAssertEqual(countItem.title, String.localizedStringWithFormat(String(localized: "mediaBrowser.selection.count"), 200))
+        XCTAssertNotNil(countItem.menu)
+        let month = LibraryMonthKey(year: 2026, month: 1)
+        XCTAssertEqual(controller.selectedItemsMenus().map(\.title), ["\(month.displayText) (200)"])
+        let actions = await controller.selectedItemsMenuActions(in: month)
+        XCTAssertEqual(actions.count, items.count)
+        let destination = IndexPath(item: items.count - 1, section: 0)
+        XCTAssertFalse(collection.indexPathsForVisibleItems.contains(destination))
+        let control = UIControl()
+        control.addAction(try XCTUnwrap(actions.last), for: .primaryActionTriggered)
+        control.sendActions(for: .primaryActionTriggered)
+        try await waitUntil { collection.indexPathsForVisibleItems.contains(destination) }
+        let refreshedActions = await controller.selectedItemsMenuActions(in: month)
+        XCTAssertEqual(refreshedActions.count, items.count)
+        XCTAssertEqual(countItem.title, String.localizedStringWithFormat(String(localized: "mediaBrowser.selection.count"), 200))
+        controller.perform(NSSelectorFromString("cancelSelection"))
+        XCTAssertTrue(controller.selectedItemsMenus().isEmpty)
+        control.sendActions(for: .primaryActionTriggered)
+        XCTAssertTrue(controller.navigationController?.isToolbarHidden == true)
+    }
+
+    func testSelectedMonthMenuLoadsMatchingThumbnailsAndSizesWithoutNumberedTitles() async throws {
+        let january = LibraryMonthKey(year: 2026, month: 1)
+        let february = LibraryMonthKey(year: 2026, month: 2)
+        let known = MediaBrowserItem(kind: .photo, creationDateMs: 1_770_000_000_000,
+            localIdentifier: "known", fingerprint: nil, isBackedUp: false, fileSize: 20_000_000)
+        let resolved = MediaBrowserItem(kind: .video, creationDateMs: 1_770_000_001_000,
+            localIdentifier: "resolved", fingerprint: nil, isBackedUp: false)
+        let unknown = lifecycleItem("unknown-size")
+        let source = SelectionSource(sections: [
+            .init(month: february, items: [resolved, known]),
+            .init(month: january, items: [unknown]),
+        ])
+        source.setThumbnail(testThumbnail(.red), for: known.id)
+        source.setThumbnail(testThumbnail(.blue), for: resolved.id)
+        source.setFileSizes([resolved.id: 3_000_000])
+        let fixture = try MediaBrowserTestFixture(source: source)
+        defer { fixture.close() }
+        try await waitUntil { fixture.itemIDs.count == 3 }
+        let controller = fixture.controller
+        controller.perform(NSSelectorFromString("enterSelection"))
+        controller.perform(NSSelectorFromString("selectAllItems"))
+        XCTAssertEqual(controller.selectedItemsMenus().map(\.title), ["\(january.displayText) (1)", "\(february.displayText) (2)"])
+        XCTAssertTrue(source.fileSizeRequests.isEmpty)
+
+        let actions = await controller.selectedItemsMenuActions(in: february)
+        XCTAssertEqual(source.fileSizeRequests, [[known.id, resolved.id]])
+        XCTAssertEqual(actions.map(\.title), [known, resolved].map {
+            Date(timeIntervalSince1970: TimeInterval($0.creationDateMs) / 1_000)
+                .formatted(date: .abbreviated, time: .standard)
+        })
+        XCTAssertEqual(actions.map(\.subtitle), [20_000_000, 3_000_000].map {
+            ByteCountFormatter.string(fromByteCount: Int64($0), countStyle: .file)
+        })
+        XCTAssertTrue(actions.allSatisfy { $0.image?.isSymbolImage == false && $0.image?.renderingMode == .alwaysOriginal })
+        XCTAssertNotEqual(actions[0].image?.pngData(), actions[1].image?.pngData())
+        let unknownActions = await controller.selectedItemsMenuActions(in: january)
+        XCTAssertEqual(unknownActions.first?.subtitle, String(localized: "mediaBrowser.size.unknown"))
+
+        controller.setSortOrder(.fileSize)
+        try await waitUntil { fixture.dataSource.snapshot().sectionIdentifiers.contains(.fileSize(.unknown)) }
+        controller.perform(NSSelectorFromString("enterSelection"))
+        controller.perform(NSSelectorFromString("selectAllItems"))
+        XCTAssertEqual(controller.selectedItemsMenus().map(\.title), ["\(january.displayText) (1)", "\(february.displayText) (2)"])
+    }
+
+    func testSelectionMenuDiscardsThumbnailsCompletedAfterSelectionChanges() async throws {
+        let item = lifecycleItem("stale-menu")
+        let fixture = try MediaBrowserTestFixture(source: SelectionSource(items: [item]))
+        defer { fixture.close() }
+        try await waitUntil { fixture.itemIDs == [item.id] }
+        let controller = fixture.controller
+        controller.perform(NSSelectorFromString("enterSelection"))
+        controller.perform(NSSelectorFromString("selectAllItems"))
+        let gate = LoadGate()
+        fixture.source.holdThumbnails(gate)
+        let task = Task { await controller.selectedItemsMenuActions(in: .init(year: 2026, month: 1)) }
+        try await waitUntil { !fixture.source.fileSizeRequests.isEmpty }
+        controller.perform(NSSelectorFromString("cancelSelection"))
+        await gate.finish()
+        let actions = await task.value
+        XCTAssertTrue(actions.isEmpty)
+        XCTAssertTrue(controller.selectedItemsMenus().isEmpty)
     }
 
     func testSizeSortMenuSelectionLabelsAndSwitchBack() async throws {
@@ -784,41 +941,50 @@ final class MediaBrowserGridSelectionTests: XCTestCase {
 
     private actor LoadGate {
         private var isFinished = false
-        private var continuation: CheckedContinuation<Void, Never>?
+        private var continuations: [CheckedContinuation<Void, Never>] = []
 
         func wait() async {
             guard !isFinished else { return }
-            await withCheckedContinuation { continuation = $0 }
+            await withCheckedContinuation { continuations.append($0) }
         }
 
         func finish() {
             isFinished = true
-            continuation?.resume()
-            continuation = nil
+            continuations.forEach { $0.resume() }
+            continuations.removeAll()
         }
     }
 
     private final class SelectionSource: MediaBrowserSource, @unchecked Sendable {
-        let mode = MediaBrowserMode.local
+        let mode: MediaBrowserMode
         private let lock = NSLock()
         private var sections: [MediaBrowserSection]
         private var requests: [Bool] = []
         private var nextLoadGate: LoadGate?
         private var thumbnailImage: UIImage?
+        private var thumbnailImages: [MediaBrowserItemID: UIImage] = [:]
+        private var suppliedFileSizes: [MediaBrowserItemID: Int64] = [:]
+        private var sizeRequests: [[MediaBrowserItemID]] = []
+        private var thumbnailGate: LoadGate?
         private var thumbnailRequests = 0
 
         var loadRequests: [Bool] { lock.withLock { requests } }
         var thumbnailRequestCount: Int { lock.withLock { thumbnailRequests } }
+        var fileSizeRequests: [[MediaBrowserItemID]] { lock.withLock { sizeRequests } }
 
-        init(items: [MediaBrowserItem]) {
+        init(items: [MediaBrowserItem], mode: MediaBrowserMode = .local) {
+            self.mode = mode
             sections = [.init(month: .init(year: 2026, month: 1), items: items)]
         }
-        init(sections: [MediaBrowserSection]) { self.sections = sections }
+        init(sections: [MediaBrowserSection]) { self.sections = sections; mode = .local }
         func replace(items: [MediaBrowserItem]) {
             lock.withLock { sections = [.init(month: .init(year: 2026, month: 1), items: items)] }
         }
         func holdNextLoad(_ gate: LoadGate) { lock.withLock { nextLoadGate = gate } }
         func setThumbnail(_ image: UIImage) { lock.withLock { thumbnailImage = image } }
+        func setThumbnail(_ image: UIImage, for id: MediaBrowserItemID) { lock.withLock { thumbnailImages[id] = image } }
+        func setFileSizes(_ sizes: [MediaBrowserItemID: Int64]) { lock.withLock { suppliedFileSizes = sizes } }
+        func holdThumbnails(_ gate: LoadGate) { lock.withLock { thumbnailGate = gate } }
         func load() async -> MediaBrowserLoadResult {
             await load(includeFileSizes: false)
         }
@@ -832,11 +998,21 @@ final class MediaBrowserGridSelectionTests: XCTestCase {
             await gate?.wait()
             return .loaded(content)
         }
-        func thumbnail(for item: MediaBrowserItem) async -> UIImage? {
+        func fileSizes(for items: [MediaBrowserItem]) async -> [MediaBrowserItemID: Int64] {
             lock.withLock {
-                thumbnailRequests += 1
-                return thumbnailImage
+                sizeRequests.append(items.map(\.id))
+                return Dictionary(uniqueKeysWithValues: items.compactMap { item in
+                    (item.fileSize ?? suppliedFileSizes[item.id]).map { (item.id, $0) }
+                })
             }
+        }
+        func thumbnail(for item: MediaBrowserItem) async -> UIImage? {
+            let (image, gate) = lock.withLock {
+                thumbnailRequests += 1
+                return (thumbnailImages[item.id] ?? thumbnailImage, thumbnailGate)
+            }
+            await gate?.wait()
+            return image
         }
         func photoImage(for item: MediaBrowserItem) async -> UIImage? { lock.withLock { thumbnailImage } }
         func livePhoto(for item: MediaBrowserItem, targetSize: CGSize) async -> PHLivePhoto? { nil }

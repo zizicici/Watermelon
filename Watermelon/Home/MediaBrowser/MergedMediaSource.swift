@@ -151,6 +151,13 @@ final class MergedMediaSource: MediaBrowserSource, @unchecked Sendable {
         return merged
     }
 
+    func fileSizes(for items: [MediaBrowserItem]) async -> [MediaBrowserItemID: Int64] {
+        let localItems = items.filter { if case .local = $0.backing { true } else { false } }
+        var sizes = await remoteSource.fileSizes(for: items)
+        sizes.merge(await localSource.fileSizes(for: localItems)) { _, local in local }
+        return sizes
+    }
+
     func thumbnail(for item: MediaBrowserItem) async -> UIImage? {
         if let r = await route(item).thumbnail(for: item) { return r }
         return canRemoteFallback(item) ? await remoteSource.thumbnail(for: item) : nil

@@ -53,6 +53,17 @@ final class LocalMediaSourceTests: XCTestCase {
         XCTAssertEqual(byID[.local("sized")]?.fileSize, 12_345)
         XCTAssertNil(byID[.local("unknown")]?.fileSize)
         XCTAssertEqual(byID[.local("sized")]?.kind, .livePhoto)
+
+        let selected = [
+            MediaBrowserItem(kind: .photo, creationDateMs: 0, localIdentifier: "sized",
+                fingerprint: nil, isBackedUp: false),
+            MediaBrowserItem(kind: .photo, creationDateMs: 0, localIdentifier: "cached",
+                fingerprint: nil, isBackedUp: false, fileSize: 999),
+        ]
+        let selectedSizes = await source.fileSizes(for: selected)
+        XCTAssertEqual(selectedSizes, [.local("sized"): 12_345, .local("cached"): 999])
+        let selectedRequests = await loader.requests
+        XCTAssertEqual(selectedRequests, [["sized", "unknown"], ["sized"]])
     }
 
     func testHomeSeedProjectionGroupsSortsAndAppliesPresence() throws {

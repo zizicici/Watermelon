@@ -1,10 +1,6 @@
 import XCTest
 @testable import Watermelon
 
-// The grid multi-select toolbar is driven entirely by BatchActionResolver, so its rules live here (user-specified):
-// Upload only when EVERY item is local-only; Download only when EVERY item is remote-only; a mixed selection offers
-// neither (no download-then-upload "complement"). Delete is always available and reports a from-backup / from-device
-// breakdown, counting a "both" item on both sides.
 final class BatchActionResolverTests: XCTestCase {
     private let month = LibraryMonthKey(year: 2024, month: 1)
 
@@ -62,7 +58,7 @@ final class BatchActionResolverTests: XCTestCase {
         let result = BatchActionResolver.resolve(items)
 
         XCTAssertEqual(lookups, selectedIDs.count)
-        XCTAssertEqual(result, .init(showsUpload: false, showsDownload: false, deviceCount: 2, remoteCount: 1))
+        XCTAssertEqual(result, .init(showsUpload: false, showsDownload: false, deviceCount: 2, remoteCount: 2))
         XCTAssertFalse(BatchActionResolver.resolve([MediaBrowserItemID.local("removed")].lazy.compactMap {
             snapshot.item(id: $0)
         }).showsDelete)
@@ -96,14 +92,32 @@ final class BatchActionResolverTests: XCTestCase {
         XCTAssertEqual(r.remoteCount, 1, "the one remote-only item")
     }
 
-    func testAllBothOffersNeitherUploadNorDownloadButDeletesEverywhere() {
-        // A "both" item is neither local-only nor remote-only → no upload/download; delete counts it on BOTH sides.
+    func testAllBothOffersNeitherUploadNorDownloadButAllowsEitherDeleteTarget() {
         let r = BatchActionResolver.resolve([both("x"), both("yy")])
         XCTAssertFalse(r.showsUpload)
         XCTAssertFalse(r.showsDownload)
         XCTAssertTrue(r.showsDelete)
         XCTAssertEqual(r.deviceCount, 2, "both-items have a device handle")
         XCTAssertEqual(r.remoteCount, 2, "…and are on the backup")
+        XCTAssertEqual(r.deleteTargets, [.local, .remote, .all])
+    }
+
+    func testDeleteTargetsAndItemsStayOnTheChosenSide() {
+        let local = localOnly("local")
+        let remote = remoteOnly("remote")
+        let shared = both("shared")
+        let backedUpLocal = MediaBrowserItem(kind: .photo, creationDateMs: 0,
+            localIdentifier: "backed-up-local", fingerprint: Data([4]), isBackedUp: true)
+        let items = [local, remote, shared, backedUpLocal]
+
+        XCTAssertEqual(BatchActionResolver.resolve([]).deleteTargets, [])
+        XCTAssertEqual(BatchActionResolver.resolve([local]).deleteTargets, [.local])
+        XCTAssertEqual(BatchActionResolver.resolve([local, backedUpLocal]).deleteTargets, [.local, .remote, .all])
+        XCTAssertEqual(BatchActionResolver.resolve([remote]).deleteTargets, [.remote])
+        XCTAssertEqual(BatchActionResolver.resolve(items).deleteTargets, [.local, .remote, .all])
+        XCTAssertEqual(MediaBrowserDeleteTarget.local.items(in: items), [local, shared, backedUpLocal])
+        XCTAssertEqual(MediaBrowserDeleteTarget.remote.items(in: items), [remote, shared, backedUpLocal])
+        XCTAssertEqual(MediaBrowserDeleteTarget.all.items(in: items), items)
     }
 
     func testDeleteBreakdownCountsBothItemsOnBothSides() {
@@ -115,12 +129,7 @@ final class BatchActionResolverTests: XCTestCase {
         XCTAssertEqual(r.remoteCount, 2)
     }
 
-    // MARK: - Deletability predicates (the Local-tab safety invariant)
-
-    func testLocalTabBackedUpItemIsNotRemoteDeletable() {
-        // A backed-up on-device item shown in the LOCAL tab is .both with a fingerprint but NO remote month
-        // (LocalMediaSource carries none). It must be device-deletable but NOT backup-deletable — a delete in the
-        // on-device view must never silently remove the cloud backup. This is the safety-critical invariant.
+    func testLocalTabBackedUpItemOffersBothDeletionTargets() {
         let item = MediaBrowserItem(
             kind: .photo,
             creationDateMs: 0,
@@ -129,16 +138,18 @@ final class BatchActionResolverTests: XCTestCase {
             isBackedUp: true
         )
         XCTAssertTrue(item.isDeviceDeletable)
-        XCTAssertFalse(item.isRemoteDeletable, "no remote month → cannot (and must not) delete from the backup")
+        XCTAssertTrue(item.isRemoteDeletable)
+        XCTAssertNil(item.remoteMonth)
         let r = BatchActionResolver.resolve([item])
         XCTAssertEqual(r.deviceCount, 1)
-        XCTAssertEqual(r.remoteCount, 0, "a Local-tab backed-up item is device-only")
+        XCTAssertEqual(r.remoteCount, 1)
+        XCTAssertEqual(r.deleteTargets, [.local, .remote, .all])
         XCTAssertFalse(r.showsUpload, "already backed up → not local-only")
         XCTAssertFalse(r.showsDownload, "already on device")
         XCTAssertTrue(r.showsDelete)
     }
 
-    func testSharedActionPolicyKeepsLocalAndUnifiedScopesDistinct() {
+    func testLocalAndUnifiedScopesAllowExplicitRemoteDeletionWhileTransferStaysLocal() {
         let backedUpLocal = MediaBrowserItem(
             kind: .photo,
             creationDateMs: 0,
@@ -158,7 +169,7 @@ final class BatchActionResolverTests: XCTestCase {
                 for: backedUpLocal,
                 scope: .local
             ),
-            [.share, .deleteLocal]
+            [.share, .deleteLocal, .deleteRemote]
         )
         XCTAssertEqual(
             MediaBrowserActionPolicy.actions(
@@ -181,6 +192,35 @@ final class BatchActionResolverTests: XCTestCase {
             ),
             []
         )
+    }
+
+    func testLocalRemoteDeletionUsesMatchingStorageMonthsAndChecksSnapshotOwnership() throws {
+        let fingerprint = Data([42])
+        let january = LibraryMonthKey(year: 2024, month: 1)
+        let february = LibraryMonthKey(year: 2024, month: 2)
+        let local = MediaBrowserItem(kind: .photo, creationDateMs: 0, localIdentifier: "both",
+            fingerprint: fingerprint, isBackedUp: true)
+        let remote = MediaBrowserItem(kind: .photo, creationDateMs: 0, localIdentifier: nil,
+            remote: RemoteMediaReference(fingerprint: fingerprint, photoRelativePath: "2024/02/photo.jpg",
+                videoRelativePath: nil, photoContentHash: nil, videoContentHash: nil,
+                storageMonth: february, isIncomplete: false))
+        let localOnly = self.localOnly("local-only")
+        var state = RemoteLibrarySnapshotState(revision: 1, isFullSnapshot: true, monthDeltas: [
+            .init(month: february, resources: [], assets: [], assetResourceLinks: [
+                TestFixtures.remoteLink(year: 2024, month: 2, assetFingerprint: fingerprint, resourceHash: Data([9])),
+            ]),
+            .init(month: january, resources: [], assets: [
+                TestFixtures.remoteAsset(year: 2024, month: 1, fingerprint: fingerprint),
+            ], assetResourceLinks: []),
+        ], profileKey: "owner")
+        let items = [local, remote, localOnly]
+        let plan = try XCTUnwrap(MediaBrowserActionRunner.remoteDeletionPlan(for: items, snapshot: state, expectedProfileKey: "owner"))
+        XCTAssertEqual(plan[local.id], [january, february])
+        XCTAssertEqual(plan[remote.id], [february])
+        XCTAssertNil(plan[localOnly.id])
+        XCTAssertNil(MediaBrowserActionRunner.remoteDeletionPlan(for: items, snapshot: state, expectedProfileKey: "another-node"))
+        state.isAuthoritative = false
+        XCTAssertNil(MediaBrowserActionRunner.remoteDeletionPlan(for: items, snapshot: state, expectedProfileKey: "owner"))
     }
 
 }

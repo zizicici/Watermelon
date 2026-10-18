@@ -320,7 +320,27 @@ final class MediaBrowserViewerViewController: UIViewController {
             entries.append(MediaActionBar.Entry(id: kind, symbolName: kind.symbolName, title: kind.title))
         }
         if actions.contains(.deleteLocal) || actions.contains(.deleteRemote) {
-            entries.append(MediaActionBar.Entry(id: ViewerBarAction.delete, symbolName: "trash", title: String(localized: "mediaBrowser.action.delete"), isDestructive: true))
+            let targets = MediaBrowserDeleteTarget.allCases.filter { target in
+                actions.contains(target.actionKind) && (target != .all || actions.contains(.deleteLocal))
+            }
+            let menu = MediaBrowserDeleteMenu.make(targets: targets) { target in
+                let kind = target.actionKind
+                return UIAction(title: target.title, attributes: .destructive) { [weak self] _ in
+                    guard let self, let current = self.item(at: self.currentIndex), current.id == item.id else { return }
+                    if target == .all {
+                        guard self.runnableActions(for: current).contains(.deleteLocal),
+                              self.runnableActions(for: current).contains(.deleteRemote) else { return }
+                        self.runner.runDeleteAll(current, from: self) { [weak self] hadFailures in
+                            guard let self else { return }
+                            self.onContentChanged()
+                            if !hadFailures { self.dismiss(animated: true) }
+                        }
+                    } else {
+                        self.runAction(kind)
+                    }
+                }
+            }
+            entries.append(MediaActionBar.Entry(id: ViewerBarAction.delete, symbolName: "trash", title: String(localized: "mediaBrowser.action.delete"), isDestructive: true, menu: menu))
         }
         return entries
     }
@@ -329,13 +349,8 @@ final class MediaBrowserViewerViewController: UIViewController {
         guard let item = item(at: currentIndex), isPresent(item) else { return }
         if let kind = id as? MediaBrowserActionKind {
             runAction(kind)
-        } else if let bar = id as? ViewerBarAction {
-            switch bar {
-            case .info:
-                presentMetadata(for: item)
-            case .delete:
-                presentDeleteMenu(for: item)
-            }
+        } else if id as? ViewerBarAction == .info {
+            presentMetadata(for: item)
         }
     }
 
@@ -415,54 +430,6 @@ final class MediaBrowserViewerViewController: UIViewController {
             onContentChanged()
             if dismiss { self?.dismiss(animated: true) }
         })
-    }
-
-    // Delete tapped: choose a target by presence. On both → a menu (delete local / remote / all); on a single
-    // presence → straight to that action (its own confirm is the second confirmation).
-    private func presentDeleteMenu(for item: MediaBrowserItem) {
-        let actions = runnableActions(for: item)
-        let canLocal = actions.contains(.deleteLocal)
-        let canRemote = actions.contains(.deleteRemote)
-        guard canLocal || canRemote else { return }
-        guard canLocal && canRemote else {
-            // Single target. Remote delete is confirmed by the runner; local delete otherwise has only the
-            // system sheet, so add an app-level confirmation (a local-only asset may not be backed up).
-            if canLocal {
-                let sheet = UIAlertController(title: nil, message: nil, preferredStyle: .actionSheet)
-                sheet.addAction(UIAlertAction(title: String(localized: "mediaBrowser.action.deleteLocal"), style: .destructive) { [weak self] _ in self?.runAction(.deleteLocal) })
-                sheet.addAction(UIAlertAction(title: String(localized: "common.cancel"), style: .cancel))
-                presentDeleteSheet(sheet)
-            } else {
-                runAction(.deleteRemote)
-            }
-            return
-        }
-        let sheet = UIAlertController(title: nil, message: nil, preferredStyle: .actionSheet)
-        sheet.addAction(UIAlertAction(title: String(localized: "mediaBrowser.action.deleteLocal"), style: .destructive) { [weak self] _ in self?.runAction(.deleteLocal) })
-        sheet.addAction(UIAlertAction(title: String(localized: "mediaBrowser.action.deleteRemote"), style: .destructive) { [weak self] _ in self?.runAction(.deleteRemote) })
-        sheet.addAction(UIAlertAction(title: String(localized: "mediaBrowser.action.deleteAll"), style: .destructive) { [weak self] _ in self?.runDeleteAll(item) })
-        sheet.addAction(UIAlertAction(title: String(localized: "common.cancel"), style: .cancel))
-        presentDeleteSheet(sheet)
-    }
-
-    private func presentDeleteSheet(_ sheet: UIAlertController) {
-        if let pop = sheet.popoverPresentationController {
-            let anchor = actionBar.buttonView(for: ViewerBarAction.delete) ?? actionBar
-            pop.sourceView = anchor
-            pop.sourceRect = anchor.bounds
-        }
-        present(sheet, animated: true)
-    }
-
-    private func runDeleteAll(_ item: MediaBrowserItem) {
-        guard session.isCurrent,
-              let current = self.item(at: currentIndex), current.id == item.id else { return }
-        runner.runDeleteAll(current, from: self) { [weak self] hadFailures in
-            guard let self else { return }
-            self.onContentChanged()
-            // A failed backup delete presented an error on this viewer — keep it open so the error stays visible.
-            if !hadFailures { self.dismiss(animated: true) }
-        }
     }
 
     private func presentActionError() {

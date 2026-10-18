@@ -13,7 +13,7 @@ extension MediaBrowserItem {
 final class MediaBrowserModelsTests: XCTestCase {
     private let month = LibraryMonthKey(year: 2024, month: 1)
 
-    func testLocalBackingCannotBecomeRemoteDeletable() {
+    func testLocalBackingCanDeleteRemoteByFingerprintWithoutRemoteMonth() {
         let item = MediaBrowserItem(
             kind: .photo,
             creationDateMs: 1,
@@ -24,7 +24,8 @@ final class MediaBrowserModelsTests: XCTestCase {
 
         XCTAssertEqual(item.presence, .both)
         XCTAssertTrue(item.isDeviceDeletable)
-        XCTAssertFalse(item.isRemoteDeletable)
+        XCTAssertTrue(item.isRemoteDeletable)
+        XCTAssertNil(item.remoteMonth)
     }
 
     func testRemoteBackingDerivesPresenceFromLocalReference() {

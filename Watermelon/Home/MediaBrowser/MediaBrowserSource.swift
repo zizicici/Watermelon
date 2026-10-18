@@ -113,6 +113,7 @@ protocol MediaBrowserSource: AnyObject, Sendable {
 
     func load() async -> MediaBrowserLoadResult
     func load(includeFileSizes: Bool) async -> MediaBrowserLoadResult
+    func fileSizes(for items: [MediaBrowserItem]) async -> [MediaBrowserItemID: Int64]
 
     // Grid thumbnail (small, cached). Nil → the cell shows a placeholder.
     func thumbnail(for item: MediaBrowserItem) async -> UIImage?
@@ -140,6 +141,12 @@ protocol MediaBrowserSource: AnyObject, Sendable {
 extension MediaBrowserSource {
     func load(includeFileSizes: Bool) async -> MediaBrowserLoadResult {
         await load()
+    }
+
+    func fileSizes(for items: [MediaBrowserItem]) async -> [MediaBrowserItemID: Int64] {
+        Dictionary(uniqueKeysWithValues: items.compactMap { item in
+            item.fileSize.map { (item.id, $0) }
+        })
     }
 
     func actions(for item: MediaBrowserItem) -> [MediaBrowserActionKind] {
@@ -176,9 +183,8 @@ enum MediaBrowserActionPolicy {
         switch scope {
         case .local:
             guard item.localIdentifier != nil else { return [] }
-            return item.presence == .localOnly
-                ? [.share, .upload, .deleteLocal]
-                : [.share, .deleteLocal]
+            if item.presence == .localOnly { return [.share, .upload, .deleteLocal] }
+            return item.isRemoteDeletable ? [.share, .deleteLocal, .deleteRemote] : [.share, .deleteLocal]
         case .unified:
             switch item.presence {
             case .localOnly: return [.share, .upload, .deleteLocal]
