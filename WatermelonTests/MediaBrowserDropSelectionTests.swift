@@ -5,6 +5,50 @@ import XCTest
 
 @MainActor
 final class MediaBrowserDropSelectionTests: XCTestCase {
+    func testDropThumbnailOpensViewerAndCornerControlsSelection() async throws {
+        let fixture = try Fixture()
+        defer { fixture.close() }
+        try await fixture.show()
+        let controller = fixture.controller
+        let collection = fixture.collection
+        let path = IndexPath(item: 0, section: 0)
+        let cell = try XCTUnwrap(collection.cellForItem(at: path))
+        let button = try XCTUnwrap(cell.contentView.subviews.compactMap { $0 as? UIButton }.first)
+        let indicator = try XCTUnwrap(cell.contentView.subviews.compactMap { $0 as? UIImageView }.first {
+            $0.accessibilityIdentifier == "mediaBrowser.selectionIndicator"
+        })
+        let drag = try XCTUnwrap(button.gestureRecognizers?.first { $0.name == "mediaBrowser.selectionDrag" })
+        XCTAssertFalse(button.isHidden)
+        XCTAssertFalse(indicator.isHidden)
+        XCTAssertNil(indicator.image)
+        XCTAssertTrue(drag.isEnabled)
+        XCTAssertFalse(cell.contentView.gestureRecognizers?.contains { $0.name == "mediaBrowser.selectionDrag" } ?? false)
+        XCTAssertLessThan(button.bounds.width, cell.contentView.bounds.width)
+
+        for selected in [false, true] {
+            if selected { try fixture.toggle(0) }
+            XCTAssertEqual(button.isSelected, selected)
+            if selected {
+                collection.deselectItem(at: path, animated: false)
+                controller.collectionView(collection, didDeselectItemAt: path)
+            } else {
+                collection.selectItem(at: path, animated: false, scrollPosition: [])
+                controller.collectionView(collection, didSelectItemAt: path)
+            }
+            XCTAssertEqual(button.isSelected, selected)
+            XCTAssertEqual(collection.indexPathsForSelectedItems?.contains(path) ?? false, selected)
+            let viewer = try XCTUnwrap(controller.presentedViewController as? MediaBrowserViewerViewController)
+            try await waitUntil { viewer.isDisplayed }
+            controller.dismiss(animated: false)
+            try await waitUntil { controller.presentedViewController == nil }
+        }
+        XCTAssertNotNil(indicator.image)
+        try fixture.toggle(0)
+        XCTAssertFalse(button.isSelected)
+        XCTAssertFalse(indicator.isHidden)
+        XCTAssertNil(indicator.image)
+    }
+
     func testSectionButtonIsDisabledWhileDropTaskRunsAndRestoredAfterwards() async throws {
         let fixture = try Fixture()
         defer { fixture.close() }
@@ -231,14 +275,14 @@ final class MediaBrowserDropSelectionTests: XCTestCase {
             let gesture = SelectionDragGesture()
             gesture.testLocation = try XCTUnwrap(collection.layoutAttributesForItem(at: path)).center
             gesture.testState = .began
-            cell.perform(NSSelectorFromString("selectionButtonDragged:"), with: gesture)
+            cell.perform(NSSelectorFromString("selectionDragged:"), with: gesture)
             return gesture
         }
 
         func finishDrag(_ gesture: SelectionDragGesture, at index: Int, state: UIGestureRecognizer.State) throws {
             gesture.testState = state
             let cell = try XCTUnwrap(collection.cellForItem(at: IndexPath(item: index, section: 0)))
-            cell.perform(NSSelectorFromString("selectionButtonDragged:"), with: gesture)
+            cell.perform(NSSelectorFromString("selectionDragged:"), with: gesture)
         }
 
         func assertAvailability(send: Bool, scope: Bool, file: StaticString = #filePath, line: UInt = #line) {

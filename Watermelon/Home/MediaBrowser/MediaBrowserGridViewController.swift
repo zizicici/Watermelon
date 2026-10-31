@@ -4,6 +4,11 @@ import UIKit
 import MoreKit
 import UniformTypeIdentifiers
 
+private enum MediaBrowserSelectionInteraction {
+    case thumbnail
+    case cornerButton
+}
+
 private final class MediaBrowserSourceLease: Sendable {
     let source: MediaBrowserSource
 
@@ -140,6 +145,9 @@ final class MediaBrowserGridViewController: UIViewController {
     private let selectionAction: SelectionAction?
     private let transferLocalLibrary: MediaDropLocalLibraryController?
     private var isMediaDrop: Bool { selectionAction != nil }
+    private var selectionInteraction: MediaBrowserSelectionInteraction {
+        isMediaDrop ? .cornerButton : .thumbnail
+    }
     private let onTransferModeSwitchAvailabilityChanged: ((Bool) -> Void)?
     private let onTransferPanelVisibilityChanged: ((Bool) -> Void)?
     private var inboxTransferOptions: InboxTransferOptions
@@ -851,15 +859,16 @@ final class MediaBrowserGridViewController: UIViewController {
             cell.configure(
                 with: item,
                 remoteImage: self.remoteStorageImage(),
+                selectionInteraction: self.selectionInteraction,
                 showsPresenceBadge: !self.isMediaDrop,
                 showsFileSize: self.browserSnapshot.sortOrder == .fileSize
             )
             cell.setSelecting(self.isSelecting, selected: self.selectedItemIDs.contains(item.id))
             cell.onSelectionButtonTapped = { [weak self] in
-                self?.toggleSelectionFromButton(for: item.id)
+                self?.toggleItemSelection(for: item.id)
             }
-            cell.onSelectionButtonDrag = { [weak self] gesture in
-                self?.handleSelectionButtonDrag(gesture, startingAt: item.id)
+            cell.onSelectionDrag = { [weak self] gesture in
+                self?.handleSelectionDrag(gesture, startingAt: item.id)
             }
         }
         let dataSource = DataSource(collectionView: collectionView) { [weak self] collectionView, indexPath, itemID in
@@ -2417,14 +2426,14 @@ final class MediaBrowserGridViewController: UIViewController {
         )
     }
 
-    private func toggleSelectionFromButton(for itemID: MediaBrowserItemID) {
+    private func toggleItemSelection(for itemID: MediaBrowserItemID) {
         guard canInteractWithSelection else { return }
         if !isSelecting { enterSelection() }
         guard isSelecting else { return }
         setSelected(!selectedItemIDs.contains(itemID), for: itemID)
     }
 
-    private func handleSelectionButtonDrag(
+    private func handleSelectionDrag(
         _ gesture: UILongPressGestureRecognizer,
         startingAt itemID: MediaBrowserItemID
     ) {
@@ -2951,23 +2960,23 @@ extension MediaBrowserGridViewController: UIDocumentPickerDelegate {
 
 extension MediaBrowserGridViewController: UICollectionViewDelegate {
     func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {
-        guard let item = item(at: indexPath) else { return }
-        if isNativeMultipleSelectionInteraction {
-            setSelected(true, for: item.id)
-            return
-        }
-        synchronizeCollectionSelection(including: indexPath)
-        presentViewer(at: indexPath)
+        handleCollectionSelection(at: indexPath, selected: true)
     }
 
     func collectionView(_ collectionView: UICollectionView, didDeselectItemAt indexPath: IndexPath) {
+        handleCollectionSelection(at: indexPath, selected: false)
+    }
+
+    private func handleCollectionSelection(at indexPath: IndexPath, selected: Bool) {
         guard let item = item(at: indexPath) else { return }
         if isNativeMultipleSelectionInteraction {
-            setSelected(false, for: item.id)
+            setSelected(selected, for: item.id)
             return
         }
+        let selectsThumbnail = selectionInteraction == .thumbnail && isSelecting
+        if selectsThumbnail { toggleItemSelection(for: item.id) }
         synchronizeCollectionSelection(including: indexPath)
-        presentViewer(at: indexPath)
+        if !selectsThumbnail { presentViewer(at: indexPath) }
     }
 
     private func presentViewer(at indexPath: IndexPath) {
@@ -3175,12 +3184,14 @@ private final class MediaBrowserGridCell: UICollectionViewCell {
     private let placeholderIconView = UIImageView()
     private let selectionIconView = UIImageView()
     private let selectionButton = UIButton(type: .custom)
+    private var selectionInteraction = MediaBrowserSelectionInteraction.thumbnail
+    private let selectionDragGesture = UILongPressGestureRecognizer()
     private var loadTask: Task<Void, Never>?
     private var currentItemID: MediaBrowserItemID?
     private var loadedItemID: MediaBrowserItemID?
     private var loadGeneration: UInt64 = 0
     var onSelectionButtonTapped: (() -> Void)?
-    var onSelectionButtonDrag: ((UILongPressGestureRecognizer) -> Void)?
+    var onSelectionDrag: ((UILongPressGestureRecognizer) -> Void)?
 
     private static let photoPlaceholder = UIImage(systemName: "photo")
     private static let videoPlaceholder = UIImage(systemName: "video")
@@ -3227,14 +3238,23 @@ private final class MediaBrowserGridCell: UICollectionViewCell {
         incompleteIconView.alpha = 1
         needsLoadIconView.isHidden = true
         placeholderIconView.isHidden = true
-        selectionIconView.isHidden = false
-        imageView.alpha = 1
+        setSelecting(false, selected: false)
         onSelectionButtonTapped = nil
-        onSelectionButtonDrag = nil
+        onSelectionDrag = nil
     }
 
     func setSelecting(_ selecting: Bool, selected: Bool) {
-        selectionIconView.isHidden = false
+        let selectsThumbnail = selectionInteraction == .thumbnail
+        selectionIconView.isHidden = selectsThumbnail && (!selecting || !selected)
+        selectionButton.isHidden = selectsThumbnail && !selecting
+        let dragView = selectsThumbnail ? contentView : selectionButton
+        if selectionDragGesture.view !== dragView {
+            dragView.addGestureRecognizer(selectionDragGesture)
+        }
+        let isDragEnabled = !selectsThumbnail || selecting
+        if selectionDragGesture.isEnabled != isDragEnabled {
+            selectionDragGesture.isEnabled = isDragEnabled
+        }
         selectionIconView.image = selected ? Self.selectionCheckmark : nil
         selectionIconView.tintColor = .white
         selectionIconView.backgroundColor = selected ? Self.selectionBackgroundColor : .clear
@@ -3251,9 +3271,11 @@ private final class MediaBrowserGridCell: UICollectionViewCell {
     func configure(
         with item: MediaBrowserItem,
         remoteImage: UIImage?,
+        selectionInteraction: MediaBrowserSelectionInteraction,
         showsPresenceBadge: Bool,
         showsFileSize: Bool = false
     ) {
+        self.selectionInteraction = selectionInteraction
         if currentItemID != item.id {
             cancelLoading()
             currentItemID = item.id
@@ -3391,22 +3413,26 @@ private final class MediaBrowserGridCell: UICollectionViewCell {
         needsLoadIconView.contentMode = .scaleAspectFit
 
         selectionIconView.contentMode = .center
-        selectionIconView.isHidden = false
+        selectionIconView.accessibilityIdentifier = "mediaBrowser.selectionIndicator"
+        selectionIconView.isHidden = true
         selectionIconView.layer.shadowColor = UIColor.black.cgColor
         selectionIconView.layer.shadowOpacity = 0.35
         selectionIconView.layer.shadowRadius = 2
         selectionIconView.layer.shadowOffset = CGSize(width: 0, height: 1)
 
+        selectionButton.isHidden = true
         selectionButton.accessibilityLabel = String(localized: "mediaBrowser.select")
         selectionButton.addTarget(self, action: #selector(selectionButtonTapped), for: .touchUpInside)
-        let selectionDragGesture = UILongPressGestureRecognizer(
-            target: self,
-            action: #selector(selectionButtonDragged(_:))
+        selectionDragGesture.addTarget(
+            self,
+            action: #selector(selectionDragged(_:))
         )
+        selectionDragGesture.name = "mediaBrowser.selectionDrag"
         selectionDragGesture.minimumPressDuration = 0.12
         selectionDragGesture.allowableMovement = 10
         selectionDragGesture.delaysTouchesBegan = true
-        selectionButton.addGestureRecognizer(selectionDragGesture)
+        selectionDragGesture.isEnabled = false
+        contentView.addGestureRecognizer(selectionDragGesture)
 
         contentView.addSubview(imageView)
         contentView.addSubview(placeholderIconView)
@@ -3488,7 +3514,7 @@ private final class MediaBrowserGridCell: UICollectionViewCell {
     }
 
     @objc
-    private func selectionButtonDragged(_ gesture: UILongPressGestureRecognizer) {
-        onSelectionButtonDrag?(gesture)
+    private func selectionDragged(_ gesture: UILongPressGestureRecognizer) {
+        onSelectionDrag?(gesture)
     }
 }

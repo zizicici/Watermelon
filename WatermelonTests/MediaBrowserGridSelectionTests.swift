@@ -5,6 +5,60 @@ import XCTest
 
 @MainActor
 final class MediaBrowserGridSelectionTests: XCTestCase {
+    func testBackupThumbnailSelectionAndDragRequireSelectionMode() async throws {
+        let fixture = try MediaBrowserTestFixture(source: SelectionSource(items: [lifecycleItem("thumbnail")]))
+        defer { fixture.close() }
+        let controller = fixture.controller
+        let collection = fixture.collection
+        let path = IndexPath(item: 0, section: 0)
+        try await waitUntil {
+            controller.view.layoutIfNeeded()
+            return collection.cellForItem(at: path) != nil
+        }
+        let cell = try XCTUnwrap(collection.cellForItem(at: path))
+        let button = try checkbox(in: cell)
+        let indicator = try XCTUnwrap(cell.contentView.subviews.first {
+            $0.accessibilityIdentifier == "mediaBrowser.selectionIndicator"
+        })
+        let drag = try XCTUnwrap(cell.contentView.gestureRecognizers?.first { $0.name == "mediaBrowser.selectionDrag" })
+        XCTAssertTrue(button.isHidden)
+        XCTAssertTrue(indicator.isHidden)
+        XCTAssertFalse(drag.isEnabled)
+
+        controller.perform(NSSelectorFromString("enterSelection"))
+        XCTAssertTrue(drag.isEnabled)
+        XCTAssertTrue(indicator.isHidden)
+        collection.selectItem(at: path, animated: false, scrollPosition: [])
+        controller.collectionView(collection, didSelectItemAt: path)
+        XCTAssertTrue(button.isSelected)
+        XCTAssertFalse(indicator.isHidden)
+        XCTAssertNil(controller.presentedViewController)
+        collection.deselectItem(at: path, animated: false)
+        controller.collectionView(collection, didDeselectItemAt: path)
+        XCTAssertFalse(button.isSelected)
+        XCTAssertTrue(indicator.isHidden)
+        XCTAssertNil(controller.presentedViewController)
+
+        controller.collectionView(collection, didBeginMultipleSelectionInteractionAt: path)
+        controller.collectionView(collection, didSelectItemAt: path)
+        controller.collectionView(collection, didSelectItemAt: path)
+        XCTAssertTrue(button.isSelected)
+        controller.collectionView(collection, didDeselectItemAt: path)
+        controller.collectionView(collection, didDeselectItemAt: path)
+        XCTAssertFalse(button.isSelected)
+        controller.collectionViewDidEndMultipleSelectionInteraction(collection)
+
+        controller.perform(NSSelectorFromString("cancelSelection"))
+        XCTAssertTrue(button.isHidden)
+        XCTAssertTrue(indicator.isHidden)
+        XCTAssertFalse(drag.isEnabled)
+        controller.collectionView(collection, didSelectItemAt: path)
+        let viewer = try XCTUnwrap(controller.presentedViewController as? MediaBrowserViewerViewController)
+        try await waitUntil { viewer.isDisplayed }
+        XCTAssertFalse(button.isSelected)
+        controller.dismiss(animated: false)
+    }
+
     func testSectionButtonsTrackMonthAndSizeSelectionsAndRefreshedContents() async throws {
         let items = [20_000_000, 1_000_000, 30_000_000, 2_000_000].enumerated().map { index, size in
             MediaBrowserItem(kind: .photo, creationDateMs: Int64(index), localIdentifier: "section-\(index)",
@@ -507,16 +561,16 @@ final class MediaBrowserGridSelectionTests: XCTestCase {
         let dragCell = try XCTUnwrap(collection.cellForItem(at: firstPath))
         let drag = SelectionDragGesture()
         drag.testState = .began
-        dragCell.perform(NSSelectorFromString("selectionButtonDragged:"), with: drag)
+        dragCell.perform(NSSelectorFromString("selectionDragged:"), with: drag)
         drag.testState = .changed
         drag.testLocation = try XCTUnwrap(collection.layoutAttributesForItem(at: IndexPath(item: 8, section: 0))).center
-        dragCell.perform(NSSelectorFromString("selectionButtonDragged:"), with: drag)
+        dragCell.perform(NSSelectorFromString("selectionDragged:"), with: drag)
         for index in 0...8 { XCTAssertFalse(collection.indexPathsForSelectedItems?.contains(IndexPath(item: index, section: 0)) ?? false) }
         drag.testLocation = try XCTUnwrap(collection.layoutAttributesForItem(at: IndexPath(item: 3, section: 0))).center
-        dragCell.perform(NSSelectorFromString("selectionButtonDragged:"), with: drag)
+        dragCell.perform(NSSelectorFromString("selectionDragged:"), with: drag)
         for index in 4...8 { XCTAssertTrue(collection.indexPathsForSelectedItems?.contains(IndexPath(item: index, section: 0)) ?? false) }
         drag.testState = .ended
-        dragCell.perform(NSSelectorFromString("selectionButtonDragged:"), with: drag)
+        dragCell.perform(NSSelectorFromString("selectionDragged:"), with: drag)
         controller.perform(NSSelectorFromString("selectAllItems"))
         assertVisibleSelection(collection, selected: true)
 
