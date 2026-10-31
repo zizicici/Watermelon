@@ -610,6 +610,10 @@ final actor LocalVolumeClient: RemoteStorageClientProtocol {
         ) == .orderedSame
     }
 
+    nonisolated static func isUploadTemporaryFileName(_ name: String) -> Bool {
+        name.hasPrefix(uploadTemporaryPrefix) && name.hasSuffix(".tmp")
+    }
+
     nonisolated private static func uploadTemporaryRemotePath(parentRemotePath: String) -> String {
         let name = "\(uploadTemporaryPrefix)\(UUID().uuidString.lowercased()).tmp"
         return parentRemotePath == "/" ? "/\(name)" : "\(parentRemotePath)/\(name)"

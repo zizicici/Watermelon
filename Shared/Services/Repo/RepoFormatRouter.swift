@@ -124,6 +124,8 @@ struct RepoFormatRouter: Sendable {
             case .missing:
                 let listedRepoState = try await inspectRepoDirectory(scanMonths: false)
                 if listedRepoState.hasVersionFile {
+                    RepoFailureDiagnostics.record(.versionMissing, stage: "format.version",
+                        path: RepoLayoutLite.versionPath(basePath: basePath))
                     return listedRepoState.probe(decision: .damaged)
                 }
 
@@ -199,6 +201,8 @@ struct RepoFormatRouter: Sendable {
             break
         }
         if repoState.hasMonthSqlite {
+            RepoFailureDiagnostics.record(.versionMissing, stage: "format.version",
+                path: RepoLayoutLite.versionPath(basePath: basePath))
             return repoState.probe(decision: .damaged)
         }
         return repoState.probe(decision: .fresh)
@@ -226,10 +230,13 @@ struct RepoFormatRouter: Sendable {
         } catch {
             let category = RemoteFaultLite.classify(error)
             if category == .notFound { return .missing }
-            throw Self.probeFault(from: error, category: category)
+            throw Self.probeFault(from: error, category: category, path: versionPath)
         }
 
-        guard let data = try? Data(contentsOf: localURL) else {
+        let data: Data
+        do { data = try Data(contentsOf: localURL) }
+        catch {
+            RepoFailureDiagnostics.record(.versionUnreadable, stage: "format.version", path: versionPath, error: error)
             return .damaged
         }
         switch VersionManifestLite.compatibility(for: data) {
@@ -240,6 +247,7 @@ struct RepoFormatRouter: Sendable {
         case .unsupported(let minAppVersion):
             return .unsupported(minAppVersion: minAppVersion)
         case .damaged:
+            RepoFailureDiagnostics.record(.versionInvalid, stage: "format.version", path: versionPath)
             return .damaged
         }
     }
@@ -352,14 +360,19 @@ struct RepoFormatRouter: Sendable {
                 // route an uncommitted repo to .damaged and block fresh-init / V1-migration retry.
                 continue
             }
+            if !entry.isDirectory, LocalVolumeClient.isUploadTemporaryFileName(entry.name) {
+                // Staging file left by an external-volume write cut short by a kill or unplug, never control state.
+                continue
+            }
             if !entry.isDirectory, Self.isNoiseFileName(entry.name) {
                 continue
             }
             state.hasUnknownChild = true
+            RepoFailureDiagnostics.record(.unexpectedEntry, stage: "format.directory", path: entry.path)
         }
         if monthsDirPresent && scanMonths {
             do {
-                let monthsEntries = try await listMonthsDirectoryEntries()
+                let monthsEntries = try await listMonthsDirectoryEntries(recordsFault: !ignoreMonthsListFault)
                 state.monthsDirectoryEntries = monthsEntries
                 for entry in monthsEntries {
                     let occupiesMonthSlot = entry.name.hasSuffix(".\(RepoLayoutLite.monthFileExtension)")
@@ -368,7 +381,10 @@ struct RepoFormatRouter: Sendable {
                         // A directory occupying a month-manifest slot ("<YYYY-MM>.sqlite/") is damaged/foreign
                         // control state, not empty space: a month file can't be minted/flushed over it (the
                         // V1→Lite path already fails closed on the same shape).
-                        if occupiesMonthSlot { state.hasUnknownChild = true }
+                        if occupiesMonthSlot {
+                            state.hasUnknownChild = true
+                            RepoFailureDiagnostics.record(.monthPathConflict, stage: "format.months", path: entry.path)
+                        }
                         continue
                     }
                     if RepoLayoutLite.month(fromFilename: entry.name) != nil {
@@ -376,6 +392,7 @@ struct RepoFormatRouter: Sendable {
                     } else if occupiesMonthSlot {
                         // Non-month sqlite control files are not empty space.
                         state.hasUnknownChild = true
+                        RepoFailureDiagnostics.record(.unexpectedEntry, stage: "format.months", path: entry.path)
                     }
                 }
             } catch RepoFormatRouterError.probeFault(let category, _) where ignoreMonthsListFault && category != .cancelled {
@@ -385,13 +402,13 @@ struct RepoFormatRouter: Sendable {
         return state
     }
 
-    private func listMonthsDirectoryEntries() async throws -> [RemoteStorageEntry] {
+    private func listMonthsDirectoryEntries(recordsFault: Bool) async throws -> [RemoteStorageEntry] {
         do {
             return try await client.list(path: RepoLayoutLite.monthsDirectoryPath(basePath: basePath))
         } catch {
             let category = RemoteFaultLite.classify(error)
             if category == .notFound { return [] }
-            throw Self.probeFault(from: error, category: category)
+            throw Self.probeFault(from: error, category: category, records: recordsFault)
         }
     }
 
@@ -410,7 +427,13 @@ struct RepoFormatRouter: Sendable {
         }
     }
 
-    private static func probeFault(from error: Error, category: RemoteFaultLite.Category? = nil) -> RepoFormatRouterError {
+    private static func probeFault(
+        from error: Error,
+        category: RemoteFaultLite.Category? = nil,
+        path: String? = nil,
+        records: Bool = true
+    ) -> RepoFormatRouterError {
+        if records { RepoFailureDiagnostics.record(.operationFailed, stage: "format.probe", path: path, error: error) }
         let category = category ?? RemoteFaultLite.classify(error)
         return .probeFault(category, detail: probeFaultDetail(for: error, category: category))
     }

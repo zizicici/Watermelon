@@ -798,6 +798,10 @@ final actor WebDAVClient: RemoteStorageClientProtocol {
         }
     }
 
+    nonisolated func isCopyUnsupported(_ error: Error) -> Bool {
+        Self.containsWebDAVErrorCode(in: error, codes: [405, 501])
+    }
+
     private static let propfindBody = Data(
         """
         <?xml version="1.0" encoding="utf-8" ?>

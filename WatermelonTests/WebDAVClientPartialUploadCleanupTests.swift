@@ -136,3 +136,19 @@ final class WebDAVClientReadBackRetryTests: XCTestCase {
         XCTAssertEqual(operationCount, 1)
     }
 }
+
+final class WebDAVClientCopyUnsupportedTests: XCTestCase {
+    func testOnlyMethodUnsupportedStatusesAreClassifiedAsUnsupportedCopy() {
+        let client = WebDAVClient(config: .init(endpointURL: URL(string: "https://dav.invalid")!, username: "u", password: "p"))
+        func statusError(_ code: Int) -> Error {
+            RemoteStorageClientError.underlying(NSError(domain: WebDAVClient.errorDomain, code: code))
+        }
+        XCTAssertTrue(client.isCopyUnsupported(statusError(405)))
+        XCTAssertTrue(client.isCopyUnsupported(statusError(501)))
+        for code in [400, 403, 404, 409, 412, 423, 500, 502, 507] {
+            XCTAssertFalse(client.isCopyUnsupported(statusError(code)), "status \(code)")
+        }
+        XCTAssertFalse(client.isCopyUnsupported(NSError(domain: NSURLErrorDomain, code: 405)))
+        XCTAssertFalse(client.isCopyUnsupported(CancellationError()))
+    }
+}

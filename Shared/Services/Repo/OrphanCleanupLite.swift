@@ -89,10 +89,7 @@ struct OrphanCleanupLite {
             _ = await client.resolveMoveIsNonIndependent(basePath: basePath)
         }
         for (month, scratch) in scratchByMonth {
-            deleted += await cleanMonthScratch(
-                month: month, scratch: scratch, canonicalEntry: canonicalMonths[month],
-                preserveUnrecoverableMonth: requiresRecovery
-            )
+            deleted += await cleanMonthScratch(month: month, scratch: scratch, canonicalEntry: canonicalMonths[month])
         }
         return deleted
     }
@@ -117,7 +114,7 @@ struct OrphanCleanupLite {
     private func cleanUnparseableScratch(_ entries: [RemoteStorageEntry]) async -> [String] {
         var deleted: [String] = []
         for entry in entries {
-            guard case .invalid = await validateMonthManifest(entry.path) else { continue }
+            guard case .invalid = await validateMonthManifest(entry) else { continue }
             if await deleteWhitelisted(entry.path) { deleted.append(entry.path) }
         }
         return deleted
@@ -144,8 +141,7 @@ struct OrphanCleanupLite {
     private func cleanMonthScratch(
         month: LibraryMonthKey,
         scratch: [RemoteStorageEntry],
-        canonicalEntry: RemoteStorageEntry?,
-        preserveUnrecoverableMonth: Bool
+        canonicalEntry: RemoteStorageEntry?
     ) async -> [String] {
         let canonicalPath = RepoLayoutLite.monthPath(basePath: basePath, month: month)
         if let canonicalEntry {
@@ -156,8 +152,7 @@ struct OrphanCleanupLite {
                 return await repairMonthFromScratch(
                     scratch,
                     canonicalPath: canonicalPath,
-                    shouldReplaceInvalidCanonical: true,
-                    preserveUnrecoverableMonth: preserveUnrecoverableMonth
+                    shouldReplaceInvalidCanonical: true
                 )
             case .inconclusive:
                 return []
@@ -167,23 +162,26 @@ struct OrphanCleanupLite {
         return await repairMonthFromScratch(
             scratch,
             canonicalPath: canonicalPath,
-            shouldReplaceInvalidCanonical: false,
-            preserveUnrecoverableMonth: preserveUnrecoverableMonth
+            shouldReplaceInvalidCanonical: false
         )
     }
 
     private func repairMonthFromScratch(
         _ scratch: [RemoteStorageEntry],
         canonicalPath: String,
-        shouldReplaceInvalidCanonical: Bool,
-        preserveUnrecoverableMonth: Bool
+        shouldReplaceInvalidCanonical: Bool
     ) async -> [String] {
         var valid: [RemoteStorageEntry] = []
+        var validManifests: [ValidMonthManifest] = []
+        var validContentHashes = Set<String>()
         var invalid: [RemoteStorageEntry] = []
         var anyInconclusive = false
         for entry in scratch {
-            switch await validateMonthManifest(entry.path) {
-            case .valid(_): valid.append(entry)
+            switch await validateMonthManifest(entry) {
+            case .valid(let candidate):
+                valid.append(entry)
+                validManifests.append(candidate)
+                validContentHashes.insert(Self.sha256Hex(candidate.data))
             case .invalid: invalid.append(entry)
             case .inconclusive: anyInconclusive = true
             }
@@ -195,23 +193,35 @@ struct OrphanCleanupLite {
         // On a non-independent MOVE backend the temp→MOVE interrupted-flush pattern never occurs; a stale leaked
         // direct-PUT `.tmp` must not be preferred over a newer `.bak` (that would restore an older ledger).
         let nonIndependent = await client.resolveMoveIsNonIndependent(basePath: basePath)
-        if let candidate = preferredRecoveryCandidate(valid, nonIndependent: nonIndependent) {
+        // Identical validated bytes need no timestamp ordering.
+        let candidate = validContentHashes.count == 1
+            ? valid.first
+            : preferredRecoveryCandidate(valid, nonIndependent: nonIndependent)
+        if let candidate, let source = validManifests.first(where: { $0.entry.path == candidate.path }) {
             let restored: Bool
             if shouldReplaceInvalidCanonical {
-                restored = await replaceInvalidCanonical(from: candidate.path, canonicalPath: canonicalPath)
+                restored = await replaceInvalidCanonical(from: source, canonicalPath: canonicalPath)
             } else {
-                restored = await restoreCanonical(from: candidate.path, to: canonicalPath)
+                restored = await restoreCanonical(from: source, to: canonicalPath)
             }
             guard restored else { return [] }
+            // Same rule as deleteRedundantScratch, applied before a later flush makes these look like recovery material.
+            let duplicates = nonIndependent ? [] : validManifests
+                .filter { $0.entry.path != source.entry.path && $0.data == source.data }
+                .map(\.entry)
             var deleted: [String] = []
-            for entry in invalid {
+            for entry in invalid + duplicates {
                 if await deleteWhitelisted(entry.path) { deleted.append(entry.path) }
             }
             return deleted
         }
 
-        // Retain the month's last evidence so an unrecoverable month cannot disappear from upgrade checks.
-        guard valid.isEmpty, !preserveUnrecoverableMonth || shouldReplaceInvalidCanonical else { return [] }
+        if !valid.isEmpty {
+            RepoFailureDiagnostics.record(.recoveryAmbiguous, stage: "recovery.select", path: canonicalPath)
+        }
+
+        // Ambiguous sound candidates → leave all. No sound candidate (only proven junk) → drop the junk.
+        guard valid.isEmpty else { return [] }
         var deleted: [String] = []
         for entry in invalid {
             if await deleteWhitelisted(entry.path) { deleted.append(entry.path) }
@@ -320,9 +330,11 @@ struct OrphanCleanupLite {
         do {
             try await client.download(remotePath: entry.path, localURL: localURL)
         } catch {
+            RepoFailureDiagnostics.record(.recoveryReadFailed, stage: "recovery.download", path: entry.path, error: error)
             return .inconclusive
         }
         let validation: MonthManifestStore.ManifestFileValidation
+        var failure: Error?
         if let month, let layout {
             validation = MonthManifestStore.validateMonthManifestFile(
                 at: localURL,
@@ -333,46 +345,65 @@ struct OrphanCleanupLite {
                 layout: layout
             )
         } else {
-            validation = MonthManifestStore.validateMonthManifestFile(at: localURL)
+            validation = MonthManifestStore.validateMonthManifestFile(at: localURL, onFailure: { failure = $0 })
         }
         switch validation {
         case .valid:
             guard let data = try? Data(contentsOf: localURL) else { return .inconclusive }
             return .valid(ValidMonthManifest(entry: entry, data: data))
         case .invalid:
+            // A read that disagrees with the listed size cannot prove the stored bytes unsound.
+            let readSize = (try? FileManager.default.attributesOfItem(atPath: localURL.path)[.size] as? NSNumber)?.int64Value
+            if entry.size > 0, let readSize, readSize != entry.size {
+                RepoFailureDiagnostics.record(.recoveryReadFailed, stage: "recovery.validate", path: entry.path,
+                    error: failure, detail: "listed \(entry.size) bytes, read \(readSize)")
+                return .inconclusive
+            }
+            RepoFailureDiagnostics.record(.recoveryInvalid, stage: "recovery.validate", path: entry.path, error: failure)
             return .invalid
         case .inconclusive:
+            RepoFailureDiagnostics.record(.recoveryReadFailed, stage: "recovery.validate", path: entry.path, error: failure)
             return .inconclusive
         }
     }
 
-    // Publishes the bytes at `sourcePath` onto `canonicalPath`. On non-independent-MOVE backends a server-side
-    // copy would alias source and destination (deleting either later destroys both), so download the source and
-    // PUT it as an independent blob; atomic backends use the fast server-side copy.
+    // Publishes a validated scratch onto `canonicalPath`. On non-independent-MOVE backends a server-side copy
+    // would alias source and destination (deleting either later destroys both), so PUT the validated bytes as an
+    // independent blob, as on backends without a server-side copy; others use the fast server-side copy.
     // The capability is resolved (and the WebDAV probe warmed) once up front in `cleanMonthsScratch`, so this
     // `resolve` is an instant memoized return — the caller's ownership proof still immediately precedes the write.
-    private func materializeCanonical(fromScratch sourcePath: String, to canonicalPath: String) async -> Bool {
-        if await client.resolveMoveIsNonIndependent(basePath: basePath) {
-            let localURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-            defer { try? FileManager.default.removeItem(at: localURL) }
-            do {
-                try await client.download(remotePath: sourcePath, localURL: localURL)
-                // Re-prove ownership after the download await, before the canonical PUT: a lease that lapsed during
-                // the download must not let this stale writer clobber a successor's canonical.
-                guard await stillOwnedForDestructiveCleanup() else { return false }
-                try await client.upload(localURL: localURL, remotePath: canonicalPath, respectTaskCancellation: false, onProgress: nil)
-                return true
-            } catch {
-                // The PUT may have landed server-side before the client saw a failure: drop the cached listing so a
-                // same-session pass re-lists the actual canonical state rather than trusting a stale listing.
-                await monthsListing?.invalidate(basePath: basePath)
-                return false
-            }
+    private func materializeCanonical(from source: ValidMonthManifest, to canonicalPath: String) async -> Bool {
+        let nonIndependent = await client.resolveMoveIsNonIndependent(basePath: basePath)
+        if nonIndependent || !client.copiesServerSide() {
+            return await publishValidatedBytes(source.data, to: canonicalPath)
         }
         do {
-            try await client.copy(from: sourcePath, to: canonicalPath)
+            try await client.copy(from: source.entry.path, to: canonicalPath)
             return true
         } catch {
+            if client.isCopyUnsupported(error) {
+                // The lease may have lapsed while the refused COPY was in flight.
+                guard await stillOwnedForDestructiveCleanup() else { return false }
+                return await publishValidatedBytes(source.data, to: canonicalPath)
+            }
+            RepoFailureDiagnostics.record(.recoveryWriteFailed, stage: "recovery.copy", path: canonicalPath, error: error)
+            await monthsListing?.invalidate(basePath: basePath)
+            return false
+        }
+    }
+
+    // Uploads the bytes validation already read, so a flaky second read can never become the canonical.
+    private func publishValidatedBytes(_ data: Data, to canonicalPath: String) async -> Bool {
+        let localURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: localURL) }
+        do {
+            try data.write(to: localURL)
+            try await client.upload(localURL: localURL, remotePath: canonicalPath, respectTaskCancellation: false, onProgress: nil)
+            return true
+        } catch {
+            RepoFailureDiagnostics.record(.recoveryWriteFailed, stage: "recovery.upload", path: canonicalPath, error: error)
+            // The PUT may have landed server-side before the client saw a failure: drop the cached listing so a
+            // same-session pass re-lists the actual canonical state rather than trusting a stale listing.
             await monthsListing?.invalidate(basePath: basePath)
             return false
         }
@@ -380,35 +411,42 @@ struct OrphanCleanupLite {
 
     // Publishes a validated scratch sqlite to its canonical month path and proves the canonical copy reads
     // back before any sibling scratch is deleted.
-    private func restoreCanonical(from scratchPath: String, to canonicalPath: String) async -> Bool {
+    private func restoreCanonical(from source: ValidMonthManifest, to canonicalPath: String) async -> Bool {
         guard await stillOwnedForDestructiveCleanup() else { return false }
         guard await isConfirmedAbsent(canonicalPath) else { return false }
         // Re-prove after the awaited probe because the publish overwrites on common backends.
         guard await stillOwnedForDestructiveCleanup() else { return false }
-        guard await materializeCanonical(fromScratch: scratchPath, to: canonicalPath) else { return false }
+        guard await materializeCanonical(from: source, to: canonicalPath) else { return false }
         // Publish landed the canonical; reflect it even when the read-back below is inconclusive.
         await monthsListing?.invalidate(basePath: basePath)
-        guard case .valid(_) = await validateMonthManifest(canonicalPath) else { return false }
-        _ = await deleteWhitelisted(scratchPath)
+        guard case .valid(_) = await validateMonthManifest(canonicalPath) else {
+            RepoFailureDiagnostics.record(.recoveryVerificationFailed, stage: "recovery.verify", path: canonicalPath)
+            return false
+        }
+        _ = await deleteWhitelisted(source.entry.path)
         return true
     }
 
-    private func replaceInvalidCanonical(from scratchPath: String, canonicalPath: String) async -> Bool {
+    private func replaceInvalidCanonical(from source: ValidMonthManifest, canonicalPath: String) async -> Bool {
         guard await stillOwnedForDestructiveCleanup() else { return false }
         // Compat mode: overwrite the invalid canonical directly with the scratch bytes (independent PUT). A
         // server-side move/copy backup would alias on these backends, and an invalid canonical is worthless — a
         // failed PUT just leaves it invalid for the next cleanup pass, so no backup is needed.
         if await client.resolveMoveIsNonIndependent(basePath: basePath) {
-            guard await materializeCanonical(fromScratch: scratchPath, to: canonicalPath) else { return false }
+            guard await materializeCanonical(from: source, to: canonicalPath) else { return false }
             await monthsListing?.invalidate(basePath: basePath)
-            guard case .valid(_) = await validateMonthManifest(canonicalPath) else { return false }
-            _ = await deleteWhitelisted(scratchPath)
+            guard case .valid(_) = await validateMonthManifest(canonicalPath) else {
+                RepoFailureDiagnostics.record(.recoveryVerificationFailed, stage: "recovery.verify", path: canonicalPath)
+                return false
+            }
+            _ = await deleteWhitelisted(source.entry.path)
             return true
         }
         let backupPath = RepoLayoutLite.repairBackupPath(forCanonicalPath: canonicalPath)
         do {
             try await client.move(from: canonicalPath, to: backupPath)
         } catch {
+            RepoFailureDiagnostics.record(.recoveryWriteFailed, stage: "recovery.backup", path: canonicalPath, error: error)
             return false
         }
         // Move emptied the canonical name; reflect it before the early-returns below (incl. restore).
@@ -420,19 +458,18 @@ struct OrphanCleanupLite {
             return false
         }
 
-        do {
-            try await client.copy(from: scratchPath, to: canonicalPath)
-            guard case .valid(_) = await validateMonthManifest(canonicalPath) else {
-                await restoreInvalidCanonicalBackup(from: backupPath, to: canonicalPath)
-                return false
-            }
-        } catch {
+        guard await materializeCanonical(from: source, to: canonicalPath) else {
+            await restoreInvalidCanonicalBackup(from: backupPath, to: canonicalPath)
+            return false
+        }
+        guard case .valid(_) = await validateMonthManifest(canonicalPath) else {
+            RepoFailureDiagnostics.record(.recoveryVerificationFailed, stage: "recovery.verify", path: canonicalPath)
             await restoreInvalidCanonicalBackup(from: backupPath, to: canonicalPath)
             return false
         }
 
         await monthsListing?.invalidate(basePath: basePath)
-        _ = await deleteWhitelisted(scratchPath)
+        _ = await deleteWhitelisted(source.entry.path)
         _ = await deleteWhitelisted(backupPath)
         return true
     }
@@ -641,7 +678,11 @@ struct OrphanCleanupLite {
     // MARK: - Primitives
 
     private func listChildren(_ path: String) async -> [RemoteStorageEntry] {
-        (try? await client.list(path: path)) ?? []
+        do { return try await client.list(path: path) }
+        catch {
+            RepoFailureDiagnostics.record(.operationFailed, stage: "recovery.list", path: path, error: error)
+            return []
+        }
     }
 
     private func listRepoDirectoryChildren(_ path: String) async -> [RemoteStorageEntry] {
@@ -653,7 +694,12 @@ struct OrphanCleanupLite {
 
     private func listMonthsChildren() async -> [RemoteStorageEntry] {
         if let monthsListing {
-            return (try? await monthsListing.entries(client: client, basePath: basePath)) ?? []
+            do { return try await monthsListing.entries(client: client, basePath: basePath) }
+            catch {
+                RepoFailureDiagnostics.record(.operationFailed, stage: "recovery.list",
+                    path: RepoLayoutLite.monthsDirectoryPath(basePath: basePath), error: error)
+                return []
+            }
         }
         return await listChildren(RepoLayoutLite.monthsDirectoryPath(basePath: basePath))
     }
@@ -693,6 +739,9 @@ struct OrphanCleanupLite {
         do {
             return try await client.metadata(path: path) == nil
         } catch {
+            if RemoteFaultLite.classify(error) != .notFound {
+                RepoFailureDiagnostics.record(.recoveryReadFailed, stage: "recovery.metadata", path: path, error: error)
+            }
             return RemoteFaultLite.classify(error) == .notFound
         }
     }
@@ -716,6 +765,7 @@ struct OrphanCleanupLite {
                 try await assertOwnership.assertDestructive()
                 return true
             } catch {
+                RepoFailureDiagnostics.record(.ownershipUnverified, stage: "recovery.ownership", error: error)
                 return false
             }
         }

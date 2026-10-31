@@ -18,6 +18,9 @@ enum LiteRepoError: LocalizedError, Equatable, Sendable {
     case existingLiteManifestConflict(month: String)
     case v1MonthManifestUnreadable(month: String)
     case v1SourceChangedDuringMigration
+    case upgradeMonthUnavailable(month: String)
+    case upgradeMonthPathConflict(month: String)
+    case upgradeMonthsChanged
 
     static func ownLockConflictRetryTimeText(_ date: Date) -> String {
         DateFormatter.localizedString(from: date, dateStyle: .none, timeStyle: .short)
@@ -50,7 +53,8 @@ enum LiteRepoError: LocalizedError, Equatable, Sendable {
         switch self {
         case .repoDamaged, .repoUnsupported, .repoMaintenanceUnavailable,
              .writerIdentityUnavailable, .versionCommitFailed,
-             .existingLiteManifestConflict, .v1MonthManifestUnreadable, .v1SourceChangedDuringMigration:
+             .existingLiteManifestConflict, .v1MonthManifestUnreadable, .v1SourceChangedDuringMigration,
+             .upgradeMonthUnavailable, .upgradeMonthPathConflict, .upgradeMonthsChanged:
             return Disposition(
                 isCancellation: false,
                 isLeaseOwnershipLoss: false,
@@ -202,6 +206,16 @@ enum LiteRepoError: LocalizedError, Equatable, Sendable {
             )
         case .v1SourceChangedDuringMigration:
             return String(localized: "backup.repo.v1SourceChangedDuringMigration")
+        case .upgradeMonthUnavailable(let month):
+            return String.localizedStringWithFormat(
+                String(localized: "backup.repo.upgradeMonthUnavailable"), month
+            )
+        case .upgradeMonthPathConflict(let month):
+            return String.localizedStringWithFormat(
+                String(localized: "backup.repo.upgradeMonthPathConflict"), month
+            )
+        case .upgradeMonthsChanged:
+            return String(localized: "backup.repo.upgradeMonthsChanged")
         }
     }
 }

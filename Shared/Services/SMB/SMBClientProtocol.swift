@@ -95,6 +95,10 @@ struct RemoteReadBackRetryExhaustedError: LocalizedError {
 protocol RemoteStorageClientProtocol: Sendable {
     func shouldSetModificationDate() -> Bool
     func shouldLimitUploadRetries(for error: Error) -> Bool
+    // True when `copy` failed only because the backend lacks server-side copy, so a download+upload can stand in.
+    func isCopyUnsupported(_ error: Error) -> Bool
+    // False when `copy` itself downloads and re-uploads, leaving no point to re-prove ownership in between.
+    func copiesServerSide() -> Bool
     // True when this backend's MOVE is NOT independent — deleting the moved-from source loses the destination
     // (some cloud WebDAV gateways alias content). Publishers use it to skip temp→MOVE→delete. Resolved once per
     // session (WebDAV probes at runtime; others are known-independent). Default false.
@@ -154,6 +158,14 @@ extension RemoteStorageClientProtocol {
 
     func shouldLimitUploadRetries(for _: Error) -> Bool {
         false
+    }
+
+    func isCopyUnsupported(_: Error) -> Bool {
+        false
+    }
+
+    func copiesServerSide() -> Bool {
+        true
     }
 
     func resolveMoveIsNonIndependent(basePath _: String) async -> Bool {

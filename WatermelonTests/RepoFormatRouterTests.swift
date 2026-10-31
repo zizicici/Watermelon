@@ -57,6 +57,23 @@ final class RepoFormatRouterTests: XCTestCase {
         catch { return .failure(error) }
     }
 
+    func testInterruptedExternalVolumeUploadTempIsNotForeignControlState() async throws {
+        let temp = repoDir + "/.watermelon-upload-\(UUID().uuidString.lowercased()).tmp"
+        XCTAssertTrue(LocalVolumeClient.isUploadTemporaryFileName((temp as NSString).lastPathComponent))
+        XCTAssertFalse(LocalVolumeClient.isUploadTemporaryFileName(".watermelon-upload-x.sqlite"))
+
+        let upgrading = InMemoryRemoteStorageClient()
+        await upgrading.seedFile(path: versionPath, data: try versionBytes(formatVersion: 2))
+        await upgrading.seedFile(path: temp, data: Data())
+        let upgradingDecision = try await router(upgrading).classify()
+        XCTAssertEqual(upgradingDecision, .fingerprintUpgrade)
+
+        let fresh = InMemoryRemoteStorageClient()
+        await fresh.seedFile(path: temp, data: Data())
+        let freshDecision = try await router(fresh).classify()
+        XCTAssertEqual(freshDecision, .fresh)
+    }
+
     // MARK: - Current
 
     func testCommittedV2LiteVersionIsCurrent() async throws {

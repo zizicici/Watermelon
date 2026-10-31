@@ -720,14 +720,209 @@ final class OrphanCleanupLiteTests: XCTestCase {
         XCTAssertFalse(deleted.contains(bakPath))
     }
 
+    private func copyFailingClient(
+        status: Int,
+        onCopy: (@Sendable (InMemoryRemoteStorageClient) async -> Void)? = nil
+    ) -> (backing: InMemoryRemoteStorageClient, client: CopyFailingClient) {
+        let backing = InMemoryRemoteStorageClient()
+        let error = RemoteStorageClientError.underlying(NSError(domain: WebDAVClient.errorDomain, code: status))
+        return (backing, CopyFailingClient(backing: backing, copyError: error, onCopy: onCopy.map { hook in { await hook(backing) } }))
+    }
+
+    func testUnsupportedCopyRestoresMissingCanonicalByTransfer() async throws {
+        let month = LibraryMonthKey(year: 2024, month: 3)
+        let canonical = RepoLayoutLite.monthPath(basePath: basePath, month: month)
+        let valid = try makeMonthSqliteData()
+        let (backing, client) = copyFailingClient(status: 405)
+        await backing.seedFile(path: scratchPath(month: month, suffix: "tmp"), data: valid)
+
+        _ = await OrphanCleanupLite(client: client, basePath: basePath, assertOwnership: .uniform({})).run(mode: .upgrade)
+
+        let restored = await backing.fileData(path: canonical)
+        XCTAssertEqual(restored, valid)
+    }
+
+    func testUnsupportedCopyRepairsInvalidCanonicalByTransfer() async throws {
+        let month = LibraryMonthKey(year: 2024, month: 3)
+        let canonical = RepoLayoutLite.monthPath(basePath: basePath, month: month)
+        let valid = try makeMonthSqliteData()
+        let (backing, client) = copyFailingClient(status: 501)
+        await backing.seedFile(path: canonical, data: Data("corrupt".utf8))
+        await backing.seedFile(path: scratchPath(month: month, suffix: "tmp"), data: valid)
+
+        _ = await OrphanCleanupLite(client: client, basePath: basePath, assertOwnership: .uniform({})).run(mode: .foreground)
+
+        let repaired = await backing.fileData(path: canonical)
+        XCTAssertEqual(repaired, valid)
+        let leftovers = try await backing.list(path: monthsDir).map(\.name).filter { $0 != (canonical as NSString).lastPathComponent }
+        XCTAssertEqual(leftovers, [])
+    }
+
+    func testUnsupportedCopyTransferDoesNotOverwriteSuccessorAfterLeaseLoss() async throws {
+        let month = LibraryMonthKey(year: 2024, month: 3)
+        let canonical = RepoLayoutLite.monthPath(basePath: basePath, month: month)
+        let valid = try makeMonthSqliteData()
+        let successor = try makeMonthSqliteData(marker: 9)
+        let lease = TransferLeaseProbe()
+        // A successor takes over while the refused COPY round-trips.
+        let (backing, client) = copyFailingClient(status: 405, onCopy: { backing in
+            await lease.lose()
+            await backing.seedFile(path: canonical, data: successor)
+        })
+        let scratch = scratchPath(month: month, suffix: "tmp")
+        await backing.seedFile(path: scratch, data: valid)
+
+        _ = await OrphanCleanupLite(client: client, basePath: basePath, assertOwnership: .uniform({
+            if await lease.isLost { throw LiteRepoError.ownershipLost }
+        })).run(mode: .upgrade)
+
+        let copyAttempted = await lease.isLost
+        XCTAssertTrue(copyAttempted, "The COPY must have been refused before the fallback")
+        let canonicalAfter = await backing.fileData(path: canonical)
+        XCTAssertEqual(canonicalAfter, successor, "A writer that lost its lease must not overwrite the successor")
+        let uploads = await backing.uploadedPaths
+        XCTAssertFalse(uploads.contains(canonical))
+        let scratchAfter = await backing.fileData(path: scratch)
+        XCTAssertEqual(scratchAfter, valid)
+    }
+
+    func testClientSideCopyBackendPublishesValidatedBytesWithoutItsCopy() async throws {
+        let month = LibraryMonthKey(year: 2024, month: 3)
+        let canonical = RepoLayoutLite.monthPath(basePath: basePath, month: month)
+        let valid = try makeMonthSqliteData()
+        let backing = InMemoryRemoteStorageClient()
+        let copies = CallCounter()
+        let client = ClientSideCopyClient(backing: backing, copies: copies)
+        let scratch = scratchPath(month: month, suffix: "tmp")
+        await backing.seedFile(path: scratch, data: valid)
+        let reads = CallCounter()
+        await backing.setOnDownloadAttempt { path in
+            if path == scratch { _ = await reads.increment() }
+        }
+
+        _ = await OrphanCleanupLite(client: client, basePath: basePath, assertOwnership: .uniform({})).run(mode: .upgrade)
+
+        let restored = await backing.fileData(path: canonical)
+        XCTAssertEqual(restored, valid)
+        let copyCalls = await copies.count
+        XCTAssertEqual(copyCalls, 0, "A download+upload copy has no point to re-prove ownership")
+        let scratchReads = await reads.count
+        XCTAssertEqual(scratchReads, 1, "Only validation reads the scratch")
+    }
+
+    func testClientSideCopyRepairProvesOwnershipOnceBeforeThePublish() async throws {
+        let month = LibraryMonthKey(year: 2024, month: 3)
+        let canonical = RepoLayoutLite.monthPath(basePath: basePath, month: month)
+        let backing = InMemoryRemoteStorageClient()
+        let client = ClientSideCopyClient(backing: backing, copies: CallCounter())
+        await backing.seedFile(path: scratchPath(month: month, suffix: "tmp"), data: try makeMonthSqliteData())
+        let events = OwnershipEventLog()
+        await backing.setOnMetadata { path in
+            if path == canonical { await events.append("probe") }
+        }
+        await backing.setOnUpload { await events.append("upload") }
+        let gates = RepoOwnershipGates(assertWrite: {}, assertDestructive: { await events.append("proof") })
+
+        _ = await OrphanCleanupLite(client: client, basePath: basePath, assertOwnership: gates).run(mode: .upgrade)
+
+        let log = await events.entries
+        let probe = try XCTUnwrap(log.firstIndex(of: "probe"))
+        let upload = try XCTUnwrap(log.firstIndex(of: "upload"))
+        XCTAssertEqual(log[probe..<upload].filter { $0 == "proof" }.count, 1,
+                       "Each extra proof costs a lock round trip on slow nodes")
+    }
+
+    func testReadShorterThanListedSizeCannotProveScratchInvalid() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let month = LibraryMonthKey(year: 2024, month: 3)
+        let scratch = scratchPath(month: month, suffix: "tmp")
+        let valid = try makeMonthSqliteData()
+        await client.seedFile(path: scratch, data: valid)
+        await client.setOnDownloadAttempt { path in
+            if path == scratch { await client.enqueueDownloadData(Data()) }
+        }
+        let diagnostics = RepoFailureDiagnostics()
+
+        _ = await RepoFailureDiagnostics.$current.withValue(diagnostics) {
+            await cleanup(client, assertOwnership: .uniform({})).run(mode: .upgrade)
+        }
+
+        let survivor = await client.fileData(path: scratch)
+        XCTAssertEqual(survivor, valid, "An empty read of a non-empty file is a read fault, not proof of corruption")
+        let entry = try XCTUnwrap(diagnostics.snapshot().first { $0.path == scratch })
+        XCTAssertEqual(entry.issue, .recoveryReadFailed)
+        XCTAssertEqual(entry.detail, "listed \(valid.count) bytes, read 0")
+    }
+
+    func testCopyFallbackPublishesTheValidatedBytesNotASecondRead() async throws {
+        let month = LibraryMonthKey(year: 2024, month: 3)
+        let canonical = RepoLayoutLite.monthPath(basePath: basePath, month: month)
+        let valid = try makeMonthSqliteData()
+        let (backing, client) = copyFailingClient(status: 405)
+        let scratch = scratchPath(month: month, suffix: "tmp")
+        await backing.seedFile(path: scratch, data: valid)
+        let reads = CallCounter()
+        await backing.setOnDownloadAttempt { path in
+            guard path == scratch, await reads.increment() >= 2 else { return }
+            await backing.enqueueDownloadData(Data("truncated".utf8))
+        }
+
+        _ = await OrphanCleanupLite(client: client, basePath: basePath, assertOwnership: .uniform({})).run(mode: .upgrade)
+
+        let canonicalAfter = await backing.fileData(path: canonical)
+        XCTAssertEqual(canonicalAfter, valid)
+        let scratchReads = await reads.count
+        XCTAssertEqual(scratchReads, 1)
+    }
+
+    func testOtherCopyFailuresDoNotFallBackToTransfer() async throws {
+        let month = LibraryMonthKey(year: 2024, month: 3)
+        let canonical = RepoLayoutLite.monthPath(basePath: basePath, month: month)
+        let valid = try makeMonthSqliteData()
+        let (backing, client) = copyFailingClient(status: 500)
+        let scratch = scratchPath(month: month, suffix: "tmp")
+        await backing.seedFile(path: scratch, data: valid)
+
+        _ = await OrphanCleanupLite(client: client, basePath: basePath, assertOwnership: .uniform({})).run(mode: .upgrade)
+
+        let canonicalAfter = await backing.fileData(path: canonical)
+        XCTAssertNil(canonicalAfter)
+        let scratchAfter = await backing.fileData(path: scratch)
+        XCTAssertEqual(scratchAfter, valid)
+    }
+
+    func testIdenticalValidScratchRestoresCanonicalWithoutModificationDates() async throws {
+        let month = LibraryMonthKey(year: 2024, month: 3)
+        let valid = try makeMonthSqliteData()
+        for nonIndependent in [false, true] {
+            for suffixes in [["tmp", "tmp"], ["bak", "bak"], ["tmp", "bak"]] {
+                let client = InMemoryRemoteStorageClient(moveMayNotBeIndependent: nonIndependent)
+                let paths = suffixes.map { scratchPath(month: month, suffix: $0) }
+                for path in paths { await client.seedFile(path: path, data: valid) }
+
+                _ = await cleanup(client).run(mode: .upgrade)
+
+                let restored = await client.fileData(path: RepoLayoutLite.monthPath(basePath: basePath, month: month))
+                XCTAssertEqual(restored, valid, "Identical validated copies need no timestamp ordering")
+                let first = await client.fileData(path: paths[0])
+                let second = await client.fileData(path: paths[1])
+                let survivors = [first, second].compactMap { $0 }
+                if nonIndependent {
+                    XCTAssertEqual(survivors, [valid], "A compat backend keeps the unselected copy, intact")
+                } else {
+                    XCTAssertEqual(survivors, [], "A copy identical to the verified canonical is redundant")
+                }
+            }
+        }
+    }
+
     func testAmbiguousValidScratchWithoutUniqueTmpIsLeftInPlace() async throws {
         let client = InMemoryRemoteStorageClient()
         let month = LibraryMonthKey(year: 2024, month: 3)
         let tmpA = scratchPath(month: month, suffix: "tmp")
         let tmpB = scratchPath(month: month, suffix: "tmp")
-        let valid = try makeMonthSqliteData()
-        await client.seedFile(path: tmpA, data: valid)
-        await client.seedFile(path: tmpB, data: valid)
+        await client.seedFile(path: tmpA, data: try makeMonthSqliteData(marker: 1))
+        await client.seedFile(path: tmpB, data: try makeMonthSqliteData(marker: 2))
 
         let deleted = await cleanup(client).run(mode: .foreground)
 
@@ -1215,7 +1410,15 @@ final class OrphanCleanupLiteTests: XCTestCase {
         // The validation download blinks (transient/permission/backend fault) — inconclusive, not invalid.
         await client.enqueueDownloadError(RemoteErrorFixtures.retryable)
 
-        let deleted = await cleanup(client).run(mode: .foreground)
+        let diagnostics = RepoFailureDiagnostics()
+        let deleted = await RepoFailureDiagnostics.$current.withValue(diagnostics) {
+            await cleanup(client).run(mode: .foreground)
+        }
+        let failure = try XCTUnwrap(diagnostics.snapshot().first { $0.issue == .recoveryReadFailed })
+        XCTAssertEqual(failure.stage, "recovery.download")
+        XCTAssertTrue(failure.path?.contains("2024-03.sqlite") == true)
+        XCTAssertFalse(failure.causes.isEmpty)
+        XCTAssertFalse(diagnostics.snapshot().contains { $0.issue == .recoveryInvalid })
 
         let bakSurvives = await client.fileData(path: bakPath)
         XCTAssertEqual(bakSurvives, valid, "an inconclusive validation fault must leave the only candidate in place")
@@ -1414,5 +1617,92 @@ private actor OneDriveScratchClient: RemoteStorageClientProtocol {
     func download(remotePath: String, localURL _: URL) async throws {
         downloadedPaths.append(remotePath)
         throw RemoteStorageClientError.unavailable
+    }
+}
+
+private actor CallCounter {
+    private(set) var count = 0
+    func increment() -> Int {
+        count += 1
+        return count
+    }
+}
+
+private actor OwnershipEventLog {
+    private(set) var entries: [String] = []
+    func append(_ entry: String) { entries.append(entry) }
+}
+
+private actor TransferLeaseProbe {
+    private(set) var isLost = false
+    func lose() { isLost = true }
+}
+
+private struct CopyFailingClient: RemoteStorageClientProtocol {
+    let backing: InMemoryRemoteStorageClient
+    let copyError: Error
+    private let webdav = WebDAVClient(config: .init(endpointURL: URL(string: "https://dav.invalid")!, username: "u", password: "p"))
+
+    let onCopy: (@Sendable () async -> Void)?
+
+    init(backing: InMemoryRemoteStorageClient, copyError: Error, onCopy: (@Sendable () async -> Void)? = nil) {
+        self.backing = backing
+        self.copyError = copyError
+        self.onCopy = onCopy
+    }
+
+    func isCopyUnsupported(_ error: Error) -> Bool { webdav.isCopyUnsupported(error) }
+    func connect() async throws {}
+    func disconnect() async {}
+    func storageCapacity() async throws -> RemoteStorageCapacity? { nil }
+    func list(path: String) async throws -> [RemoteStorageEntry] { try await backing.list(path: path) }
+    func metadata(path: String) async throws -> RemoteStorageEntry? { try await backing.metadata(path: path) }
+    func upload(localURL: URL, remotePath: String, respectTaskCancellation: Bool, onProgress: ((Double) -> Void)?) async throws {
+        try await backing.upload(localURL: localURL, remotePath: remotePath, respectTaskCancellation: respectTaskCancellation, onProgress: onProgress)
+    }
+    func upload(localURL: URL, remotePath: String, mode: RemoteUploadMode, respectTaskCancellation: Bool, onProgress: ((Double) -> Void)?) async throws {
+        try await backing.upload(localURL: localURL, remotePath: remotePath, mode: mode, respectTaskCancellation: respectTaskCancellation, onProgress: onProgress)
+    }
+    func setModificationDate(_ date: Date, forPath path: String) async throws { try await backing.setModificationDate(date, forPath: path) }
+    func download(remotePath: String, localURL: URL) async throws { try await backing.download(remotePath: remotePath, localURL: localURL) }
+    func exists(path: String) async throws -> Bool { try await backing.exists(path: path) }
+    func delete(path: String) async throws { try await backing.delete(path: path) }
+    func createDirectory(path: String) async throws { try await backing.createDirectory(path: path) }
+    func move(from sourcePath: String, to destinationPath: String) async throws { try await backing.move(from: sourcePath, to: destinationPath) }
+    func copy(from _: String, to _: String) async throws {
+        await onCopy?()
+        throw copyError
+    }
+}
+
+// Mirrors AMSMB2Client / SFTPClient: `copy` downloads and re-uploads with no ownership check in between.
+private struct ClientSideCopyClient: RemoteStorageClientProtocol {
+    let backing: InMemoryRemoteStorageClient
+    let copies: CallCounter
+
+    func copiesServerSide() -> Bool { false }
+    func connect() async throws {}
+    func disconnect() async {}
+    func storageCapacity() async throws -> RemoteStorageCapacity? { nil }
+    func list(path: String) async throws -> [RemoteStorageEntry] { try await backing.list(path: path) }
+    func metadata(path: String) async throws -> RemoteStorageEntry? { try await backing.metadata(path: path) }
+    func upload(localURL: URL, remotePath: String, respectTaskCancellation: Bool, onProgress: ((Double) -> Void)?) async throws {
+        try await backing.upload(localURL: localURL, remotePath: remotePath, respectTaskCancellation: respectTaskCancellation, onProgress: onProgress)
+    }
+    func upload(localURL: URL, remotePath: String, mode: RemoteUploadMode, respectTaskCancellation: Bool, onProgress: ((Double) -> Void)?) async throws {
+        try await backing.upload(localURL: localURL, remotePath: remotePath, mode: mode, respectTaskCancellation: respectTaskCancellation, onProgress: onProgress)
+    }
+    func setModificationDate(_ date: Date, forPath path: String) async throws { try await backing.setModificationDate(date, forPath: path) }
+    func download(remotePath: String, localURL: URL) async throws { try await backing.download(remotePath: remotePath, localURL: localURL) }
+    func exists(path: String) async throws -> Bool { try await backing.exists(path: path) }
+    func delete(path: String) async throws { try await backing.delete(path: path) }
+    func createDirectory(path: String) async throws { try await backing.createDirectory(path: path) }
+    func move(from sourcePath: String, to destinationPath: String) async throws { try await backing.move(from: sourcePath, to: destinationPath) }
+    func copy(from sourcePath: String, to destinationPath: String) async throws {
+        _ = await copies.increment()
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("client-copy-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: url) }
+        try await backing.download(remotePath: sourcePath, localURL: url)
+        try await backing.upload(localURL: url, remotePath: destinationPath, respectTaskCancellation: true, onProgress: nil)
     }
 }

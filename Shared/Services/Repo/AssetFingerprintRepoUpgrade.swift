@@ -35,42 +35,73 @@ struct AssetFingerprintRepoUpgrade: Sendable {
 
     func run(createdAt: String, createdBy: String) async throws {
         try Task.checkCancellation()
+        // A lease lost during cleanup leaves scratch unrepaired; report the lost lease, not a missing month.
+        try await assertOwnership.assertWrite()
+        // Before the pending marker, so a blocked upgrade leaves a format-2 repo usable by older clients.
+        let months = try await discoverMonths()
         let writer = VersionManifestWriter(client: client, basePath: basePath, assertOwnership: assertOwnership)
-        let pending = try await writer.commit(createdAt: createdAt, createdBy: createdBy, upgradePending: true)
+        let pending = try await RepoFailureDiagnostics.capture(stage: "upgrade.write_pending",
+            path: RepoLayoutLite.versionPath(basePath: basePath)) {
+            try await writer.commit(createdAt: createdAt, createdBy: createdBy, upgradePending: true)
+        }
         let recoveryPath = RepoLayoutLite.versionTempPath(basePath: basePath)
         let recoveryURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: recoveryURL) }
         let pendingBytes = try VersionManifestLite.encode(pending)
         try pendingBytes.write(to: recoveryURL)
         try await assertOwnership.assertWrite()
-        try await client.upload(localURL: recoveryURL, remotePath: recoveryPath, respectTaskCancellation: false, onProgress: nil)
-        try await client.download(remotePath: recoveryPath, localURL: recoveryURL)
-        guard try Data(contentsOf: recoveryURL) == pendingBytes else { throw VersionManifestWriter.WriteError.readBackMismatch }
-        try await retireLegacyVersionScratch()
+        try await RepoFailureDiagnostics.capture(stage: "upgrade.write_recovery_marker", path: recoveryPath) {
+            try await client.upload(localURL: recoveryURL, remotePath: recoveryPath, respectTaskCancellation: false, onProgress: nil)
+        }
+        try await RepoFailureDiagnostics.capture(stage: "upgrade.verify_recovery_marker", path: recoveryPath) {
+            try await client.download(remotePath: recoveryPath, localURL: recoveryURL)
+            guard try Data(contentsOf: recoveryURL) == pendingBytes else { throw VersionManifestWriter.WriteError.readBackMismatch }
+        }
+        try await RepoFailureDiagnostics.capture(stage: "upgrade.retire_stale_markers") {
+            try await retireStaleVersionScratch(keeping: (recoveryPath as NSString).lastPathComponent)
+        }
 
-        let months = try await discoverMonths()
         let thumbnails = ThumbnailMigrationState()
         await onProgress?(.init(phase: .copying, current: 0, total: months.count))
         try await execution.run(months: months, client: client, operation: { month, workerClient in
             try Task.checkCancellation()
             try await assertOwnership.assertWrite()
-            guard let store = try await MonthManifestStore.loadManifestDirect(
-                client: workerClient, basePath: basePath, year: month.year, month: month.month,
-                layout: .lite, pushSchemaUpgrade: false, assertOwnership: assertOwnership,
-                liteMonthsListing: monthsListing, surfaceDownloadFailure: true
-            ) else { throw LiteRepoError.repoDamaged }
+            let path = RepoLayoutLite.monthPath(basePath: basePath, month: month)
+            let loaded = try await RepoFailureDiagnostics.capture(stage: "upgrade.load_month", path: path) {
+                try await MonthManifestStore.loadManifestDirect(
+                    client: workerClient, basePath: basePath, year: month.year, month: month.month,
+                    layout: .lite, pushSchemaUpgrade: false, assertOwnership: assertOwnership,
+                    liteMonthsListing: monthsListing, surfaceDownloadFailure: true
+                )
+            }
+            guard let store = loaded else { throw LiteRepoError.upgradeMonthUnavailable(month: month.text) }
             let worker = AssetFingerprintRepoUpgrade(client: workerClient, basePath: basePath,
                 assertOwnership: assertOwnership, monthsListing: monthsListing, onProgress: nil)
-            try await thumbnails.migrate(changes: store.rekeyedAssetFingerprints, using: worker)
-            try await store.flushToRemote()
+            try await RepoFailureDiagnostics.capture(stage: "upgrade.thumbnails", path: path) {
+                try await thumbnails.migrate(changes: store.rekeyedAssetFingerprints, using: worker)
+            }
+            try await RepoFailureDiagnostics.capture(stage: "upgrade.publish_month", path: path) {
+                try await store.flushToRemote()
+            }
         }, onMonthCompleted: { completed in
             await onProgress?(.init(phase: .copying, current: completed, total: months.count))
         })
-        guard try await discoverMonths() == months else { throw LiteRepoError.repoDamaged }
+        let finalMonths = try await discoverMonths()
+        guard finalMonths == months else {
+            let missing = Set(months).subtracting(finalMonths).sorted().prefix(12).map(\.text).joined(separator: ",")
+            let added = Set(finalMonths).subtracting(months).sorted().prefix(12).map(\.text).joined(separator: ",")
+            RepoFailureDiagnostics.record(.monthListChanged, stage: "upgrade.verify_months",
+                path: RepoLayoutLite.monthsDirectoryPath(basePath: basePath),
+                detail: "before=\(months.count); after=\(finalMonths.count); missing=\(missing); added=\(added)")
+            throw LiteRepoError.upgradeMonthsChanged
+        }
         try Task.checkCancellation()
         try await assertOwnership.assertWrite()
         await onProgress?(.init(phase: .finalizing, current: 0, total: 0))
-        try await writer.commit(createdAt: createdAt, createdBy: createdBy)
+        try await RepoFailureDiagnostics.capture(stage: "upgrade.commit_version",
+            path: RepoLayoutLite.versionPath(basePath: basePath)) {
+            _ = try await writer.commit(createdAt: createdAt, createdBy: createdBy)
+        }
         await monthsListing.invalidate(basePath: basePath)
         do {
             try await assertOwnership.assertDestructive()
@@ -156,32 +187,55 @@ struct AssetFingerprintRepoUpgrade: Sendable {
         do { entries = try await client.list(path: RepoLayoutLite.monthsDirectoryPath(basePath: basePath)) }
         catch {
             if RemoteFaultLite.classify(error) == .notFound { return [] }
+            RepoFailureDiagnostics.record(.operationFailed, stage: "upgrade.list_months",
+                path: RepoLayoutLite.monthsDirectoryPath(basePath: basePath), error: error)
             throw error
         }
         var canonical = Set<LibraryMonthKey>()
         var recoverable = Set<LibraryMonthKey>()
         for entry in entries {
             if let month = RepoLayoutLite.month(fromFilename: entry.name) {
-                guard !entry.isDirectory else { throw LiteRepoError.repoDamaged }
+                guard !entry.isDirectory else { throw LiteRepoError.upgradeMonthPathConflict(month: month.text) }
                 canonical.insert(month)
             } else if let month = RepoLayoutLite.month(fromScratchFilename: entry.name) {
                 recoverable.insert(month)
             }
         }
-        guard recoverable.isSubset(of: canonical) else { throw LiteRepoError.repoDamaged }
+        if let missing = recoverable.subtracting(canonical).sorted().first {
+            throw LiteRepoError.upgradeMonthUnavailable(month: missing.text)
+        }
         return canonical.sorted()
     }
 
-    private func retireLegacyVersionScratch() async throws {
+    private func retireStaleVersionScratch(keeping currentRecoveryName: String) async throws {
         let entries = try await client.list(path: RepoLayoutLite.repoDirectoryPath(basePath: basePath))
-        for entry in entries where !entry.isDirectory && VersionManifestLite.isVersionScratchFileName(entry.name) {
+        for entry in entries where !entry.isDirectory && entry.name != currentRecoveryName
+            && VersionManifestLite.isVersionScratchFileName(entry.name) {
             let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
             defer { try? FileManager.default.removeItem(at: url) }
-            try await client.download(remotePath: entry.path, localURL: url)
-            guard let manifest = try? VersionManifestLite.decode(Data(contentsOf: url)), manifest.formatVersion == 2 else { continue }
-            // A legacy recovery marker could let an older client reopen partially converted months.
-            try await assertOwnership.assertDestructive()
-            try await client.delete(path: entry.path)
+            do {
+                try await client.download(remotePath: entry.path, localURL: url)
+            } catch {
+                // Some gateways keep listing a file after it is gone; an absent marker needs no retiring.
+                if RemoteFaultLite.classify(error) == .notFound { continue }
+                throw error
+            }
+            guard let manifest = try? VersionManifestLite.decode(Data(contentsOf: url)) else { continue }
+            if manifest.formatVersion == 2 {
+                // A legacy recovery marker could let an older client reopen partially converted months.
+                try await assertOwnership.assertDestructive()
+                do {
+                    try await client.delete(path: entry.path)
+                } catch {
+                    guard RemoteFaultLite.classify(error) == .notFound else { throw error }
+                }
+            } else if manifest.upgradePending == true {
+                // Redundant with the marker just verified, so a failed delete only leaves a duplicate.
+                do {
+                    try await assertOwnership.assertDestructive()
+                    try await client.delete(path: entry.path)
+                } catch { }
+            }
         }
     }
 }

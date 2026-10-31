@@ -444,6 +444,10 @@ final class AMSMB2Client: RemoteStorageClientProtocol, @unchecked Sendable {
         #endif
     }
 
+    func copiesServerSide() -> Bool {
+        false
+    }
+
     func copy(from sourcePath: String, to destinationPath: String) async throws {
         #if canImport(AMSMB2)
         let normalizedSource = try SMBPathCanonicalizer.canonicalRawPath(sourcePath)

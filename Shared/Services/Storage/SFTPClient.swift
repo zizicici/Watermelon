@@ -392,6 +392,10 @@ final actor SFTPClient: RemoteStorageClientProtocol {
         )
     }
 
+    nonisolated func copiesServerSide() -> Bool {
+        false
+    }
+
     // SFTP has no native server-side copy — fall back to download+upload through a local temp.
     func copy(from sourcePath: String, to destinationPath: String) async throws {
         let resolvedSource = try Self.operationalPath(sourcePath)

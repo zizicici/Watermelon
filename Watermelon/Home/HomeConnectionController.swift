@@ -378,6 +378,7 @@ final class HomeConnectionController {
                 extra: "reportFailure=\(reportFailure)"
             )
             var failureProfile = profile
+            let diagnostics = RepoFailureDiagnostics()
             do {
                 let prepareStart = CFAbsoluteTimeGetCurrent()
                 let connectionProfile = try await self.dependencies.storageProfileConnectionService.prepareForConnection(
@@ -405,16 +406,18 @@ final class HomeConnectionController {
                 }
                 let marker = Self.latestBackgroundRun(self.dependencies.databaseManager, profileID: connectionProfile.id)
                 let reloadStart = CFAbsoluteTimeGetCurrent()
-                _ = try await self.dependencies.backupCoordinator.reloadRemoteIndex(
-                    profile: connectionProfile,
-                    password: password,
-                    onSyncProgress: { [weak self] progress in
-                        let sequence = sequencer.next()
-                        Task { @MainActor [weak self] in
-                            self?.applyOrderedSyncProgress(progress, profile: profile, epoch: epoch, sequence: sequence)
+                _ = try await RepoFailureDiagnostics.$current.withValue(diagnostics) {
+                    try await self.dependencies.backupCoordinator.reloadRemoteIndex(
+                        profile: connectionProfile,
+                        password: password,
+                        onSyncProgress: { [weak self] progress in
+                            let sequence = sequencer.next()
+                            Task { @MainActor [weak self] in
+                                self?.applyOrderedSyncProgress(progress, profile: profile, epoch: epoch, sequence: sequence)
+                            }
                         }
-                    }
-                )
+                    )
+                }
                 Self.traceConnect(
                     "reloadRemoteIndex",
                     profile: connectionProfile,
@@ -495,7 +498,8 @@ final class HomeConnectionController {
                         // previous profile as connected-and-ready over an empty remote view.
                         self.disconnect()
                         if reportFailure {
-                            self.onConnectFailed?(failureProfile, error)
+                            self.onConnectFailed?(failureProfile, StorageConnectionFailure(
+                                underlying: error, diagnostics: diagnostics.snapshot()))
                         }
                         return
                     }
@@ -507,7 +511,8 @@ final class HomeConnectionController {
                 self.clearSyncProgress()
                 self.onStateChanged?()
                 if reportFailure {
-                    self.onConnectFailed?(failureProfile, error)
+                    self.onConnectFailed?(failureProfile, StorageConnectionFailure(
+                        underlying: error, diagnostics: diagnostics.snapshot()))
                 }
             }
         }

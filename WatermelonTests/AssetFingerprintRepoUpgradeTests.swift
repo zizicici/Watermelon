@@ -348,6 +348,329 @@ final class AssetFingerprintRepoUpgradeTests: XCTestCase {
         try await upgrade(client)
     }
 
+    private func versionScratchNames(_ client: InMemoryRemoteStorageClient) async throws -> [String] {
+        try await client.list(path: RepoLayoutLite.repoDirectoryPath(basePath: base))
+            .map(\.name).filter { VersionManifestLite.isVersionScratchFileName($0) }
+    }
+
+    private func versionScratchCount(_ client: InMemoryRemoteStorageClient) async throws -> Int {
+        try await versionScratchNames(client).count
+    }
+
+    func testUpgradeReportsDirectoryAtMonthManifestPath() async throws {
+        let client = InMemoryRemoteStorageClient()
+        _ = try await seed(client)
+        let originalMonth = await client.fileData(path: monthPath(1))
+        let originalVersion = await client.fileData(path: versionPath)
+        await client.seedDirectory(monthPath(2))
+
+        do {
+            try await upgrade(client)
+            XCTFail("A directory cannot be loaded as a month manifest")
+        } catch {
+            XCTAssertEqual(error as? LiteRepoError, .upgradeMonthPathConflict(month: "2026-02"))
+        }
+
+        let after = await client.fileData(path: monthPath(1))
+        XCTAssertEqual(after, originalMonth)
+        let version = await client.fileData(path: versionPath)
+        XCTAssertEqual(version, originalVersion, "A blocked preflight must leave the format-2 marker for older clients")
+    }
+
+    func testBlockedPreflightLeavesFormatTwoMarkerUntouched() async throws {
+        let client = InMemoryRemoteStorageClient()
+        _ = try await seed(client)
+        let originalVersion = await client.fileData(path: versionPath)
+        await client.seedFile(path: monthPath(2) + ".\(UUID().uuidString).tmp", data: Data("orphan".utf8))
+
+        do {
+            try await upgrade(client)
+            XCTFail("A month with only recovery scratch must block the upgrade")
+        } catch {
+            XCTAssertEqual(error as? LiteRepoError, .upgradeMonthUnavailable(month: "2026-02"))
+        }
+
+        let version = await client.fileData(path: versionPath)
+        XCTAssertEqual(version, originalVersion)
+        let scratchCount = try await versionScratchCount(client)
+        XCTAssertEqual(scratchCount, 0)
+    }
+
+    func testFormatTwoUpgradeDropsCorruptOrphanThroughGateway() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let expected = try await seed(client)
+        let orphan = monthPath(2) + ".\(UUID().uuidString).tmp"
+        await client.seedFile(path: orphan, data: Data("incomplete sqlite".utf8))
+
+        let plan = try await RemoteLiteRepoGateway.prepareForegroundWrite(
+            client: client, lockClient: client, basePath: base, writerID: UUID().uuidString.lowercased())
+        await plan.session.stopAndRelease()
+
+        let orphanAfter = await client.fileData(path: orphan)
+        XCTAssertNil(orphanAfter)
+        let store = try await snapshot(client)
+        XCTAssertNotNil(store.assetsByFingerprint[expected])
+        let version = await client.fileData(path: versionPath)
+        XCTAssertEqual(VersionManifestLite.compatibility(for: try XCTUnwrap(version)), .readableWritable)
+    }
+
+    func testStalePendingMarkerDeleteFailureDoesNotAbortUpgrade() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let expected = try await seed(client)
+        let stale = RepoLayoutLite.versionTempPath(basePath: base)
+        let staleBytes = try VersionManifestLite.encode(VersionManifestLite.makeManifest(
+            createdAt: "earlier", createdBy: "writer", upgradePending: true))
+        await client.seedFile(path: stale, data: staleBytes)
+        await client.enqueueDeleteError(RemoteErrorFixtures.retryable)
+
+        try await upgrade(client)
+
+        let staleAfter = await client.fileData(path: stale)
+        XCTAssertEqual(staleAfter, staleBytes, "The injected delete failure must have hit the stale marker")
+        let store = try await snapshot(client)
+        XCTAssertNotNil(store.assetsByFingerprint[expected])
+        let version = await client.fileData(path: versionPath)
+        XCTAssertEqual(VersionManifestLite.compatibility(for: try XCTUnwrap(version)), .readableWritable)
+    }
+
+    func testListedButVanishedVersionScratchDoesNotAbortUpgrade() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let expected = try await seed(client)
+        let ghost = RepoLayoutLite.versionTempPath(basePath: base)
+        await client.seedFile(path: ghost, data: Data("listed-but-gone".utf8))
+        await client.setOnDownloadAttempt { path in
+            if path == ghost { try? await client.delete(path: ghost) }
+        }
+
+        try await upgrade(client)
+
+        let store = try await snapshot(client)
+        XCTAssertNotNil(store.assetsByFingerprint[expected])
+        let version = await client.fileData(path: versionPath)
+        XCTAssertEqual(VersionManifestLite.compatibility(for: try XCTUnwrap(version)), .readableWritable)
+    }
+
+    func testUnreadableVersionScratchStillAbortsUpgrade() async throws {
+        let client = InMemoryRemoteStorageClient()
+        _ = try await seed(client)
+        let original = await client.fileData(path: monthPath(1))
+        let scratch = RepoLayoutLite.versionTempPath(basePath: base)
+        await client.seedFile(path: scratch, data: Data("unreadable".utf8))
+        await client.setOnDownloadAttempt { path in
+            if path == scratch { await client.enqueueDownloadError(RemoteErrorFixtures.retryable) }
+        }
+
+        do {
+            try await upgrade(client)
+            XCTFail("An unread marker could be a legacy format-2 marker that must be retired")
+        } catch {
+            XCTAssertEqual(RemoteFaultLite.classify(error), .retryable)
+        }
+
+        let monthAfter = await client.fileData(path: monthPath(1))
+        XCTAssertEqual(monthAfter, original, "No month converts while an unread marker might reopen it to older clients")
+        let scratchAfter = await client.fileData(path: scratch)
+        XCTAssertNotNil(scratchAfter)
+        let version = await client.fileData(path: versionPath)
+        XCTAssertEqual(try VersionManifestLite.decode(XCTUnwrap(version)).upgradePending, true)
+    }
+
+    private func seedLegacyVersionMarker(_ client: InMemoryRemoteStorageClient) async throws -> String {
+        let marker = RepoLayoutLite.versionBackupPath(basePath: base)
+        await client.seedFile(path: marker, data: try VersionManifestLite.encode(.init(
+            formatVersion: 2, minAppVersion: "1.5.0", createdAt: "original-date", createdBy: "original-writer")))
+        return marker
+    }
+
+    func testLegacyVersionMarkerMustBeRetiredBeforeMonthsConvert() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let expected = try await seed(client)
+        let original = await client.fileData(path: monthPath(1))
+        let marker = try await seedLegacyVersionMarker(client)
+        await client.enqueueDeleteError(RemoteErrorFixtures.retryable)
+
+        do {
+            try await upgrade(client)
+            XCTFail("An unretired format-2 marker could let an older client reopen converted months")
+        } catch {
+            XCTAssertEqual(RemoteFaultLite.classify(error), .retryable)
+        }
+        let markerAfterFailure = await client.fileData(path: marker)
+        XCTAssertNotNil(markerAfterFailure)
+        let monthAfterFailure = await client.fileData(path: monthPath(1))
+        XCTAssertEqual(monthAfterFailure, original, "No month converts while the legacy marker survives")
+
+        try await upgrade(client)
+        let markerAfterRetry = await client.fileData(path: marker)
+        XCTAssertNil(markerAfterRetry)
+        let store = try await snapshot(client)
+        XCTAssertNotNil(store.assetsByFingerprint[expected])
+    }
+
+    func testLegacyVersionMarkerAlreadyGoneOnDeleteDoesNotAbortUpgrade() async throws {
+        let client = InMemoryRemoteStorageClient()
+        _ = try await seed(client)
+        let marker = try await seedLegacyVersionMarker(client)
+        // The marker is gone server-side yet the delete still reports not-found, as after a retried request.
+        await client.enqueueDeletePostEffectError(RemoteErrorFixtures.notFound)
+
+        try await upgrade(client)
+
+        let markerAfter = await client.fileData(path: marker)
+        XCTAssertNil(markerAfter)
+        let version = await client.fileData(path: versionPath)
+        XCTAssertEqual(VersionManifestLite.compatibility(for: try XCTUnwrap(version)), .readableWritable)
+    }
+
+    @MainActor
+    func testMonthPublishFailureIsNamedAfterPropagatingThroughReload() async throws {
+        let backing = InMemoryRemoteStorageClient()
+        _ = try await seed(backing)
+        let client = MonthPublishFailingClient(backing: backing, month: "2026-01")
+        let recorder = RepoFailureDiagnostics()
+        var thrown: Error?
+        do {
+            let plan = try await RepoFailureDiagnostics.$current.withValue(recorder) {
+                try await RemoteLiteRepoGateway.prepareReload(client: client, basePath: base,
+                    writerID: UUID().uuidString.lowercased(),
+                    makeLockClient: { LiteLockClientHandle(client: backing, ownsClient: false) })
+            }
+            await plan.session?.release()
+            XCTFail("A failed month publish must abort the upgrade")
+        } catch {
+            thrown = error
+        }
+
+        let profile = ServerProfileRecord(id: nil, name: "n", storageType: "webdav", connectionParams: nil,
+            sortOrder: 0, host: "h", port: 443, shareName: "", basePath: base, username: "u", domain: nil,
+            credentialRef: "c", backgroundBackupEnabled: false, backgroundBackupMinIntervalMinutes: 720,
+            backgroundBackupRequiresWiFi: false, generateRemoteThumbnails: false, createdAt: Date(), updatedAt: Date())
+        let report = ConnectionFailurePresentation(profile: profile, error: StorageConnectionFailure(
+            underlying: try XCTUnwrap(thrown), diagnostics: recorder.snapshot()))
+        let context = String.localizedStringWithFormat(String(localized: "connection.failure.writeMonth"), "2026-01")
+        XCTAssertEqual(report.summary.components(separatedBy: "\n").first, context)
+        XCTAssertEqual(report.summary.components(separatedBy: "\n").last, MonthPublishFailingClient.failure.localizedDescription)
+    }
+
+    func testParallelWorkerFailureIsRecordedInTheConnectionScope() async throws {
+        let backing = InMemoryRemoteStorageClient()
+        _ = try await seed(backing)
+        _ = try await seed(backing, month: 2)
+        let recorder = RepoFailureDiagnostics()
+        var upgrade = AssetFingerprintRepoUpgrade(client: backing, basePath: base, assertOwnership: .uniform({}),
+            monthsListing: LiteMonthsListingSnapshot(), onProgress: nil)
+        upgrade.execution = RepoUpgradeExecution(workerCount: 2,
+            makeClient: { MonthPublishFailingClient(backing: backing, month: "2026-02") })
+        do {
+            try await RepoFailureDiagnostics.$current.withValue(recorder) {
+                try await upgrade.run(createdAt: "date", createdBy: "writer")
+            }
+            XCTFail("A failed worker publish must abort the upgrade")
+        } catch {}
+
+        let entry = try XCTUnwrap(recorder.snapshot().first { $0.stage == "upgrade.publish_month" })
+        XCTAssertEqual(entry.path, monthPath(2))
+        XCTAssertEqual(entry.causes.last, "MonthPublishTest/7")
+    }
+
+    func testEmptyReadOfTheOnlyMonthCopyBlocksTheUpgradeThroughGateway() async throws {
+        let client = InMemoryRemoteStorageClient()
+        _ = try await seed(client)
+        _ = try await seed(client, month: 2)
+        let originalVersion = await client.fileData(path: versionPath)
+        let scratch = monthPath(2) + ".\(UUID().uuidString).tmp"
+        let bytes = await client.fileData(path: monthPath(2))
+        await client.seedFile(path: scratch, data: try XCTUnwrap(bytes))
+        try await client.delete(path: monthPath(2))
+        await client.setOnDownloadAttempt { path in
+            if path == scratch { await client.enqueueDownloadData(Data()) }
+        }
+
+        do {
+            let plan = try await RemoteLiteRepoGateway.prepareForegroundWrite(
+                client: client, lockClient: client, basePath: base, writerID: UUID().uuidString.lowercased())
+            await plan.session.stopAndRelease()
+            XCTFail("An unreadable only copy must block the upgrade")
+        } catch {
+            XCTAssertEqual(error as? LiteRepoError, .upgradeMonthUnavailable(month: "2026-02"))
+        }
+
+        let scratchAfter = await client.fileData(path: scratch)
+        XCTAssertEqual(scratchAfter, bytes)
+        let version = await client.fileData(path: versionPath)
+        XCTAssertEqual(version, originalVersion)
+    }
+
+    func testLeaseLostBeforeThePreflightIsReportedAsOwnership() async throws {
+        let client = InMemoryRemoteStorageClient()
+        _ = try await seed(client)
+        let originalVersion = await client.fileData(path: versionPath)
+        await client.seedFile(path: monthPath(2) + ".\(UUID().uuidString).tmp", data: Data("unrepaired".utf8))
+
+        do {
+            try await upgrade(client, ownership: .uniform({ throw LiteRepoError.ownershipLost }))
+            XCTFail("A lost lease must stop the upgrade")
+        } catch {
+            XCTAssertEqual(error as? LiteRepoError, .ownershipLost)
+        }
+
+        let version = await client.fileData(path: versionPath)
+        XCTAssertEqual(version, originalVersion)
+    }
+
+    func testRepeatedFailedAttemptsKeepOneRecoveryMarker() async throws {
+        let client = InMemoryRemoteStorageClient()
+        _ = try await seed(client)
+        _ = try await seed(client, month: 2)
+        await client.seedFile(path: monthPath(2), data: Data("corrupt".utf8))
+
+        var markers: [[String]] = []
+        for _ in 0..<2 {
+            do {
+                try await upgrade(client)
+                XCTFail("A corrupt month must prevent the final commit")
+            } catch { }
+            markers.append(try await versionScratchNames(client))
+        }
+
+        XCTAssertEqual(markers.map(\.count), [1, 1])
+        XCTAssertNotEqual(markers[0], markers[1], "The retry retired the earlier marker and wrote its own")
+        let pending = await client.fileData(path: versionPath)
+        XCTAssertEqual(try VersionManifestLite.decode(XCTUnwrap(pending)).upgradePending, true)
+    }
+
+    func testChangedMonthListingReportsIncompleteUpgradeAndCanResume() async throws {
+        let client = InMemoryRemoteStorageClient()
+        let first = try await seed(client)
+        let second = try makeMonth(2, duplicates: false)
+        let newMonthPath = monthPath(2)
+        do {
+            try await AssetFingerprintRepoUpgrade(
+                client: client, basePath: base, assertOwnership: .uniform({}),
+                monthsListing: LiteMonthsListingSnapshot(), onProgress: { progress in
+                    if progress.phase == .copying, progress.current == 1 {
+                        await client.seedFile(path: newMonthPath, data: second.bytes)
+                    }
+                }
+            ).run(createdAt: "date", createdBy: "writer")
+            XCTFail("A changed listing must prevent the final version commit")
+        } catch {
+            XCTAssertEqual(error as? LiteRepoError, .upgradeMonthsChanged)
+        }
+
+        let pending = await client.fileData(path: versionPath)
+        XCTAssertEqual(try VersionManifestLite.decode(XCTUnwrap(pending)).upgradePending, true)
+        let untouchedMonth = await client.fileData(path: newMonthPath)
+        XCTAssertEqual(untouchedMonth, second.bytes)
+        try await upgrade(client)
+        let month1 = try await snapshot(client)
+        let month2 = try await snapshot(client, month: 2)
+        XCTAssertNotNil(month1.assetsByFingerprint[first])
+        XCTAssertNotNil(month2.assetsByFingerprint[second.fingerprint])
+        let final = await client.fileData(path: versionPath)
+        XCTAssertNil(try VersionManifestLite.decode(XCTUnwrap(final)).upgradePending)
+    }
+
     func testDirectPutBackendKeepsCanonicalVersionAndMediaFingerprint() async throws {
         let client = InMemoryRemoteStorageClient(moveMayNotBeIndependent: true)
         let expected = try await seed(client)
@@ -381,6 +704,40 @@ final class AssetFingerprintRepoUpgradeTests: XCTestCase {
         await second.session.stopAndRelease()
         let uploads = await client.uploadedPaths
         XCTAssertFalse(uploads.dropFirst(before).contains { $0.contains("/months/") })
+    }
+
+    func testGatewayRecoversIdenticalScratchAndCompletesUpgrade() async throws {
+        for nonIndependent in [false, true] {
+            let client = InMemoryRemoteStorageClient(moveMayNotBeIndependent: nonIndependent)
+            let expected = try await seed(client)
+            let original = await client.fileData(path: monthPath(1))
+            let bytes = try XCTUnwrap(original)
+            var resources: [String: Data] = [:]
+            for name in ["original.jpg", "edited.jpg", "edit-0.AAE"] {
+                let data = await client.fileData(path: base + "/2026/01/" + name)
+                resources[name] = try XCTUnwrap(data)
+            }
+            let paths = [monthPath(1) + ".first.tmp", monthPath(1) + ".second.tmp"]
+            for path in paths { await client.seedFile(path: path, data: bytes) }
+            try await client.delete(path: monthPath(1))
+            let writerID = UUID().uuidString.lowercased()
+
+            let plan = try await RemoteLiteRepoGateway.prepareForegroundWrite(
+                client: client, lockClient: client, basePath: base, writerID: writerID)
+            await plan.session.stopAndRelease()
+
+            let restored = try await snapshot(client)
+            XCTAssertNotNil(restored.assetsByFingerprint[expected])
+            XCTAssertEqual(restored.itemsByFileName.count, 3)
+            let version = await client.fileData(path: versionPath)
+            XCTAssertEqual(VersionManifestLite.compatibility(for: try XCTUnwrap(version)), .readableWritable)
+            let locked = await client.lockExists(basePath: base, writerID: writerID)
+            XCTAssertFalse(locked)
+            for (name, data) in resources {
+                let actual = await client.fileData(path: base + "/2026/01/" + name)
+                XCTAssertEqual(actual, data)
+            }
+        }
     }
 
     func testGatewayUpgradesMonthsConcurrentlyAndPreservesSharedThumbnail() async throws {
@@ -525,12 +882,16 @@ final class AssetFingerprintRepoUpgradeTests: XCTestCase {
     func testOneDriveUpgradeKeepsRecoveryFilesWhenTheirDownloadFails() async throws {
         let state = try await interruptedOneDriveUpgrade()
         await state.client.setRecoveryDownloadError(RemoteErrorFixtures.retryable)
+        let pendingBefore = await state.backing.fileData(path: versionPath)
+        let uploadsBefore = await state.backing.uploadedPaths.count
         do {
             let prepared = try await RemoteLiteRepoGateway.prepareForegroundWrite(
                 client: state.client, lockClient: state.backing, basePath: base, writerID: state.writerID)
             await prepared.session.stopAndRelease()
             XCTFail("Unverified recovery files must block the completed upgrade")
-        } catch { }
+        } catch {
+            XCTAssertEqual(error as? LiteRepoError, .upgradeMonthUnavailable(month: "2026-01"))
+        }
         for (path, expected) in state.scratch {
             let actual = await state.backing.fileData(path: path)
             XCTAssertEqual(actual, expected)
@@ -538,6 +899,9 @@ final class AssetFingerprintRepoUpgradeTests: XCTestCase {
         let canonical = await state.backing.fileData(path: monthPath(1))
         XCTAssertNil(canonical)
         let pending = await state.backing.fileData(path: versionPath)
+        XCTAssertEqual(pending, pendingBefore)
+        let versionUploads = await state.backing.uploadedPaths.dropFirst(uploadsBefore).filter { $0.contains("/version") }
+        XCTAssertEqual(versionUploads, [], "A blocked resume must not rewrite the pending marker")
         XCTAssertEqual(try VersionManifestLite.decode(XCTUnwrap(pending)).upgradePending, true)
         await state.client.setRecoveryDownloadError(nil)
         let retry = try await RemoteLiteRepoGateway.prepareForegroundWrite(
@@ -556,7 +920,9 @@ final class AssetFingerprintRepoUpgradeTests: XCTestCase {
                     client: state.client, lockClient: state.backing, basePath: base, writerID: state.writerID)
                 await prepared.session.stopAndRelease()
                 XCTFail("A failed recovery must not complete the upgrade")
-            } catch { }
+            } catch {
+                XCTAssertEqual(error as? LiteRepoError, .upgradeMonthUnavailable(month: "2026-01"), "\(error)")
+            }
             for (path, expected) in state.scratch {
                 let actual = await state.backing.fileData(path: path)
                 XCTAssertEqual(actual, expected)
@@ -568,24 +934,32 @@ final class AssetFingerprintRepoUpgradeTests: XCTestCase {
         }
     }
 
-    func testUnrecoverableOneDriveMonthCannotDisappearFromUpgradeChecks() async throws {
+    func testResumedUpgradeDropsMonthWhoseOnlyCopiesAreCorrupt() async throws {
         let state = try await interruptedOneDriveUpgrade()
         let corrupt = Data("incomplete sqlite".utf8)
         for path in state.scratch.keys { await state.backing.seedFile(path: path, data: corrupt) }
-        do {
-            let prepared = try await RemoteLiteRepoGateway.prepareForegroundWrite(
-                client: state.client, lockClient: state.backing, basePath: base, writerID: state.writerID)
-            await prepared.session.stopAndRelease()
-            XCTFail("An unrecoverable historical month cannot be omitted from the upgrade")
-        } catch { }
+        var media: [String: Data] = [:]
+        for name in ["original.jpg", "edited.jpg", "edit-0.AAE"] {
+            let data = await state.backing.fileData(path: base + "/2026/01/" + name)
+            media[name] = try XCTUnwrap(data)
+        }
+
+        let prepared = try await RemoteLiteRepoGateway.prepareForegroundWrite(
+            client: state.client, lockClient: state.backing, basePath: base, writerID: state.writerID)
+        await prepared.session.stopAndRelease()
+
         for path in state.scratch.keys {
             let actual = await state.backing.fileData(path: path)
-            XCTAssertEqual(actual, corrupt)
+            XCTAssertNil(actual, path)
         }
-        let pending = await state.backing.fileData(path: versionPath)
-        XCTAssertEqual(try VersionManifestLite.decode(XCTUnwrap(pending)).upgradePending, true)
+        let canonical = await state.backing.fileData(path: monthPath(1))
+        XCTAssertNil(canonical)
+        for (name, data) in media {
+            let actual = await state.backing.fileData(path: base + "/2026/01/" + name)
+            XCTAssertEqual(actual, data, "Dropping index scratch never touches media")
+        }
         let decision = try await RepoFormatRouter(client: state.client, basePath: base).classify()
-        XCTAssertEqual(decision, .fingerprintUpgrade)
+        XCTAssertEqual(decision, .current)
     }
 }
 
@@ -596,6 +970,37 @@ private actor UpgradeProgressRecorder {
     func record(_ progress: V1ToLiteMigrationProgress) {
         if progress.phase == .copying { copyingCounts.append(progress.current) }
     }
+}
+
+private struct MonthPublishFailingClient: RemoteStorageClientProtocol {
+    static let failure = NSError(domain: "MonthPublishTest", code: 7, userInfo: [NSLocalizedDescriptionKey: "publish refused"])
+    let backing: InMemoryRemoteStorageClient
+    let month: String
+
+    private func check(_ remotePath: String) throws {
+        if remotePath.contains("/months/\(month).sqlite") { throw Self.failure }
+    }
+
+    func connect() async throws {}
+    func disconnect() async {}
+    func storageCapacity() async throws -> RemoteStorageCapacity? { nil }
+    func list(path: String) async throws -> [RemoteStorageEntry] { try await backing.list(path: path) }
+    func metadata(path: String) async throws -> RemoteStorageEntry? { try await backing.metadata(path: path) }
+    func upload(localURL: URL, remotePath: String, respectTaskCancellation: Bool, onProgress: ((Double) -> Void)?) async throws {
+        try check(remotePath)
+        try await backing.upload(localURL: localURL, remotePath: remotePath, respectTaskCancellation: respectTaskCancellation, onProgress: onProgress)
+    }
+    func upload(localURL: URL, remotePath: String, mode: RemoteUploadMode, respectTaskCancellation: Bool, onProgress: ((Double) -> Void)?) async throws {
+        try check(remotePath)
+        try await backing.upload(localURL: localURL, remotePath: remotePath, mode: mode, respectTaskCancellation: respectTaskCancellation, onProgress: onProgress)
+    }
+    func setModificationDate(_ date: Date, forPath path: String) async throws { try await backing.setModificationDate(date, forPath: path) }
+    func download(remotePath: String, localURL: URL) async throws { try await backing.download(remotePath: remotePath, localURL: localURL) }
+    func exists(path: String) async throws -> Bool { try await backing.exists(path: path) }
+    func delete(path: String) async throws { try await backing.delete(path: path) }
+    func createDirectory(path: String) async throws { try await backing.createDirectory(path: path) }
+    func move(from sourcePath: String, to destinationPath: String) async throws { try await backing.move(from: sourcePath, to: destinationPath) }
+    func copy(from sourcePath: String, to destinationPath: String) async throws { try await backing.copy(from: sourcePath, to: destinationPath) }
 }
 
 private struct UpgradeStorageClient: RemoteStorageClientProtocol {

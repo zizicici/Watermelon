@@ -255,7 +255,10 @@ final class LiteLeaseFailFastTests: XCTestCase {
             ("ownershipLost", .ownershipLost, leaseLoss),
             ("existingLiteManifestConflict", .existingLiteManifestConflict(month: "2026-06"), abort),
             ("v1MonthManifestUnreadable", .v1MonthManifestUnreadable(month: "2026-06"), abort),
-            ("v1SourceChangedDuringMigration", .v1SourceChangedDuringMigration, abort)
+            ("v1SourceChangedDuringMigration", .v1SourceChangedDuringMigration, abort),
+            ("upgradeMonthUnavailable", .upgradeMonthUnavailable(month: "2026-06"), abort),
+            ("upgradeMonthPathConflict", .upgradeMonthPathConflict(month: "2026-06"), abort),
+            ("upgradeMonthsChanged", .upgradeMonthsChanged, abort)
         ]
 
         for (name, error, expected) in cases {

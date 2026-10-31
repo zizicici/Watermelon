@@ -11,14 +11,29 @@ enum ConnectionFailureAlertFactory {
     static func make(
         profile: ServerProfileRecord,
         error: Error,
+        onDetails: ((ConnectionFailurePresentation) -> Void)? = nil,
         onEdit: @escaping () -> Void
     ) -> UIAlertController {
+        let report = ConnectionFailurePresentation(profile: profile, error: error)
         let alert = UIAlertController(
             title: String(localized: "home.alert.connectionFailed"),
-            message: profile.userFacingStorageErrorMessage(error),
+            message: report.summary,
             preferredStyle: .alert
         )
         alert.addAction(UIAlertAction(title: String(localized: "common.ok"), style: .cancel))
+        if let onDetails {
+            alert.addAction(UIAlertAction(title: String(localized: "connection.failure.details"), style: .default) { [weak alert] _ in
+                Task { @MainActor [weak alert] in
+                    await PresentationDismissalSequencer.performAfterDismissal(
+                        isPresented: {
+                            guard let alert else { return false }
+                            return alert.presentingViewController != nil || alert.viewIfLoaded?.window != nil
+                        },
+                        action: { onDetails(report) }
+                    )
+                }
+            })
+        }
         alert.addAction(UIAlertAction(title: String(localized: "common.edit"), style: .default) { [weak alert] _ in
             Task { @MainActor [weak alert] in
                 await PresentationDismissalSequencer.performAfterDismissal(
@@ -1264,9 +1279,16 @@ final class HomeViewController: UIViewController {
     }
 
     private func presentConnectionFailedAlert(profile: ServerProfileRecord, error: Error) {
-        let alert = ConnectionFailureAlertFactory.make(profile: profile, error: error) { [weak self] in
-            self?.openConnectionEditor(for: profile)
-        }
+        let alert = ConnectionFailureAlertFactory.make(profile: profile, error: error,
+            onDetails: { [weak self] report in
+                let details = AppNavigationController(rootViewController: ConnectionFailureDetailsViewController(report: report))
+                details.modalPresentationStyle = .pageSheet
+                details.sheetPresentationController?.detents = [.medium(), .large()]
+                details.sheetPresentationController?.prefersGrabberVisible = true
+                self?.present(details, animated: ConsideringUser.animated)
+            },
+            onEdit: { [weak self] in self?.openConnectionEditor(for: profile) }
+        )
         present(alert, animated: true)
     }
 

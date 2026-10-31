@@ -226,7 +226,7 @@ extension MonthManifestStore {
     // Reuses the load path (migrate-then-validate), not a read-only schema check: a manifest still on the
     // legacy creationDateNs/backedUpAtNs schema is loadable after migration, and cleanup must not class it
     // as junk. Runs on a downloaded temp copy, so the in-place migration is safe.
-    static func validateMonthManifestFile(at url: URL) -> ManifestFileValidation {
+    static func validateMonthManifestFile(at url: URL, onFailure: ((Error) -> Void)? = nil) -> ManifestFileValidation {
         let validationURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("manifest-validate-\(UUID().uuidString).sqlite")
         var queue: DatabaseQueue?
@@ -242,6 +242,7 @@ extension MonthManifestStore {
             _ = try prepareExistingManifest(openedQueue)
             return .valid
         } catch {
+            onFailure?(error)
             return classifyManifestValidationError(error)
         }
     }

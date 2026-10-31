@@ -92,7 +92,8 @@
 3. 处理密码输入、切换 profile、断开连接
 4. 调用 `BackupCoordinator.reloadRemoteIndex(...)` 重建共享远端快照
 5. 连接失败时，如旧连接仍然有效，则尝试恢复旧连接对应的远端索引
-6. App 在前台且执行、维护已结束时，核对当前节点的后台备份标记及远端待核对状态；成功刷新后若期间又有变化则继续追赶，失败等待下次激活或变更。已加载的页面在 App 前台期间持续消费数据，不依赖页面是否显示。
+6. `reloadRemoteIndex` 在 task-local 的 `RepoFailureDiagnostics`（`Shared/Services/Repo/`）作用域内执行；失败时把错误与诊断快照包成 `StorageConnectionFailure`，由 `ConnectionFailurePresentation` / `ConnectionFailureDetailsViewController`（`Watermelon/UI/Common/`）生成弹窗说明和可复制的错误详情
+7. App 在前台且执行、维护已结束时，核对当前节点的后台备份标记及远端待核对状态；成功刷新后若期间又有变化则继续追赶，失败等待下次激活或变更。已加载的页面在 App 前台期间持续消费数据，不依赖页面是否显示。
 
 ### `HomeIncrementalDataManager`
 
@@ -348,7 +349,7 @@ Lite 仓库的单写者租约。锁文件位于 `.watermelon/locks/<writerID>.lo
 
 `RemoteUploadMode` 有 `.replace`（覆盖写）与 `.createIfAbsent`（请求仅当远端不存在时创建，后端支持该条件时具备原子性，已存在抛 EEXIST 名字碰撞）两种。
 
-协议扩展默认提供 `verifyWriteAccess`（空实现）、`mode:` 重载（`.replace` 转旧 upload，`.createIfAbsent` 抛 `.unavailable`，需各客户端覆写）、`shouldSetModificationDate / shouldLimitUploadRetries / directReadURL / disconnectSafely`。
+协议扩展默认提供 `verifyWriteAccess`（空实现）、`mode:` 重载（`.replace` 转旧 upload，`.createIfAbsent` 抛 `.unavailable`，需各客户端覆写）、`shouldSetModificationDate / shouldLimitUploadRetries / directReadURL / disconnectSafely`，以及恢复清单用的 `isCopyUnsupported`（默认 false，WebDAV 对 405 / 501 为 true）和 `copiesServerSide`（默认 true，SMB / SFTP 的 `copy` 本身是下载后上传，为 false）。
 
 当前实现：
 

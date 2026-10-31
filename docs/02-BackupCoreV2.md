@@ -320,7 +320,13 @@ SMB / WebDAV / S3 / SFTP / OneDrive / Dropbox / Google Drive / BrowserLink 走 `
 
 `MonthManifestStore` 实现拆为三段（均位于 `Shared/Services/Backup/`）：核心入口在 `MonthManifestStore.swift`，初始化 / seed 流程在 `+Loading.swift`，schema / 迁移在 `+Schema.swift`（`month_manifest_v1_initial`）。
 
-格式升级使用 `OrphanCleanupLite.Mode.upgrade`：历史月份可能没有可重传的本地原件，因此包括 OneDrive 在内都先校验和恢复月份清单。正式清单缺失且恢复失败时保留 scratch，由升级的月份完整性检查阻止提交完成版本。OneDrive 日常备份仍使用原有轻量清理策略，不增加逐份下载 scratch 的开销。
+格式升级使用 `OrphanCleanupLite.Mode.upgrade`：历史月份可能没有可重传的本地原件，因此包括 OneDrive 在内都先校验和恢复月份清单。正式清单缺失且所有 scratch 都已下载并被证明无效（例如中断上传留下的半截文件）时，与前台清理一样删除这些 scratch，该月不再参与升级，媒体文件不受影响。读取结果不确定、存在有效副本但恢复失败或多份有效副本无法确定先后时保留 scratch，由升级的月份完整性检查阻止提交完成版本。OneDrive 日常备份仍使用原有轻量清理策略，不增加逐份下载 scratch 的开销。
+
+恢复 scratch 时，若后端没有服务端复制（SMB、SFTP 的 `copiesServerSide()` 为 false），或服务端复制因不支持而失败（`isCopyUnsupported`，目前仅 WebDAV `COPY` 返回 405 / 501），改为与非独立 MOVE 后端相同的直接上传：上传的就是校验阶段读到并验证过的字节，不再重新下载。直接上传沿用调用方紧挨着做的写权限证明，`COPY` 被拒后回退上传时再证明一次。
+
+同一月份的多个有效恢复候选若 SHA-256 相同，可直接选一份恢复，不依赖修改时间；不同内容仍按原有临时文件与时间规则选择。任一候选读取结果不确定时保留全部文件，避免采用可能较旧的索引；下载字节数与列表大小不一致的候选在所有清理模式下都只算读取不确定，不作为无效文件删除。恢复并回读成功后，MOVE 独立后端上与所选副本内容相同的其他副本一并删除，非独立后端仍保留。
+
+首页连接通过 task-local 的 `RepoFailureDiagnostics` 收集格式探测、恢复与升级失败，最多保留最近 32 条阶段、完整路径、错误说明及底层错误码；完全相同的记录只保留一条，已被忽略的月份列表故障不记录。核心流程继续抛出原错误，避免影响取消与写权限分类；仅在交给连接失败界面时附上诊断快照。
 
 ## 13. 远端维护（用户主动触发）
 
