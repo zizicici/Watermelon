@@ -68,7 +68,13 @@
           "adHocOffers": [],
           "codeOffers": [],
           "groupNumber": 1,
-          "introductoryOffer": null,
+          "introductoryOffer": {
+            "displayPrice": "0.00",
+            "internalID": "1004",
+            "numberOfPeriods": 1,
+            "paymentMode": "free",
+            "subscriptionPeriod": "P1W"
+          },
           "recurringSubscriptionPeriod": "P1Y",
           "subscriptionGroupID": "2000"
         }

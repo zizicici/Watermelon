@@ -77,6 +77,63 @@ final class MembershipPurchaseTests: XCTestCase {
         XCTAssertFalse(UserDefaults.standard.bool(forKey: ProStatus.membershipKey))
     }
 
+    func testYearlyTrialUnlocksProRestoresAndCannotBeRepeated() async throws {
+        try await loadProducts()
+        let yearly = try XCTUnwrap(Store.shared.memberships.first { $0.id == ProStatus.yearlyProductID })
+        let subscription = try XCTUnwrap(yearly.subscription)
+        let eligible = await subscription.isEligibleForIntroOffer
+        XCTAssertTrue(eligible)
+        guard case .success(let transaction) = try await Store.shared.purchase(productID: yearly.id) else {
+            return XCTFail("Yearly trial purchase failed")
+        }
+        XCTAssertEqual(transaction.offer?.type, .introductory)
+        XCTAssertEqual(transaction.offer?.paymentMode, .freeTrial)
+        XCTAssertEqual(transaction.price, 0)
+        XCTAssertEqual(try XCTUnwrap(transaction.expirationDate).timeIntervalSince(transaction.purchaseDate), 7 * 24 * 60 * 60, accuracy: 1)
+        XCTAssertTrue(ProStatus.isPro)
+        XCTAssertEqual(Store.shared.proTier(), .subscription)
+        XCTAssertFalse(UserDefaults.standard.bool(forKey: ProStatus.membershipKey))
+        let localTransaction = try XCTUnwrap(session.allTransactions().first { $0.productIdentifier == yearly.id })
+        try session.disableAutoRenewForTransaction(identifier: localTransaction.identifier)
+        clearSubscriptions()
+        let restored = try await Store.shared.syncMembershipStatus()
+        XCTAssertTrue(restored)
+        XCTAssertTrue(ProStatus.isPro)
+        try session.expireSubscription(productIdentifier: yearly.id)
+        for _ in 0..<50 {
+            await Store.shared.updateCustomerProductStatus()
+            if !ProStatus.isPro { break }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        XCTAssertFalse(ProStatus.isPro)
+        let eligibleAgain = await subscription.isEligibleForIntroOffer
+        XCTAssertFalse(eligibleAgain)
+        try await assertPaywallHasNoTrial()
+        guard case .success(let repurchase) = try await Store.shared.purchase(productID: yearly.id) else {
+            return XCTFail("Yearly repurchase failed")
+        }
+        XCTAssertNil(repurchase.offer)
+        XCTAssertEqual(repurchase.price, yearly.price)
+    }
+
+    func testPaywallDoesNotOfferTrialWithoutStoreConfiguration() async throws {
+        let source = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "Memberships", withExtension: "storekit"))
+        var catalog = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: source)) as? [String: Any])
+        var groups = try XCTUnwrap(catalog["subscriptionGroups"] as? [[String: Any]])
+        var subscriptions = try XCTUnwrap(groups[0]["subscriptions"] as? [[String: Any]])
+        for index in subscriptions.indices { subscriptions[index]["introductoryOffer"] = NSNull() }
+        groups[0]["subscriptions"] = subscriptions
+        catalog["subscriptionGroups"] = groups
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".storekit")
+        try JSONSerialization.data(withJSONObject: catalog).write(to: url)
+        defer { try? FileManager.default.removeItem(at: url) }
+        session = try SKTestSession(contentsOf: url)
+        session.disableDialogs = true
+        try await loadProducts()
+        XCTAssertNil(Store.shared.memberships.first { $0.id == ProStatus.yearlyProductID }?.subscription?.introductoryOffer)
+        try await assertPaywallHasNoTrial()
+    }
+
     func testLifetimeUpgradeSurvivesSubscriptionRefund() async throws {
         try await loadProducts()
         _ = try await Store.shared.purchase(productID: ProStatus.monthlyProductID)
@@ -207,7 +264,16 @@ final class MembershipPurchaseTests: XCTestCase {
             XCTAssertNotNil(find("paywall.product." + id, in: page.view))
             let product = try XCTUnwrap(Store.shared.memberships.first { $0.id == id })
             XCTAssertTrue(find("paywall.product." + id, in: page.view)?.accessibilityLabel?.contains(product.displayPrice) == true)
-            XCTAssertNil(product.subscription?.introductoryOffer)
+            if id == ProStatus.yearlyProductID {
+                let trial = try XCTUnwrap(product.subscription?.introductoryOffer)
+                XCTAssertEqual(trial.paymentMode, .freeTrial)
+                XCTAssertEqual(trial.price, 0)
+                XCTAssertEqual(trial.period.unit, .week)
+                XCTAssertEqual(trial.period.value, 1)
+                XCTAssertEqual(trial.periodCount, 1)
+            } else {
+                XCTAssertNil(product.subscription?.introductoryOffer)
+            }
         }
         XCTAssertNotNil((find("paywall.appIcon", in: page.view) as? UIImageView)?.image)
         let crown = try XCTUnwrap(find("paywall.crown", in: page.view) as? UIImageView)
@@ -302,6 +368,24 @@ final class MembershipPurchaseTests: XCTestCase {
         let card = try XCTUnwrap(find("paywall.product." + yearly.id, in: page.view) as? UIControl)
         XCTAssertTrue(card.accessibilityLabel?.contains(yearly.displayPrice) == true)
         card.sendActions(for: .touchUpInside)
+        let trialTitle = String(localized: "paywall.startFreeTrial")
+        let trialButton = try XCTUnwrap(find("paywall.purchase", in: page.view) as? UIButton)
+        for _ in 0..<100 {
+            if trialButton.configuration?.title == trialTitle && trialButton.isEnabled { break }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        XCTAssertEqual(trialButton.configuration?.title, trialTitle)
+        let trialDuration = try XCTUnwrap(DateComponentsFormatter.localizedString(from: DateComponents(day: 7), unitsStyle: .full))
+        let trialLabel = String(format: String(localized: "paywall.freeTrial"), trialDuration)
+        XCTAssertTrue(find("paywall.product." + yearly.id, in: page.view)?.accessibilityLabel?.contains(trialLabel) == true)
+        let disclosure = try XCTUnwrap(find("paywall.disclosure", in: page.view) as? UILabel)
+        XCTAssertTrue(disclosure.text?.contains(trialDuration) == true)
+        XCTAssertTrue(disclosure.text?.contains(yearly.displayPrice) == true)
+        let monthlyCard = try XCTUnwrap(find("paywall.product." + ProStatus.monthlyProductID, in: page.view) as? UIControl)
+        monthlyCard.sendActions(for: .touchUpInside)
+        XCTAssertEqual(trialButton.configuration?.title, String(localized: "paywall.subscribe"))
+        XCTAssertFalse(disclosure.text?.contains(trialDuration) == true)
+        (find("paywall.product." + yearly.id, in: page.view) as? UIControl)?.sendActions(for: .touchUpInside)
         XCTAssertTrue(find("paywall.product." + yearly.id, in: page.view)?.accessibilityTraits.contains(.selected) == true)
         XCTAssertNotNil(find("paywall.restore", in: page.view))
         let footer = try XCTUnwrap(find("paywall.links", in: page.view) as? UIStackView)
@@ -410,6 +494,33 @@ final class MembershipPurchaseTests: XCTestCase {
         attachment.lifetime = .keepAlways
         add(attachment)
         try image.pngData()?.write(to: URL(fileURLWithPath: "/tmp/\(name).png"))
+    }
+
+    private func assertPaywallHasNoTrial() async throws {
+        let page = WatermelonPaywallViewController(configuration: .init(
+            title: WatermelonProBenefits.title, features: WatermelonProBenefits.features,
+            productIDs: ProStatus.displayProductIDs,
+            privacyPolicyURL: URL(string: "https://watermelonbackup.com/privacy.html")!
+        ))
+        page.loadViewIfNeeded()
+        let card = try XCTUnwrap(find("paywall.product." + ProStatus.yearlyProductID, in: page.view) as? UIControl)
+        card.sendActions(for: .touchUpInside)
+        let purchase = try XCTUnwrap(find("paywall.purchase", in: page.view) as? UIButton)
+        for _ in 0..<100 {
+            if purchase.isEnabled { break }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        XCTAssertTrue(purchase.isEnabled)
+        XCTAssertEqual(purchase.configuration?.title, String(localized: "paywall.subscribe"))
+        let yearly = try XCTUnwrap(Store.shared.memberships.first { $0.id == ProStatus.yearlyProductID })
+        let disclosure = try XCTUnwrap(find("paywall.disclosure", in: page.view) as? UILabel)
+        XCTAssertTrue(disclosure.text?.contains(yearly.displayPrice) == true)
+        let formatter = DateComponentsFormatter()
+        formatter.unitsStyle = .full
+        let trialDuration = try XCTUnwrap(formatter.string(from: DateComponents(day: 7)))
+        let trialLabel = String(format: String(localized: "paywall.freeTrial"), trialDuration)
+        XCTAssertFalse(find("paywall.product." + yearly.id, in: page.view)?.accessibilityLabel?.contains(trialLabel) == true)
+        XCTAssertFalse(disclosure.text?.contains(trialDuration) == true)
     }
 
     private func loadProducts() async throws {

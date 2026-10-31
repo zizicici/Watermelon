@@ -49,6 +49,9 @@ final class WatermelonPaywallViewController: UIViewController, UIPopoverPresenta
     private var purchaseSections: [UIView] = []
     private var disclosureHeight: NSLayoutConstraint?
     private var isWorking = false
+    private var isEligibleForYearlyTrial = false
+    private var isCheckingTrialEligibility = false
+    private var trialEligibilityTask: Task<Void, Never>?
     private let scrollView = UIScrollView()
     private let backdrop = WatermelonPaywallBackground()
     private let dockBackground: UIVisualEffectView = {
@@ -82,6 +85,7 @@ final class WatermelonPaywallViewController: UIViewController, UIPopoverPresenta
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
     deinit {
+        trialEligibilityTask?.cancel()
         NotificationCenter.default.removeObserver(self)
     }
 
@@ -179,10 +183,10 @@ final class WatermelonPaywallViewController: UIViewController, UIPopoverPresenta
         registerForTraitChanges([UITraitUserInterfaceStyle.self]) { (controller: WatermelonPaywallViewController, _) in
             controller.updateSelection()
         }
-        for name in [Notification.Name.StoreInfoLoaded, .StoreProductsLoaded] {
+        for name in [Notification.Name.StoreInfoLoaded, .StoreProductsLoaded, UIApplication.didBecomeActiveNotification] {
             NotificationCenter.default.addObserver(self, selector: #selector(observedChange), name: name, object: nil)
         }
-        render()
+        refreshTrialEligibility()
     }
 
     override func viewDidLayoutSubviews() {
@@ -223,7 +227,36 @@ final class WatermelonPaywallViewController: UIViewController, UIPopoverPresenta
     }
 
     @objc nonisolated private func observedChange() {
-        Task { @MainActor [weak self] in self?.render() }
+        Task { @MainActor [weak self] in self?.refreshTrialEligibility() }
+    }
+
+    private func refreshTrialEligibility() {
+        trialEligibilityTask?.cancel()
+        isEligibleForYearlyTrial = false
+        isCheckingTrialEligibility = false
+        guard !store.hasValidMembership(),
+              let subscription = products.first(where: { $0.id == ProStatus.yearlyProductID })?.subscription,
+              subscription.introductoryOffer?.paymentMode == .freeTrial else {
+            render()
+            return
+        }
+        isCheckingTrialEligibility = true
+        render()
+        trialEligibilityTask = Task { [weak self] in
+            let eligible = await subscription.isEligibleForIntroOffer
+            guard !Task.isCancelled, let self else { return }
+            isEligibleForYearlyTrial = eligible
+            isCheckingTrialEligibility = false
+            render()
+        }
+    }
+
+    private func freeTrial(for product: Product) -> Product.SubscriptionOffer? {
+        guard product.id == ProStatus.yearlyProductID, isEligibleForYearlyTrial,
+              !store.hasValidMembership(),
+              let offer = product.subscription?.introductoryOffer,
+              offer.paymentMode == .freeTrial else { return nil }
+        return offer
     }
 
     private var products: [Product] {
@@ -297,9 +330,10 @@ final class WatermelonPaywallViewController: UIViewController, UIPopoverPresenta
         button.cornerStyle = .fixed
         button.background.cornerRadius = 16
         button.titleTextAttributesTransformer = .init { var attributes = $0; attributes.font = .systemFont(ofSize: 17, weight: .semibold); return attributes }
-        button.showsActivityIndicator = isWorking
+        let isCheckingSelectedTrial = selectedProductID == ProStatus.yearlyProductID && isCheckingTrialEligibility
+        button.showsActivityIndicator = isWorking || isCheckingSelectedTrial
         purchaseButton.configuration = button
-        purchaseButton.isEnabled = !isWorking && (store.proTier() == .lifetime || selectedProduct != nil)
+        purchaseButton.isEnabled = !isWorking && !isCheckingSelectedTrial && (store.proTier() == .lifetime || selectedProduct != nil)
         if let product = selectedProduct, store.activeSubscriptions().contains(where: { $0.productID == product.id }), store.proTier() != .lifetime {
             purchaseButton.isEnabled = false
         }
@@ -516,7 +550,8 @@ final class WatermelonPaywallViewController: UIViewController, UIPopoverPresenta
         let period = product.type == .nonConsumable
             ? (product.isFamilyShareable ? String(localized: "paywall.oneTimeFamilyShort") : String(localized: "paywall.oneTimeShort"))
             : billingPeriod(product)
-        let detail = label(period, size: 11, color: .secondaryLabel)
+        let trial = freeTrial(for: product).map { String(format: String(localized: "paywall.freeTrial"), trialDuration($0)) }
+        let detail = label([period, trial].compactMap { $0 }.joined(separator: "\n"), size: 11, color: .secondaryLabel)
         detail.numberOfLines = 2
         for label in [title, price, detail] {
             label.textAlignment = .center
@@ -590,6 +625,13 @@ final class WatermelonPaywallViewController: UIViewController, UIPopoverPresenta
         return formatter.string(from: components) ?? ""
     }
 
+    private func trialDuration(_ offer: Product.SubscriptionOffer) -> String {
+        guard offer.period.unit == .week else { return duration(offer.period, count: offer.periodCount) }
+        let formatter = DateComponentsFormatter()
+        formatter.unitsStyle = .full
+        return formatter.string(from: DateComponents(day: offer.period.value * offer.periodCount * 7)) ?? ""
+    }
+
     private func disclosureText(for product: Product?) -> String? {
         if store.proTier() == .lifetime { return nil }
         guard let product else { return nil }
@@ -606,6 +648,9 @@ final class WatermelonPaywallViewController: UIViewController, UIPopoverPresenta
         guard let period = product.subscription?.subscriptionPeriod else { return nil }
         let recurring = String(format: String(localized: "paywall.recurringPrice"), product.displayPrice, duration(period))
         var lines = [recurring]
+        if let trial = freeTrial(for: product) {
+            lines = [String(format: String(localized: "paywall.freeTrialThenPrice"), trialDuration(trial), product.displayPrice, duration(period))]
+        }
         lines.append(String(localized: "paywall.autoRenewShort"))
         if let active = store.activeSubscriptions().first {
             lines.append(String(format: String(localized: "paywall.accessUntil"), active.accessExpirationDate.formatted(date: .abbreviated, time: .omitted)))
@@ -618,6 +663,7 @@ final class WatermelonPaywallViewController: UIViewController, UIPopoverPresenta
         guard let product = selectedProduct else { return String(localized: "paywall.continue") }
         if store.activeSubscriptions().contains(where: { $0.productID == product.id }) { return String(localized: "paywall.currentPlan") }
         if product.type == .autoRenewable, store.proTier() == .subscription { return String(localized: "paywall.manage") }
+        if freeTrial(for: product) != nil { return String(localized: "paywall.startFreeTrial") }
         return product.type == .autoRenewable ? String(localized: "paywall.subscribe") : String(localized: "paywall.unlockLifetime")
     }
 
@@ -625,6 +671,7 @@ final class WatermelonPaywallViewController: UIViewController, UIPopoverPresenta
         guard !isWorking else { return }
         if store.proTier() == .lifetime { close(); return }
         guard let product = selectedProduct else { return }
+        guard product.id != ProStatus.yearlyProductID || !isCheckingTrialEligibility else { return }
         run { [self] in
             if product.type == .autoRenewable, store.proTier() == .subscription {
                 try await manageSubscriptions()
