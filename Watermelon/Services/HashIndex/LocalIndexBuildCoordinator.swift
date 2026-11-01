@@ -156,11 +156,7 @@ final class LocalIndexBuildCoordinator {
             case .rebuild:
                 processIDs = allIDs
             case .incremental:
-                processIDs = await Self.computeIncrementalProcessIDs(
-                    repository: hashIndexRepository,
-                    photoLibraryService: photoLibraryService,
-                    assetIDs: allIDs
-                )
+                processIDs = try await buildService.assetIDsRequiringBuild(from: allIDs)
                 try Task.checkCancellation()
             }
 
@@ -263,31 +259,6 @@ final class LocalIndexBuildCoordinator {
     ) async -> Set<String> {
         await withCancellableDetachedValue(priority: .userInitiated) {
             photoLibraryService.collectAssetIDs(query: .library(.all))
-        }
-    }
-
-    private nonisolated static func computeIncrementalProcessIDs(
-        repository: ContentHashIndexRepository,
-        photoLibraryService: PhotoLibraryService,
-        assetIDs: Set<String>
-    ) async -> Set<String> {
-        await withCancellableDetachedValue(priority: .userInitiated) {
-            let cached = (try? repository.fetchAssetHashCaches(assetIDs: assetIDs)) ?? [:]
-            let unfingerprinted = assetIDs.subtracting(cached.keys)
-
-            var modified = Set<String>()
-            if !cached.isEmpty {
-                let phAssets = photoLibraryService.fetchAssets(localIdentifiers: Set(cached.keys))
-                for asset in phAssets {
-                    guard let cache = cached[asset.localIdentifier],
-                          let modificationDate = asset.modificationDate,
-                          modificationDate > cache.updatedAt
-                    else { continue }
-                    modified.insert(asset.localIdentifier)
-                }
-            }
-
-            return unfingerprinted.union(modified)
         }
     }
 }

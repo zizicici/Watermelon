@@ -159,7 +159,7 @@
 
 1. 建立一次执行会话 `HomeExecutionSession`
 2. 在执行前按“节点 `并发数` 覆盖 > `默认并发数`”解析并冻结本次并发配置，同时冻结 `允许访问 iCloud 原件`
-3. 调用 `LocalHashIndexBuildService.buildIndex(... allowNetworkAccess: false)` 做离线本地索引预检查；cache-hit 资产顺带做一次轻量可用性探测，以识别已被回收到 iCloud 的资产
+3. 调用 `LocalHashIndexBuildService.buildIndex(... allowNetworkAccess: false)` 做离线本地索引预检查；cache-hit 资产直接复用缓存指纹
 4. 上传阶段通过 `BackupSessionAsyncBridge` 驱动 `BackupSessionController`
 5. 同步月份在上传 flush 后通过 `onMonthUploaded` 内联进入下载收尾
 6. 纯下载月份在上传阶段结束后顺序执行

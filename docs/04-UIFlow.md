@@ -192,7 +192,7 @@ UICollectionView 的选中状态只是可见内容的投影，完整选择保存
 然后执行前置检查：
 
 1. 对本次涉及的所有本地 asset 做离线 hash 预检查 (`buildIndex(allowNetworkAccess: false)`)，默认 2 个 worker
-2. 预检查中，cache-hit 资产会额外做一次轻量离线可用性探测：命中 iCloud-only 的话会被标成 `unavailable`，保证已被系统回收的资产能被识别出来
+2. 预检查中，cache-hit 资产直接复用缓存指纹；未命中缓存且原件只在 iCloud 的资产会被标成 `unavailable`
 3. 如果本次包含下载或同步，且第一轮仍有 `unavailableAssetIDs`：
    - 启用 `允许访问 iCloud 原件`：只对这些资产再做一次联网补索引，worker 固定为 `1`
    - 未启用：直接失败并弹窗

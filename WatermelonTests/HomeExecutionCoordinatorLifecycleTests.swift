@@ -351,6 +351,8 @@ private final class BlockingLocalHashIndexBuilder: LocalHashIndexBuilding, @unch
         }
     }
 
+    func assetIDsRequiringBuild(from assetIDs: Set<String>) async throws -> Set<String> { assetIDs }
+
     func release() {
         let continuation = lock.withLock { () -> CheckedContinuation<LocalHashIndexBuildResult, Error>? in
             released = true
@@ -387,8 +389,7 @@ private final class BlockingLocalHashIndexBuilder: LocalHashIndexBuilding, @unch
             readyAssetIDs: [],
             unavailableAssetIDs: [],
             failedAssetIDs: [],
-            missingAssetIDs: [],
-            networkPendingAssetIDs: []
+            missingAssetIDs: []
         )
     }
 
@@ -398,8 +399,7 @@ private final class BlockingLocalHashIndexBuilder: LocalHashIndexBuilding, @unch
             readyAssetIDs: [],
             unavailableAssetIDs: [],
             failedAssetIDs: assetIDs,
-            missingAssetIDs: [],
-            networkPendingAssetIDs: []
+            missingAssetIDs: []
         )
     }
 }

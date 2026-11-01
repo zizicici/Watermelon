@@ -6,9 +6,14 @@ final class LocalDownloadIndexPreflightTests: XCTestCase {
     private final class Builder: LocalHashIndexBuilding {
         var outcomes: [Result<LocalHashIndexBuildResult, Error>]
         var calls: [(ids: Set<String>, workers: Int, network: Bool)] = []
+        var cachedAssetIDs: Set<String> = []
 
         init(_ outcomes: Result<LocalHashIndexBuildResult, Error>...) {
             self.outcomes = outcomes
+        }
+
+        func assetIDsRequiringBuild(from assetIDs: Set<String>) async throws -> Set<String> {
+            assetIDs.subtracting(cachedAssetIDs)
         }
 
         func buildIndex(for assetIDs: Set<String>, workerCount: Int, allowNetworkAccess: Bool,
@@ -19,10 +24,10 @@ final class LocalDownloadIndexPreflightTests: XCTestCase {
     }
 
     private func result(ready: Set<String> = [], unavailable: Set<String> = [], failed: Set<String> = [],
-                        missing: Set<String> = [], networkPending: Set<String> = []) -> LocalHashIndexBuildResult {
+                        missing: Set<String> = []) -> LocalHashIndexBuildResult {
         .init(requestedAssetIDs: ready.union(unavailable).union(failed).union(missing),
               readyAssetIDs: ready, unavailableAssetIDs: unavailable, failedAssetIDs: failed,
-              missingAssetIDs: missing, networkPendingAssetIDs: networkPending)
+              missingAssetIDs: missing)
     }
 
     func testSuccessfulOfflinePassBuildsAllRequestedIDs() async throws {
@@ -33,6 +38,23 @@ final class LocalDownloadIndexPreflightTests: XCTestCase {
         XCTAssertEqual(builder.calls[0].ids, ["invalidated", "new-identifier"])
         XCTAssertEqual(builder.calls[0].workers, 2)
         XCTAssertFalse(builder.calls[0].network)
+    }
+
+    func testOnlyStaleIDsAreBuilt() async throws {
+        let builder = Builder(.success(result(ready: ["edited"])))
+        builder.cachedAssetIDs = ["cached"]
+        try await LocalDownloadIndexPreflight.run(assetIDs: ["cached", "edited"],
+            buildService: builder, iCloudPhotoBackupMode: .disable)
+        XCTAssertEqual(builder.calls.count, 1)
+        XCTAssertEqual(builder.calls[0].ids, ["edited"])
+    }
+
+    func testFullyCachedLibrarySkipsBuild() async throws {
+        let builder = Builder()
+        builder.cachedAssetIDs = ["a", "b"]
+        try await LocalDownloadIndexPreflight.run(assetIDs: ["a", "b"],
+            buildService: builder, iCloudPhotoBackupMode: .enable)
+        XCTAssertTrue(builder.calls.isEmpty)
     }
 
     func testUnavailableOriginalsBlockDownloadWhenICloudIsDisabled() async throws {
@@ -86,8 +108,8 @@ final class LocalDownloadIndexPreflightTests: XCTestCase {
         }
     }
 
-    func testValidOffloadedFingerprintAndDeletedAssetDoNotBlockDownload() async throws {
-        let builder = Builder(.success(result(ready: ["cached"], missing: ["deleted"], networkPending: ["cached"])))
+    func testDeletedAssetDoesNotBlockDownload() async throws {
+        let builder = Builder(.success(result(ready: ["cached"], missing: ["deleted"])))
         try await LocalDownloadIndexPreflight.run(assetIDs: ["cached", "deleted"],
             buildService: builder, iCloudPhotoBackupMode: .disable)
         XCTAssertEqual(builder.calls.count, 1)

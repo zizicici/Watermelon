@@ -28,9 +28,11 @@ enum LocalDownloadIndexPreflight {
         iCloudPhotoBackupMode: ICloudPhotoBackupMode
     ) async throws {
         try Task.checkCancellation()
-        guard !assetIDs.isEmpty else { return }
+        let staleAssetIDs = try await buildService.assetIDsRequiringBuild(from: assetIDs)
+        try Task.checkCancellation()
+        guard !staleAssetIDs.isEmpty else { return }
         let initial = try await buildService.buildIndex(
-            for: assetIDs, workerCount: 2, allowNetworkAccess: false,
+            for: staleAssetIDs, workerCount: 2, allowNetworkAccess: false,
             progressHandler: nil, tickHandler: nil
         )
         try Task.checkCancellation()
@@ -46,8 +48,7 @@ enum LocalDownloadIndexPreflight {
                 readyAssetIDs: initial.readyAssetIDs.union(recovery.readyAssetIDs),
                 unavailableAssetIDs: recovery.unavailableAssetIDs,
                 failedAssetIDs: initial.failedAssetIDs.union(recovery.failedAssetIDs),
-                missingAssetIDs: initial.missingAssetIDs.union(recovery.missingAssetIDs),
-                networkPendingAssetIDs: initial.networkPendingAssetIDs.union(recovery.networkPendingAssetIDs)
+                missingAssetIDs: initial.missingAssetIDs.union(recovery.missingAssetIDs)
             )
         }
         guard result.incompleteAssetIDs.isEmpty else {

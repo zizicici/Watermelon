@@ -1162,8 +1162,7 @@ final class HomeExecutionCoordinator {
             readyAssetIDs: initial.readyAssetIDs.union(iCloudRecovery.readyAssetIDs),
             unavailableAssetIDs: iCloudRecovery.unavailableAssetIDs,
             failedAssetIDs: initial.failedAssetIDs.union(iCloudRecovery.failedAssetIDs),
-            missingAssetIDs: initial.missingAssetIDs.union(iCloudRecovery.missingAssetIDs),
-            networkPendingAssetIDs: initial.networkPendingAssetIDs.union(iCloudRecovery.networkPendingAssetIDs)
+            missingAssetIDs: initial.missingAssetIDs.union(iCloudRecovery.missingAssetIDs)
         )
     }
 

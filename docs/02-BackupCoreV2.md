@@ -67,7 +67,7 @@ iOS 27 的 `RunBackupIntent` 通过 `BackgroundBackupRunner.runOnDemand` 复用�
 
 关键规则：
 
-1. 第一轮始终离线执行，因此 iCloud-only 资源会被标记为 `unavailable`。cache-hit 资产也会顺带做一次轻量离线可用性探测，避免曾经建过索引、之后被系统回收到 iCloud 的资产漏检。
+1. 第一轮始终离线执行，因此未命中缓存的 iCloud-only 资源会被标记为 `unavailable`。cache-hit 资产直接复用缓存指纹，不检查原件是否仍在本机。
 2. 如果本次 **只上传**，即使有少量本地索引仍不完整，也允许继续执行。
 3. 如果本次包含 **下载或同步**，且第一轮存在 `unavailableAssetIDs`：
    - 启用 `允许访问 iCloud 原件`：只对这些 `unavailableAssetIDs` 再跑一次 `buildIndex(... allowNetworkAccess: true)`，worker 固定为 `1`
@@ -77,6 +77,8 @@ iOS 27 的 `RunBackupIntent` 通过 `BackgroundBackupRunner.runOnDemand` 复用�
 预检查不参与上传并发决策。哪些资产需要联网导出由上传阶段在导出点自行识别（见第 6 节），预检查结果只服务于 hash 索引和下载完整性门禁。
 
 `LocalIndexBuildCoordinator`（位于 `Watermelon/Services/HashIndex/`）是用户主动触发索引重建时使用的另一条入口（在更多页 / 索引页），与执行态预检查互不复用 worker。
+
+浏览器下载入口使用 `LocalDownloadIndexPreflight`：先由 `LocalHashIndexBuildService.assetIDsRequiringBuild(from:)` 筛出没有指纹、或修改时间晚于缓存的资产，只对这些资产执行上述两轮预检查。`LocalIndexBuildCoordinator` 的增量模式使用同一筛选。
 
 ## 4. 上传主流程
 

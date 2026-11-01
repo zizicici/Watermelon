@@ -15,6 +15,8 @@ protocol LocalHashIndexBuilding: AnyObject {
         progressHandler: LocalHashIndexProgressHandler?,
         tickHandler: LocalHashIndexProgressTickHandler?
     ) async throws -> LocalHashIndexBuildResult
+
+    func assetIDsRequiringBuild(from assetIDs: Set<String>) async throws -> Set<String>
 }
 
 struct LocalHashIndexBuildResult: Sendable {
@@ -23,9 +25,6 @@ struct LocalHashIndexBuildResult: Sendable {
     let unavailableAssetIDs: Set<String>
     let failedAssetIDs: Set<String>
     let missingAssetIDs: Set<String>
-    // Cache-valid (fingerprint-complete) assets whose bytes are offloaded to iCloud. Ready for the
-    // download completeness gate, but still need the network during upload (worker-count downgrade).
-    let networkPendingAssetIDs: Set<String>
 
     var incompleteAssetIDs: Set<String> {
         unavailableAssetIDs.union(failedAssetIDs)
@@ -34,7 +33,6 @@ struct LocalHashIndexBuildResult: Sendable {
 
 private enum LocalHashIndexAssetOutcome: Sendable {
     case ready(String)
-    case readyNetworkPending(String)
     case unavailable(String)
     case failed(String)
     case missing(String)
@@ -42,7 +40,6 @@ private enum LocalHashIndexAssetOutcome: Sendable {
 
 private struct LocalHashIndexWorkerResult: Sendable {
     var readyAssetIDs = Set<String>()
-    var networkPendingAssetIDs = Set<String>()
     var unavailableAssetIDs = Set<String>()
     var failedAssetIDs = Set<String>()
     var missingAssetIDs = Set<String>()
@@ -51,9 +48,6 @@ private struct LocalHashIndexWorkerResult: Sendable {
         switch outcome {
         case .ready(let assetID):
             readyAssetIDs.insert(assetID)
-        case .readyNetworkPending(let assetID):
-            readyAssetIDs.insert(assetID)
-            networkPendingAssetIDs.insert(assetID)
         case .unavailable(let assetID):
             unavailableAssetIDs.insert(assetID)
         case .failed(let assetID):
@@ -115,7 +109,7 @@ private actor LocalHashIndexBuildProgressReporter {
     func record(_ result: LocalHashIndexProcessedAssetResult) async {
         processed += 1
         switch result.outcome {
-        case .ready, .readyNetworkPending:
+        case .ready:
             if result.reusedCache {
                 cacheHitCount += 1
             } else {
@@ -202,8 +196,7 @@ final class LocalHashIndexBuildService: @unchecked Sendable {
                 readyAssetIDs: [],
                 unavailableAssetIDs: [],
                 failedAssetIDs: [],
-                missingAssetIDs: [],
-                networkPendingAssetIDs: []
+                missingAssetIDs: []
             )
         }
 
@@ -306,7 +299,6 @@ final class LocalHashIndexBuildService: @unchecked Sendable {
                 var aggregate = LocalHashIndexWorkerResult()
                 for try await result in group {
                     aggregate.readyAssetIDs.formUnion(result.readyAssetIDs)
-                    aggregate.networkPendingAssetIDs.formUnion(result.networkPendingAssetIDs)
                     aggregate.unavailableAssetIDs.formUnion(result.unavailableAssetIDs)
                     aggregate.failedAssetIDs.formUnion(result.failedAssetIDs)
                     aggregate.missingAssetIDs.formUnion(result.missingAssetIDs)
@@ -329,13 +321,12 @@ final class LocalHashIndexBuildService: @unchecked Sendable {
                 readyAssetIDs: aggregate.readyAssetIDs,
                 unavailableAssetIDs: aggregate.unavailableAssetIDs,
                 failedAssetIDs: aggregate.failedAssetIDs,
-                missingAssetIDs: preparedInput.missingAssetIDs.union(aggregate.missingAssetIDs),
-                networkPendingAssetIDs: aggregate.networkPendingAssetIDs
+                missingAssetIDs: preparedInput.missingAssetIDs.union(aggregate.missingAssetIDs)
             )
             let endedAt = Date()
             let elapsed = endedAt.timeIntervalSince(startedAt)
             localHashIndexLog.info(
-                "[LocalHashIndex] build finished at \(endedAt.ISO8601Format(), privacy: .public), elapsed=\(String(format: "%.3f", elapsed), privacy: .public)s, ready=\(result.readyAssetIDs.count), networkPending=\(result.networkPendingAssetIDs.count), unavailable=\(result.unavailableAssetIDs.count), failed=\(result.failedAssetIDs.count), missing=\(result.missingAssetIDs.count)"
+                "[LocalHashIndex] build finished at \(endedAt.ISO8601Format(), privacy: .public), elapsed=\(String(format: "%.3f", elapsed), privacy: .public)s, ready=\(result.readyAssetIDs.count), unavailable=\(result.unavailableAssetIDs.count), failed=\(result.failedAssetIDs.count), missing=\(result.missingAssetIDs.count)"
             )
             return result
         } catch is CancellationError {
@@ -352,6 +343,31 @@ final class LocalHashIndexBuildService: @unchecked Sendable {
                 "[LocalHashIndex] build failed at \(endedAt.ISO8601Format(), privacy: .public), elapsed=\(String(format: "%.3f", elapsed), privacy: .public)s, error=\(error.localizedDescription, privacy: .public)"
             )
             throw error
+        }
+    }
+
+    // Mirrors the Home revalidation rule; avoids per-asset resource enumeration, which dominates cache-hit passes.
+    func assetIDsRequiringBuild(from assetIDs: Set<String>) async throws -> Set<String> {
+        guard !assetIDs.isEmpty else { return [] }
+        let repository = self.repository
+        let photoLibraryService = self.photoLibraryService
+        let task = Task.detached(priority: .userInitiated) {
+            try Task.checkCancellation()
+            let records = try repository.fetchAssetFingerprintRecords(assetIDs: assetIDs)
+            var result = assetIDs.subtracting(records.keys)
+            for asset in photoLibraryService.fetchAssets(localIdentifiers: Set(records.keys)) {
+                guard let record = records[asset.localIdentifier],
+                      let modificationDate = asset.modificationDate,
+                      modificationDate > record.updatedAt else { continue }
+                result.insert(asset.localIdentifier)
+            }
+            return result
+        }
+
+        return try await withTaskCancellationHandler {
+            try await task.value
+        } onCancel: {
+            task.cancel()
         }
     }
 
@@ -449,33 +465,6 @@ final class LocalHashIndexBuildService: @unchecked Sendable {
                 selectedResources: selectedResources,
                 cachedLocalHash: cachedLocalHash
             ) {
-                // Cache fingerprint is complete regardless of byte availability; the offline probe is only an
-                // upload network-hint, so a not-local or transiently-faulting probe is network-pending, never incomplete.
-                if !allowNetworkAccess {
-                    var networkPending = false
-                    do {
-                        for selected in selectedResources {
-                            try Task.checkCancellation()
-                            let isLocal = try await photoLibraryService.isResourceLocallyAvailable(
-                                selected.resource
-                            )
-                            if !isLocal {
-                                networkPending = true
-                                break
-                            }
-                        }
-                    } catch is CancellationError {
-                        throw CancellationError()
-                    } catch {
-                        networkPending = true
-                    }
-                    if networkPending {
-                        return LocalHashIndexProcessedAssetResult(
-                            outcome: .readyNetworkPending(asset.localIdentifier),
-                            reusedCache: true
-                        )
-                    }
-                }
                 return LocalHashIndexProcessedAssetResult(
                     outcome: .ready(asset.localIdentifier),
                     reusedCache: true

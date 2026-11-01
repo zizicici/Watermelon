@@ -196,6 +196,7 @@ final class LibraryMutationIndexTests: XCTestCase {
             try Task.checkCancellation()
             fatalError("Cancellation must throw")
         }
+        func assetIDsRequiringBuild(from assetIDs: Set<String>) async throws -> Set<String> { assetIDs }
     }
 
     func testDeletingIndexEntryDoesNotMeanDeletingPhotosAsset() async throws {
