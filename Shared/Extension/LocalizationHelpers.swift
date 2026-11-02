@@ -6,20 +6,16 @@ enum UserFacingErrorLocalizer {
         profile: ServerProfileRecord? = nil,
         storageType: StorageType? = nil
     ) -> String {
-        if let profile {
-            return profile.userFacingStorageErrorMessage(error)
-        }
-
-        if let storageType {
+        let error = StorageErrorMessages.unwrapped(error)
+        if error is LiteRepoError || profile?.isBrowserLinkProfile == true { return error.localizedDescription }
+        if let storageType = profile?.resolvedStorageType ?? storageType {
             switch storageType {
             case .externalVolume:
                 if RemoteStorageClientError.isLikelyExternalStorageUnavailable(error) {
                     return String(localized: "storage.error.externalUnavailable")
                 }
             case .smb:
-                if SMBErrorClassifier.isConnectionUnavailable(error) {
-                    return String(localized: "storage.error.smbUnavailable")
-                }
+                return SMBErrorClassifier.describe(error)
             case .webdav:
                 return WebDAVErrorClassifier.describe(error)
             case .s3:
@@ -35,6 +31,6 @@ enum UserFacingErrorLocalizer {
             }
         }
 
-        return error.localizedDescription
+        return StorageErrorMessages.fallback(error)
     }
 }

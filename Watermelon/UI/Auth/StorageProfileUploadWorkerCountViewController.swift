@@ -44,7 +44,7 @@ final class StorageProfileUploadWorkerCountViewController: UIViewController {
     private func select(_ selection: NodeBackupWorkerCountSelection) {
         guard let profileID = profile.id else { return }
         guard !isMutationBlocked else {
-            presentAlert(message: String(localized: "home.alert.maintenanceInProgress"))
+            presentAlert(message: String(localized: "storage.error.operationBusy"))
             return
         }
         guard selection.persistedMode != profile.uploadWorkerCountMode else { return }
@@ -61,7 +61,7 @@ final class StorageProfileUploadWorkerCountViewController: UIViewController {
                 )
                 profile.uploadWorkerCountMode = selection.persistedMode
             }) else {
-                presentAlert(message: String(localized: "home.alert.maintenanceInProgress"))
+                presentAlert(message: String(localized: "storage.error.operationBusy"))
                 return
             }
             tableView.reloadData()

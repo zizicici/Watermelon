@@ -337,10 +337,7 @@ final class AddExternalStorageViewController: UIViewController {
             presentMutationBlockedAlert()
             return
         }
-        presentAlert(
-            title: String(localized: "auth.saveFailed"),
-            message: UserFacingErrorLocalizer.message(for: error, storageType: .externalVolume)
-        )
+        presentStorageError(title: String(localized: "auth.saveFailed"), error: error, storageType: .externalVolume)
     }
 
     private func completePendingCommittedSaveIfReady() {
@@ -386,7 +383,7 @@ final class AddExternalStorageViewController: UIViewController {
     private func presentMutationBlockedAlert() {
         presentAlert(
             title: String(localized: "common.error"),
-            message: String(localized: "home.alert.maintenanceInProgress")
+            message: String(localized: "storage.error.operationBusy")
         )
     }
 

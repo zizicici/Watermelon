@@ -158,14 +158,13 @@ nonisolated enum NetworkRecovery {
         return .timedOut
     }
 
-    // Bounds a single client.connect(): SMB/SFTP have no transport-level connect timeout, so a half-open connect
-    // is abandoned at the deadline rather than stalling the caller, and a late success is disconnected. Throws the
-    // connect error on failure, or .unavailable (retryable) when the deadline/cancellation wins.
+    // Abandon half-open connections at the deadline and reap late successes.
     static func boundedConnect(
         _ client: any RemoteStorageClientProtocol,
         deadline: Date,
         abortIf shouldAbort: @escaping @Sendable () async -> Bool = { false }
     ) async throws {
+        let start = Date()
         let result = await boundedAttempt(
             deadline: deadline,
             abortIf: shouldAbort,
@@ -177,9 +176,21 @@ nonisolated enum NetworkRecovery {
         )
         switch result {
         case .completed(let connectError):
-            if let connectError { throw connectError }
+            if let connectError {
+                if RemoteFaultLite.classify(connectError) != .cancelled {
+                    RepoFailureDiagnostics.record(.operationFailed, stage: "connection.transport", error: connectError,
+                        elapsedSeconds: Date().timeIntervalSince(start))
+                }
+                throw connectError
+            }
         case .timedOut:
-            throw RemoteStorageClientError.unavailable
+            try Task.checkCancellation()
+            if await shouldAbort() { throw CancellationError() }
+            let error = RemoteStorageClientError.connectionTimedOut
+            RepoFailureDiagnostics.record(.operationFailed, stage: "connection.transport", error: error,
+                detail: "timeout_seconds=\(max(0, deadline.timeIntervalSince(start)))",
+                elapsedSeconds: Date().timeIntervalSince(start))
+            throw error
         }
     }
 
@@ -191,33 +202,50 @@ nonisolated enum NetworkRecovery {
         shouldStop: @escaping @Sendable () async -> Bool = { false },
         makeClient: @escaping @Sendable () throws -> any RemoteStorageClientProtocol
     ) async -> NetworkRecoveryResult<any RemoteStorageClientProtocol> {
-        await run(deadline: deadline, shouldStop: shouldStop) {
-            let clientHandle = NetworkAttemptClientHandle()
-            // Cap the per-attempt connect at the cumulative deadline so the last attempt can't overrun the
-            // recovery window (or a background-task grace period) by a full connectTimeout.
-            let bounded = await boundedAttempt(
-                deadline: min(deadline, Date().addingTimeInterval(NetworkRecoveryPolicy.connectTimeout)),
-                abortIf: shouldStop,
-                onAbandon: { clientHandle.abandon() },
-                reap: { (_: Result<any RemoteStorageClientProtocol, Error>) in await clientHandle.reap() },
-                op: { () async -> Result<any RemoteStorageClientProtocol, Error> in
-                    do {
-                        let client = try makeClient()
-                        guard clientHandle.install(client) else { throw CancellationError() }
-                        try await client.connect()
-                        return .success(client)
-                    } catch {
-                        return .failure(error)
+        await RepoFailureDiagnostics.captureRecovery(isSuccessful: {
+            if case .succeeded = $0 { return true }
+            return false
+        }) {
+            await run(deadline: deadline, shouldStop: shouldStop) {
+                let start = Date()
+                let attemptDeadline = min(deadline, start.addingTimeInterval(NetworkRecoveryPolicy.connectTimeout))
+                let clientHandle = NetworkAttemptClientHandle()
+                // Cap the per-attempt connect at the cumulative deadline so the last attempt can't overrun the
+                // recovery window (or a background-task grace period) by a full connectTimeout.
+                let bounded = await boundedAttempt(
+                    deadline: attemptDeadline,
+                    abortIf: shouldStop,
+                    onAbandon: { clientHandle.abandon() },
+                    reap: { (_: Result<any RemoteStorageClientProtocol, Error>) in await clientHandle.reap() },
+                    op: { () async -> Result<any RemoteStorageClientProtocol, Error> in
+                        do {
+                            let client = try makeClient()
+                            guard clientHandle.install(client) else { throw CancellationError() }
+                            try await client.connect()
+                            return .success(client)
+                        } catch {
+                            return .failure(error)
+                        }
                     }
+                )
+                switch bounded {
+                case .completed(.success(let client)):
+                    return .succeeded(client)
+                case .completed(.failure(let error)):
+                    if RemoteFaultLite.classify(error) != .cancelled {
+                        RepoFailureDiagnostics.record(.operationFailed, stage: "connection.transport", error: error,
+                            elapsedSeconds: Date().timeIntervalSince(start))
+                    }
+                    return .failed(error)
+                case .timedOut:
+                    if Task.isCancelled { return .abandoned }
+                    if await shouldStop() { return .abandoned }
+                    let error = RemoteStorageClientError.connectionTimedOut
+                    RepoFailureDiagnostics.record(.operationFailed, stage: "connection.transport", error: error,
+                        detail: "timeout_seconds=\(max(0, attemptDeadline.timeIntervalSince(start)))",
+                        elapsedSeconds: Date().timeIntervalSince(start))
+                    return .failed(error)
                 }
-            )
-            switch bounded {
-            case .completed(.success(let client)):
-                return .succeeded(client)
-            case .completed(.failure(let error)):
-                return .failed(error)
-            case .timedOut:
-                return .failed(RemoteStorageClientError.unavailable)   // per-attempt timeout → retry a fresh client
             }
         }
     }
@@ -436,7 +464,7 @@ nonisolated enum RemoteFaultLite {
         for node in chain {
             if let storage = node as? RemoteStorageClientError {
                 switch storage {
-                case .notConnected, .unavailable:
+                case .notConnected, .unavailable, .connectionTimedOut, .operationTimedOut, .verificationFailed:
                     return true
                 default:
                     break

@@ -90,7 +90,7 @@ final class RemoteThumbnailSettingsViewController: UIViewController {
         guard isMutationBlocked else { return false }
         presentSimpleAlert(
             title: String(localized: "common.error"),
-            message: String(localized: "home.alert.maintenanceInProgress")
+            message: String(localized: "storage.error.operationBusy")
         )
         return true
     }
@@ -109,7 +109,7 @@ final class RemoteThumbnailSettingsViewController: UIViewController {
             sender.setOn(!enabled, animated: true)
             presentSimpleAlert(
                 title: String(localized: "common.error"),
-                message: String(localized: "home.alert.maintenanceInProgress")
+                message: String(localized: "storage.error.operationBusy")
             )
             return
         }
@@ -122,7 +122,7 @@ final class RemoteThumbnailSettingsViewController: UIViewController {
                 sender.setOn(!enabled, animated: true)
                 presentSimpleAlert(
                     title: String(localized: "common.error"),
-                    message: String(localized: "home.alert.maintenanceInProgress")
+                    message: String(localized: "storage.error.operationBusy")
                 )
                 return
             }
@@ -193,7 +193,7 @@ final class RemoteThumbnailSettingsViewController: UIViewController {
         // (rejectIfBlocked only *checks* — it never claimed). `flags` is captured strongly below so the
         // Task's defer releases it even if this VC is torn down mid-run.
         guard let executionClaim = dependencies.appRuntimeFlags.tryEnterExecution() else {
-            presentSimpleAlert(title: String(localized: "common.error"), message: String(localized: "home.alert.maintenanceInProgress"))
+            presentSimpleAlert(title: String(localized: "common.error"), message: String(localized: "storage.error.operationBusy"))
             return
         }
         let flags = dependencies.appRuntimeFlags
@@ -315,7 +315,7 @@ final class RemoteThumbnailSettingsViewController: UIViewController {
     private func performPurge(password: String) {
         // Claim the app-wide execution mutex (released by the Task's defer, teardown-safe via strong `flags`).
         guard let executionClaim = dependencies.appRuntimeFlags.tryEnterExecution() else {
-            presentSimpleAlert(title: String(localized: "common.error"), message: String(localized: "home.alert.maintenanceInProgress"))
+            presentSimpleAlert(title: String(localized: "common.error"), message: String(localized: "storage.error.operationBusy"))
             return
         }
         let flags = dependencies.appRuntimeFlags

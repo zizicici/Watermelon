@@ -81,20 +81,22 @@ final actor SFTPClient: RemoteStorageClientProtocol {
             )
         }
 
-        let ssh: SSHClient
-        if let ip = await HostnameResolver.resolvedIPv4(socketHost), ip != socketHost {
-            do {
-                ssh = try await establish(ip)
-            } catch {
-                if error is CancellationError || Task.isCancelled { throw error }
-                // A stale/wrong resolved IP can fail in any way; retry the canonical hostname (still pin-checked).
-                ssh = try await establish(socketHost)
+        let ssh = try await RepoFailureDiagnostics.captureRecovery {
+            if let ip = await HostnameResolver.resolvedIPv4(socketHost), ip != socketHost {
+                do {
+                    return try await establish(ip)
+                } catch {
+                    if error is CancellationError || Task.isCancelled { throw error }
+                    // A stale resolved IP must not prevent a pin-checked retry of the canonical hostname.
+                    return try await establish(socketHost)
+                }
             }
-        } else {
-            ssh = try await establish(socketHost)
+            return try await establish(socketHost)
         }
         do {
-            let sftp = try await ssh.openSFTP()
+            let sftp = try await RepoFailureDiagnostics.capture(stage: "connection.sftp_subsystem") {
+                try await ssh.openSFTP()
+            }
             guard abandonmentHandle.install(sftp) else {
                 throw CancellationError()
             }
@@ -502,6 +504,8 @@ final actor SFTPClient: RemoteStorageClientProtocol {
     ) async throws -> SSHClient {
         var lastError: Error?
         for mode in [SSHAlgorithmMode.modern, .compatible] {
+            let start = Date()
+            var stage = "connection.sftp_authentication_setup"
             do {
                 try Task.checkCancellation()
                 let auth = SFTPSendableAuthenticationMethod(try authenticationMethod())
@@ -513,6 +517,7 @@ final actor SFTPClient: RemoteStorageClientProtocol {
                 )
                 settings.algorithms = mode.algorithms
                 settings.connectTimeout = .seconds(Int64(NetworkRecoveryPolicy.connectTimeout))
+                stage = "connection.sftp_tcp"
                 let channel = try await ClientBootstrap(group: MultiThreadedEventLoopGroup.singleton)
                     .channelInitializer { channel in
                         guard transport.install(channel) else {
@@ -526,6 +531,7 @@ final actor SFTPClient: RemoteStorageClientProtocol {
                     .connect(host: host, port: port)
                     .get()
                 do {
+                    stage = "connection.sftp_handshake"
                     let executor = SFTPEventLoopTaskExecutor(eventLoop: channel.eventLoop)
                     return try await Task(executorPreference: executor) {
                         try await SSHClient.connect(on: channel, settings: settings)
@@ -536,6 +542,10 @@ final actor SFTPClient: RemoteStorageClientProtocol {
                 }
             } catch {
                 transport.closeCurrent()
+                if !Task.isCancelled, RemoteFaultLite.classify(error) != .cancelled {
+                    RepoFailureDiagnostics.record(.operationFailed, stage: stage, error: error,
+                        detail: "algorithms=\(mode)", elapsedSeconds: Date().timeIntervalSince(start))
+                }
                 lastError = error
                 guard mode == .modern, shouldRetryWithCompatibleAlgorithms(after: error) else {
                     throw error
@@ -603,7 +613,7 @@ final actor SFTPClient: RemoteStorageClientProtocol {
                 for mode in [SSHAlgorithmMode.modern, .compatible] {
                     do {
                         try Task.checkCancellation()
-                        guard Date() < deadline else { throw RemoteStorageClientError.unavailable }
+                        guard Date() < deadline else { throw RemoteStorageClientError.connectionTimedOut }
                         return .success(try await captureHostKeyFingerprintAttempt(
                             host: socketHost,
                             port: SFTPEndpoint.effectivePort(port),
@@ -629,7 +639,7 @@ final actor SFTPClient: RemoteStorageClientProtocol {
             throw error
         case .timedOut:
             if Task.isCancelled { throw CancellationError() }
-            throw RemoteStorageClientError.unavailable
+            throw RemoteStorageClientError.connectionTimedOut
         }
     }
 

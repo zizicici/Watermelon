@@ -101,6 +101,20 @@ final class SFTPErrorClassifierTests: XCTestCase {
         )
     }
 
+    func testTimeoutAndBusyErrorsAreDistinctFromMissingBuildSupport() {
+        for error in [RemoteStorageClientError.connectionTimedOut, .connectionBusy, .unavailable, .buildUnavailable] {
+            XCTAssertEqual(SFTPErrorClassifier.describe(error), error.localizedDescription)
+        }
+        XCTAssertEqual(SFTPErrorClassifier.describe(Self.posix(ETIMEDOUT)),
+                       RemoteStorageClientError.operationTimedOut.localizedDescription)
+        XCTAssertEqual(RemoteFaultLite.classify(RemoteStorageClientError.connectionTimedOut), .retryable)
+        XCTAssertEqual(RemoteFaultLite.classify(RemoteStorageClientError.connectionBusy), .terminal)
+        XCTAssertEqual(RemoteFaultLite.classify(RemoteStorageClientError.buildUnavailable), .terminal)
+        XCTAssertTrue(SFTPErrorClassifier.isConnectionUnavailable(RemoteStorageClientError.connectionTimedOut))
+        XCTAssertEqual(Set([RemoteStorageClientError.connectionTimedOut, .connectionBusy, .unavailable, .buildUnavailable]
+            .map { SFTPErrorClassifier.describe($0) }).count, 4)
+    }
+
     func testIsNotFoundIgnoresMessageOnlyEvidence() {
         XCTAssertTrue(SFTPErrorClassifier.isNotFound(Self.posix(ENOENT)))
         XCTAssertTrue(SFTPErrorClassifier.isNotFound(RemoteStorageClientError.underlying(Self.posix(ENOENT))))

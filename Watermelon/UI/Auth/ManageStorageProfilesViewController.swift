@@ -108,7 +108,7 @@ final class ManageStorageProfilesViewController: UIViewController {
         if isBusy {
             presentAlert(
                 title: String(localized: "common.error"),
-                message: String(localized: "home.alert.maintenanceInProgress")
+                message: String(localized: "storage.error.operationBusy")
             )
             return false
         }
@@ -136,7 +136,7 @@ final class ManageStorageProfilesViewController: UIViewController {
             ) else {
                 presentAlert(
                     title: String(localized: "common.error"),
-                    message: String(localized: "home.alert.maintenanceInProgress")
+                    message: String(localized: "storage.error.operationBusy")
                 )
                 return false
             }

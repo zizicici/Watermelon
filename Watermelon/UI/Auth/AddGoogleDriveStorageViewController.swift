@@ -181,11 +181,9 @@ final class AddGoogleDriveStorageViewController: UIViewController {
             }
             do {
                 guard let self else { throw CancellationError() }
-                let draft = try await coordinator.prepare(
-                    clientID: clientID,
-                    from: self,
-                    forceReauthentication: forceReauthentication
-                )
+                let draft = try await StorageConnectionFailure.capture(stage: "connection.sign_in") {
+                    try await coordinator.prepare(clientID: clientID, from: self, forceReauthentication: forceReauthentication)
+                }
                 try Task.checkCancellation()
                 guard self.viewIfLoaded?.window != nil else { throw CancellationError() }
                 self.clientIDText = draft.connectionParams.clientID
@@ -202,10 +200,7 @@ final class AddGoogleDriveStorageViewController: UIViewController {
                 return
             } catch {
                 guard let self, self.viewIfLoaded?.window != nil else { return }
-                self.presentAlert(
-                    title: String(localized: "auth.googleDrive.signInFailed"),
-                    message: UserFacingErrorLocalizer.message(for: error, storageType: .googleDrive)
-                )
+                self.presentStorageError(title: String(localized: "auth.googleDrive.signInFailed"), error: error, storageType: .googleDrive)
             }
         }
     }
@@ -272,10 +267,7 @@ final class AddGoogleDriveStorageViewController: UIViewController {
                 popAfterSave()
             }
         } catch {
-            presentAlert(
-                title: String(localized: "auth.saveFailed"),
-                message: UserFacingErrorLocalizer.message(for: error, storageType: .googleDrive)
-            )
+            presentStorageError(title: String(localized: "auth.saveFailed"), error: error, storageType: .googleDrive)
         }
     }
 
@@ -340,7 +332,7 @@ final class AddGoogleDriveStorageViewController: UIViewController {
     private func presentMutationBlockedAlert() {
         presentAlert(
             title: String(localized: "common.error"),
-            message: String(localized: "home.alert.maintenanceInProgress")
+            message: String(localized: "storage.error.operationBusy")
         )
     }
 

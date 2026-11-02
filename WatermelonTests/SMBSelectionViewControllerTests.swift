@@ -125,6 +125,97 @@ final class SMBSelectionViewControllerTests: XCTestCase {
         XCTAssertEqual(parentCell.accessoryType, .none)
     }
 
+    func testFolderFailureDetailsPreserveOriginalReasonAndRetryClearsReport() async throws {
+        let failure = NSError(domain: NSPOSIXErrorDomain, code: Int(EACCES), userInfo: [
+            NSLocalizedDescriptionKey: "Error code 13: STATUS_ACCESS_DENIED opening Photos/private"
+        ])
+        let firstLoad = expectation(description: "first folder load failed")
+        var attempts = 0
+        let controller = SMBFolderSelectionViewController(auth: makeAuth(), shareName: "Photos", initialPath: "/private",
+            directoryLoader: { _, _, _ in
+                attempts += 1
+                if attempts == 1 {
+                    firstLoad.fulfill()
+                    throw failure
+                }
+                return []
+            }, onSelected: { _ in })
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let previousWindow = scene.windows.first { $0.isKeyWindow }
+        let window = UIWindow(windowScene: scene)
+        window.rootViewController = UINavigationController(rootViewController: controller)
+        let animationsEnabled = UIView.areAnimationsEnabled
+        UIView.setAnimationsEnabled(false)
+        window.makeKeyAndVisible()
+        controller.loadViewIfNeeded()
+        defer {
+            controller.dismiss(animated: false)
+            window.isHidden = true
+            previousWindow?.makeKeyAndVisible()
+            UIView.setAnimationsEnabled(animationsEnabled)
+        }
+        await fulfillment(of: [firstLoad], timeout: 1)
+        for _ in 0..<100 {
+            if controller.navigationItem.rightBarButtonItem != nil { break }
+            await Task.yield()
+        }
+        let failedRow = IndexPath(row: 0, section: 2)
+        let cell = controller.tableView(controller.tableView, cellForRowAt: failedRow)
+        let content = try XCTUnwrap(cell.contentConfiguration as? UIListContentConfiguration)
+        XCTAssertEqual(content.text, String(localized: "auth.smb.share.readFailed"))
+        XCTAssertEqual(content.secondaryText, String(localized: "storage.error.permissionDenied"))
+        let detailsButton = try XCTUnwrap(controller.navigationItem.rightBarButtonItem)
+        XCTAssertEqual(detailsButton.title, String(localized: "connection.failure.details"))
+        let detailsAction = try XCTUnwrap(detailsButton.action)
+        XCTAssertTrue(UIApplication.shared.sendAction(detailsAction, to: detailsButton.target, from: detailsButton, for: nil))
+        await Task.yield()
+        let navigation = try XCTUnwrap(controller.presentedViewController as? UINavigationController)
+        let details = try XCTUnwrap(navigation.topViewController as? ConnectionFailureDetailsViewController)
+        details.loadViewIfNeeded()
+        let textView = try XCTUnwrap(details.view.subviews.compactMap { $0 as? UITextView }.first)
+        XCTAssertTrue(textView.text.contains("STATUS_ACCESS_DENIED"))
+        XCTAssertTrue(textView.text.contains("NSPOSIXErrorDomain/13"))
+        XCTAssertTrue(textView.text.contains("connection.smb_directory"))
+        XCTAssertTrue(textView.text.contains("file: /private"))
+        XCTAssertFalse(textView.text.contains("secret"))
+        let copyButton = try XCTUnwrap(details.navigationItem.rightBarButtonItem)
+        let copyAction = try XCTUnwrap(copyButton.action)
+        XCTAssertTrue(UIApplication.shared.sendAction(copyAction, to: copyButton.target, from: copyButton, for: nil))
+        XCTAssertEqual(UIPasteboard.general.string, textView.text)
+        controller.dismiss(animated: false)
+        await Task.yield()
+        XCTAssertEqual(attempts, 1)
+        controller.tableView(controller.tableView, didSelectRowAt: failedRow)
+        XCTAssertNil(controller.navigationItem.rightBarButtonItem)
+        var loadedContent: UIListContentConfiguration?
+        for _ in 0..<100 {
+            await Task.yield()
+            let row = controller.tableView(controller.tableView, cellForRowAt: failedRow)
+            loadedContent = row.contentConfiguration as? UIListContentConfiguration
+            if loadedContent?.text == String(localized: "common.none") { break }
+        }
+        XCTAssertEqual(attempts, 2)
+        XCTAssertEqual(loadedContent?.text, String(localized: "common.none"))
+        XCTAssertNil(controller.navigationItem.rightBarButtonItem)
+    }
+
+    func testCancelledFolderLoadDoesNotExposeErrorDetails() async {
+        let started = expectation(description: "folder load started")
+        let controller = SMBFolderSelectionViewController(auth: makeAuth(), shareName: "Photos", initialPath: "/",
+            directoryLoader: { _, _, _ in
+                started.fulfill()
+                throw URLError(.cancelled)
+            }, onSelected: { _ in })
+        controller.loadViewIfNeeded()
+        await fulfillment(of: [started], timeout: 1)
+        for _ in 0..<20 { await Task.yield() }
+        XCTAssertNil(controller.navigationItem.rightBarButtonItem)
+        XCTAssertNil(controller.presentedViewController)
+        let cell = controller.tableView(controller.tableView, cellForRowAt: IndexPath(row: 0, section: 1))
+        XCTAssertNotEqual((cell.contentConfiguration as? UIListContentConfiguration)?.text,
+                          String(localized: "auth.smb.share.readFailed"))
+    }
+
     private func makeAuth() -> SMBServerAuthContext {
         SMBServerAuthContext(
             name: "NAS",

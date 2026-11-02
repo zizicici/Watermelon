@@ -186,10 +186,7 @@ final class AddWebDAVStorageViewController: UIViewController {
         do {
             draft = try validateInputs()
         } catch {
-            presentAlert(
-                title: String(localized: "auth.saveFailed"),
-                message: UserFacingErrorLocalizer.message(for: error, storageType: .webdav)
-            )
+            presentStorageError(title: String(localized: "auth.saveFailed"), error: error, storageType: .webdav)
             return
         }
 
@@ -218,10 +215,7 @@ final class AddWebDAVStorageViewController: UIViewController {
                 popAfterSave()
             }
         } catch {
-            presentAlert(
-                title: String(localized: "auth.saveFailed"),
-                message: UserFacingErrorLocalizer.message(for: error, storageType: .webdav)
-            )
+            presentStorageError(title: String(localized: "auth.saveFailed"), error: error, storageType: .webdav)
         }
     }
 
@@ -232,10 +226,7 @@ final class AddWebDAVStorageViewController: UIViewController {
         do {
             draft = try validateInputs()
         } catch {
-            presentAlert(
-                title: String(localized: "auth.testConnectionFailed"),
-                message: UserFacingErrorLocalizer.message(for: error, storageType: .webdav)
-            )
+            presentStorageError(title: String(localized: "auth.testConnectionFailed"), error: error, storageType: .webdav)
             return
         }
 
@@ -252,10 +243,7 @@ final class AddWebDAVStorageViewController: UIViewController {
                         message: String(localized: "auth.testConnectionSucceededMessage")
                     )
                 case .failure(let error):
-                    self.presentAlert(
-                        title: String(localized: "auth.testConnectionFailed"),
-                        message: UserFacingErrorLocalizer.message(for: error, storageType: .webdav)
-                    )
+                    self.presentStorageError(title: String(localized: "auth.testConnectionFailed"), error: error, storageType: .webdav)
                 }
             }
         )
@@ -445,7 +433,7 @@ final class AddWebDAVStorageViewController: UIViewController {
     private func presentMutationBlockedAlert() {
         presentAlert(
             title: String(localized: "common.error"),
-            message: String(localized: "home.alert.maintenanceInProgress")
+            message: String(localized: "storage.error.operationBusy")
         )
     }
 

@@ -5,6 +5,13 @@ import NIOPosix
 import NIOSSH
 
 enum SFTPErrorClassifier {
+    nonisolated static func diagnosticDetail(_ error: Error) -> String? {
+        if let ssh = error as? NIOSSHError { return ssh.description }
+        if let sftp = error as? SFTPError { return String(reflecting: sftp) }
+        if let ssh = error as? SSHClientError { return String(reflecting: ssh) }
+        return nil
+    }
+
     static func describe(_ error: Error) -> String {
         if let mismatch = error as? SFTPHostKeyMismatchError {
             return mismatch.errorDescription ?? error.localizedDescription
@@ -23,6 +30,15 @@ enum SFTPErrorClassifier {
 
         if error is AuthenticationFailed {
             return String(localized: "sftp.error.authenticationFailed")
+        }
+
+        if let channel = error as? ChannelError, case .connectTimeout = channel {
+            return RemoteStorageClientError.connectionTimedOut.localizedDescription
+        }
+        let nsError = error as NSError
+        if (nsError.domain == NSPOSIXErrorDomain && nsError.code == Int(ETIMEDOUT)) ||
+            (nsError.domain == NSURLErrorDomain && nsError.code == NSURLErrorTimedOut) {
+            return RemoteStorageClientError.operationTimedOut.localizedDescription
         }
 
         if let sshError = error as? SSHClientError {
@@ -57,7 +73,7 @@ enum SFTPErrorClassifier {
             return String(localized: "sftp.error.cannotConnect")
         }
 
-        return error.localizedDescription
+        return StorageErrorMessages.fallback(error)
     }
 
     nonisolated static func isNotFound(_ error: Error) -> Bool {
@@ -91,7 +107,7 @@ enum SFTPErrorClassifier {
         if error is SFTPHostKeyMismatchError { return false }
         if let storage = error as? RemoteStorageClientError {
             switch storage {
-            case .notConnected, .unavailable:
+            case .notConnected, .unavailable, .connectionTimedOut, .operationTimedOut, .verificationFailed:
                 return true
             case .underlying(let inner):
                 return isConnectionUnavailable(inner)

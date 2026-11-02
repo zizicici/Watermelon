@@ -188,11 +188,11 @@ final class StorageClientFactory: @unchecked Sendable {
                 expectedHostKeyFingerprintSHA256: connection.hostKeyFingerprintSHA256
             ))
         case .onedrive:
-            guard case .oneDrive(let connection) = try Self.canonicalConnection(for: profile),
-                  connection.accountType == .personal,
-                  let oneDriveContext = oneDriveClientContextProvider() else {
-                throw RemoteStorageClientError.unsupportedStorageType(storageType.rawValue)
+            guard case .oneDrive(let connection) = try Self.canonicalConnection(for: profile) else {
+                throw RemoteStorageClientError.invalidConfiguration
             }
+            guard connection.accountType == .personal else { throw OneDriveAuthenticationError.unsupportedAccount }
+            guard let oneDriveContext = oneDriveClientContextProvider() else { throw RemoteStorageClientError.buildUnavailable }
             let credential: OneDriveCredentialBlob
             do {
                 credential = try OneDriveCredentialBlob.decode(from: credentialPayload)
@@ -206,10 +206,10 @@ final class StorageClientFactory: @unchecked Sendable {
                 sharedState: oneDriveContext.sharedState
             )
         case .dropbox:
-            guard case .dropbox(let connection) = try Self.canonicalConnection(for: profile),
-                  let dropboxContext = dropboxClientContextProvider() else {
-                throw RemoteStorageClientError.unsupportedStorageType(storageType.rawValue)
+            guard case .dropbox(let connection) = try Self.canonicalConnection(for: profile) else {
+                throw RemoteStorageClientError.invalidConfiguration
             }
+            guard let dropboxContext = dropboxClientContextProvider() else { throw RemoteStorageClientError.buildUnavailable }
             let credential: DropboxCredentialBlob
             do {
                 credential = try DropboxCredentialBlob.decode(from: credentialPayload)
@@ -226,10 +226,10 @@ final class StorageClientFactory: @unchecked Sendable {
                 sharedState: dropboxContext.sharedState
             )
         case .googleDrive:
-            guard case .googleDrive(let connection) = try Self.canonicalConnection(for: profile),
-                  let googleDriveContext = googleDriveClientContextProvider() else {
-                throw RemoteStorageClientError.unsupportedStorageType(storageType.rawValue)
+            guard case .googleDrive(let connection) = try Self.canonicalConnection(for: profile) else {
+                throw RemoteStorageClientError.invalidConfiguration
             }
+            guard let googleDriveContext = googleDriveClientContextProvider() else { throw RemoteStorageClientError.buildUnavailable }
             let credential: GoogleDriveCredentialBlob
             do {
                 credential = try GoogleDriveCredentialBlob.decode(from: credentialPayload)

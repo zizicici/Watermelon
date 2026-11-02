@@ -22,10 +22,10 @@ nonisolated enum DropboxErrorClassifier {
                 return "\(localizedReason(status: statusCode(in: ns), summary: summary, userMessage: userMessage))\n(Dropbox / \(ns.code))"
             }
             if ns.domain == NSURLErrorDomain {
-                return ns.localizedDescription
+                return StorageErrorMessages.fallback(ns)
             }
         }
-        return error.localizedDescription
+        return StorageErrorMessages.fallback(error)
     }
 
     static func makeServiceError(
@@ -168,6 +168,7 @@ nonisolated enum DropboxErrorClassifier {
         if status == 429 || lowered.contains("too_many_write_operations") {
             return String(localized: "dropbox.error.throttled")
         }
+        if let message = StorageErrorMessages.httpStatus(status) { return message }
         return summary.isEmpty ? String(localized: "dropbox.error.requestFailed") : summary
     }
 

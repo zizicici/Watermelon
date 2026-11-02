@@ -76,10 +76,10 @@ nonisolated enum OneDriveErrorClassifier {
             case 507:
                 return String(localized: "onedrive.error.insufficientStorage")
             default:
-                return ns.localizedDescription
+                return StorageErrorMessages.httpStatus(ns.code) ?? ns.localizedDescription
             }
         }
-        return error.localizedDescription
+        return StorageErrorMessages.fallback(error)
     }
 
     private static func isDriveNotReady(_ error: NSError) -> Bool {

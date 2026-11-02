@@ -66,6 +66,42 @@ final class NetworkFaultRecoveryTests: XCTestCase {
         XCTAssertFalse(AssetProcessor.isRecoverableNetworkFault(CancellationError(), profile: profile(.s3)))
     }
 
+    func testMoreSpecificUnavailableReasonsPreserveBackupRecoveryDecisions() {
+        let original = RemoteStorageClientError.unavailable
+        let replacements: [RemoteStorageClientError] = [.connectionTimedOut, .operationTimedOut, .verificationFailed]
+        let backends: [StorageType] = [.smb, .webdav, .s3, .sftp, .onedrive, .dropbox, .googleDrive, .externalVolume]
+        for error in replacements {
+            XCTAssertEqual(RemoteFaultLite.classify(error), RemoteFaultLite.classify(original))
+            XCTAssertEqual(RemoteStorageClientError.isConnectionUnavailable(error),
+                           RemoteStorageClientError.isConnectionUnavailable(original))
+            for type in backends {
+                let destination = profile(type)
+                XCTAssertEqual(destination.isConnectionUnavailableError(error), destination.isConnectionUnavailableError(original),
+                               "\(type): \(error.diagnosticCode)")
+                XCTAssertEqual(AssetProcessor.isRecoverableNetworkFault(error, profile: destination),
+                               AssetProcessor.isRecoverableNetworkFault(original, profile: destination),
+                               "\(type): \(error.diagnosticCode)")
+                XCTAssertEqual(BackupParallelExecutor.isNetworkUnavailableFatal(error, profile: destination),
+                               BackupParallelExecutor.isNetworkUnavailableFatal(original, profile: destination),
+                               "\(type): \(error.diagnosticCode)")
+            }
+        }
+    }
+
+    func testDefaultConditionalUploadRetainsOriginalFailurePolicy() async {
+        let client = ProbeStorageClient()
+        do {
+            try await client.upload(localURL: URL(fileURLWithPath: "/unused"), remotePath: "/unused",
+                                    mode: .createIfAbsent, respectTaskCancellation: true, onProgress: nil)
+            XCTFail("An unsupported conditional upload must not succeed")
+        } catch {
+            guard case RemoteStorageClientError.unavailable = error else {
+                return XCTFail("Expected the existing unavailable error, got \(error)")
+            }
+            XCTAssertEqual(RemoteFaultLite.classify(error), .retryable)
+        }
+    }
+
     // MARK: - isNetworkUnavailableFatal (skip-flush / pause routing)
 
     func testSentinelRoutesToNetworkUnavailable() {
@@ -192,17 +228,24 @@ final class NetworkFaultRecoveryTests: XCTestCase {
         XCTAssertTrue(connected)
     }
 
-    // An uncooperative connect that never returns must be abandoned at the deadline (mapped to .unavailable,
-    // which classifies retryable), not hang the caller for the session's multi-day timeout.
+    // A hung transport must remain retryable without being mistaken for missing build support.
     func testBoundedConnectTimesOutOnHungConnect() async {
         let client = ProbeStorageClient(.delay(3, cancellable: false))
         let start = Date()
+        let recorder = RepoFailureDiagnostics()
         do {
-            try await NetworkRecovery.boundedConnect(client, deadline: Date().addingTimeInterval(0.3))
+            try await RepoFailureDiagnostics.$current.withValue(recorder) {
+                try await NetworkRecovery.boundedConnect(client, deadline: Date().addingTimeInterval(0.3))
+            }
             XCTFail("a hung connect must throw, not return")
         } catch {
             XCTAssertLessThan(Date().timeIntervalSince(start), 5, "boundedConnect overshot its deadline")
             XCTAssertEqual(RemoteFaultLite.classify(error), .retryable)
+            XCTAssertEqual(RepoFailureDiagnostics.errorCodes(error), ["RemoteStorageClientError/connectionTimedOut"])
+            XCTAssertEqual(recorder.snapshot().first?.stage, "connection.transport")
+            XCTAssertEqual(recorder.snapshot().first?.handled, false)
+            XCTAssertTrue(recorder.snapshot().first?.detail?.contains("timeout_seconds=") == true)
+            XCTAssertNotNil(recorder.snapshot().first?.elapsedSeconds)
         }
     }
 
@@ -236,7 +279,39 @@ final class NetworkFaultRecoveryTests: XCTestCase {
             XCTFail("soft abort must stop the bounded connect")
         } catch {
             XCTAssertLessThan(Date().timeIntervalSince(start), 2)
+            XCTAssertTrue(error is CancellationError)
         }
+    }
+
+    func testCancelledConnectDoesNotRecordTimeout() async {
+        let client = ProbeStorageClient(.delay(3, cancellable: false))
+        let recorder = RepoFailureDiagnostics()
+        let task = Task {
+            try await RepoFailureDiagnostics.$current.withValue(recorder) {
+                try await NetworkRecovery.boundedConnect(client, deadline: Date().addingTimeInterval(30))
+            }
+        }
+        task.cancel()
+        do {
+            try await task.value
+            XCTFail("Expected cancellation")
+        } catch {
+            XCTAssertTrue(error is CancellationError)
+            XCTAssertTrue(recorder.snapshot().isEmpty)
+        }
+    }
+
+    func testConnectRecoveryPreservesTimeoutWhenWindowExpires() async {
+        let holder = ProbeClientHolder()
+        let recorder = RepoFailureDiagnostics()
+        let result = await RepoFailureDiagnostics.$current.withValue(recorder) {
+            await NetworkRecovery.connectRidingOut(deadline: Date().addingTimeInterval(0.1),
+                makeClient: { holder.make(.delay(3, cancellable: false)) })
+        }
+        guard case .exhausted(let error) = result else { return XCTFail("Expected recovery exhaustion") }
+        XCTAssertEqual(RepoFailureDiagnostics.errorCodes(error), ["RemoteStorageClientError/connectionTimedOut"])
+        XCTAssertEqual(recorder.snapshot().first?.stage, "connection.transport")
+        XCTAssertEqual(recorder.snapshot().first?.recovered, false)
     }
 
     func testConnectRecoveryReturnsStoppedBeforeStartingAnAttempt() async {

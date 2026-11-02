@@ -32,6 +32,11 @@ nonisolated enum RemoteUploadMode: Sendable {
 enum RemoteStorageClientError: LocalizedError {
     case notConnected
     case unavailable
+    case connectionTimedOut
+    case connectionBusy
+    case buildUnavailable
+    case operationTimedOut
+    case verificationFailed
     case invalidConfiguration
     case unsafeConditionalCreateUnsupported
     case externalStorageUnavailable
@@ -44,6 +49,16 @@ enum RemoteStorageClientError: LocalizedError {
             return String(localized: "storage.client.notConnected")
         case .unavailable:
             return String(localized: "storage.client.unavailable")
+        case .connectionTimedOut:
+            return String(localized: "storage.client.connectionTimedOut")
+        case .connectionBusy:
+            return String(localized: "storage.client.connectionBusy")
+        case .buildUnavailable:
+            return String(localized: "storage.client.buildUnavailable")
+        case .operationTimedOut:
+            return String(localized: "storage.error.requestTimedOut")
+        case .verificationFailed:
+            return String(localized: "storage.error.verificationFailed")
         case .invalidConfiguration:
             return String(localized: "storage.client.invalidConfiguration")
         case .unsafeConditionalCreateUnsupported:
@@ -74,7 +89,7 @@ enum RemoteStorageClientError: LocalizedError {
     static func isConnectionUnavailable(_ error: Error) -> Bool {
         if let storageError = error as? RemoteStorageClientError {
             switch storageError {
-            case .notConnected, .unavailable, .externalStorageUnavailable:
+            case .notConnected, .unavailable, .connectionTimedOut, .operationTimedOut, .verificationFailed, .externalStorageUnavailable:
                 return true
             case .underlying(let underlying):
                 return isConnectionUnavailable(underlying)
@@ -83,6 +98,23 @@ enum RemoteStorageClientError: LocalizedError {
             }
         }
         return false
+    }
+
+    var diagnosticCode: String {
+        switch self {
+        case .notConnected: "notConnected"
+        case .unavailable: "unavailable"
+        case .connectionTimedOut: "connectionTimedOut"
+        case .connectionBusy: "connectionBusy"
+        case .buildUnavailable: "buildUnavailable"
+        case .operationTimedOut: "operationTimedOut"
+        case .verificationFailed: "verificationFailed"
+        case .invalidConfiguration: "invalidConfiguration"
+        case .unsafeConditionalCreateUnsupported: "unsafeConditionalCreateUnsupported"
+        case .externalStorageUnavailable: "externalStorageUnavailable"
+        case .unsupportedStorageType: "unsupportedStorageType"
+        case .underlying: "underlying"
+        }
     }
 }
 
@@ -424,7 +456,7 @@ nonisolated enum RemoteStorageWriteVerifier {
             if failureCleanupPolicy == .waitForCompletion {
                 let underlyingError: Error = Task.isCancelled
                     ? CancellationError()
-                    : RemoteStorageClientError.unavailable
+                    : RemoteStorageClientError.operationTimedOut
                 throw RemoteProbeDeferredCleanupError(
                     underlyingError: underlyingError,
                     waitForCleanup: {
@@ -434,7 +466,7 @@ nonisolated enum RemoteStorageWriteVerifier {
                 )
             }
             if Task.isCancelled { throw CancellationError() }
-            throw RemoteStorageClientError.unavailable
+            throw RemoteStorageClientError.operationTimedOut
         }
     }
 
@@ -485,7 +517,7 @@ nonisolated enum RemoteStorageWriteVerifier {
             try await client.download(remotePath: probeFilePath, localURL: downloadedURL)
             try Task.checkCancellation()
             guard try Data(contentsOf: downloadedURL) == firstProbeData else {
-                throw RemoteStorageClientError.unavailable
+                throw RemoteStorageClientError.verificationFailed
             }
             try await client.delete(path: probeFilePath)
             try Task.checkCancellation()

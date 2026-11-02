@@ -82,7 +82,7 @@ final class BackgroundBackupNodeDetailViewController: UIViewController {
         revert()
         let alert = UIAlertController(
             title: String(localized: "common.error"),
-            message: String(localized: "home.alert.maintenanceInProgress"),
+            message: String(localized: "storage.error.operationBusy"),
             preferredStyle: .alert
         )
         alert.addAction(UIAlertAction(title: String(localized: "common.ok"), style: .default))

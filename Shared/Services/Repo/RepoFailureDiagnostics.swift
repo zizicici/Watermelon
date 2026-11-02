@@ -15,21 +15,34 @@ nonisolated final class RepoFailureDiagnostics: @unchecked Sendable {
         let causes: [String]
         let message: String?
         let detail: String?
+        let elapsedSeconds: TimeInterval?
+        let underlyingDetails: [String]
+        var recovered = false
+        var handled = false
     }
 
     @TaskLocal static var current: RepoFailureDiagnostics?
     private let lock = NSLock()
     private var entries: [Entry] = []
 
-    static func record(_ issue: Issue, stage: String, path: String? = nil, error: Error? = nil, detail: String? = nil) {
+    static func record(_ issue: Issue, stage: String, path: String? = nil, error: Error? = nil,
+                       detail: String? = nil, elapsedSeconds: TimeInterval? = nil) {
         guard let current else { return }
         let entry = Entry(issue: issue, stage: stage, path: path, causes: error.map(errorCodes) ?? [],
-                          message: error?.localizedDescription, detail: detail.map { String($0.prefix(500)) })
-        current.lock.withLock {
-            // Probes re-inspect the same directory, so an identical record adds nothing.
-            guard !current.entries.contains(entry) else { return }
-            current.entries.append(entry)
-            if current.entries.count > 32 { current.entries.removeFirst(current.entries.count - 32) }
+                          message: error?.localizedDescription, detail: detail.map { String($0.prefix(500)) },
+                          elapsedSeconds: elapsedSeconds, underlyingDetails: error.map(errorDetails) ?? [])
+        current.append([entry])
+    }
+
+    private func append(_ newEntries: [Entry], recovered: Bool = false, handled: Bool = false) {
+        lock.withLock {
+            for var entry in newEntries {
+                entry.recovered = entry.recovered || recovered
+                entry.handled = entry.handled || handled
+                guard !entries.contains(entry) else { continue }
+                entries.append(entry)
+            }
+            if entries.count > 32 { entries.removeFirst(entries.count - 32) }
         }
     }
 
@@ -37,11 +50,29 @@ nonisolated final class RepoFailureDiagnostics: @unchecked Sendable {
         lock.withLock { entries }
     }
 
-    static func capture<T>(stage: String, path: String? = nil, operation: () async throws -> T) async throws -> T {
+    static func captureRecovery<T>(isSuccessful: (T) -> Bool = { _ in true }, failureIsHandled: Bool = false,
+                                   operation: () async throws -> T) async rethrows -> T {
+        guard let parent = current else { return try await operation() }
+        let diagnostics = RepoFailureDiagnostics()
+        do {
+            let result = try await $current.withValue(diagnostics, operation: operation)
+            let recovered = isSuccessful(result)
+            parent.append(diagnostics.snapshot(), recovered: recovered, handled: !recovered && failureIsHandled)
+            return result
+        } catch {
+            parent.append(diagnostics.snapshot(), handled: failureIsHandled)
+            throw error
+        }
+    }
+
+    static func capture<T>(stage: String, path: String? = nil, detail: String? = nil,
+                           operation: () async throws -> T) async throws -> T {
+        let start = Date()
         do { return try await operation() }
         catch {
             if RemoteFaultLite.classify(error) != .cancelled {
-                record(.operationFailed, stage: stage, path: path, error: error)
+                record(.operationFailed, stage: stage, path: path, error: error,
+                       detail: detail, elapsedSeconds: Date().timeIntervalSince(start))
             }
             throw error
         }
@@ -60,13 +91,46 @@ nonisolated final class RepoFailureDiagnostics: @unchecked Sendable {
                 next = exhausted.underlying
                 continue
             }
+            if let probe = current as? RemoteProbeDeferredCleanupError {
+                result.append("RemoteProbeDeferredCleanup")
+                next = probe.underlyingError
+                continue
+            }
             let ns = current as NSError
             if let lite = current as? LiteRepoError {
                 result.append("LiteRepoError/\(lite.diagnosticCode)")
+            } else if let storage = current as? RemoteStorageClientError {
+                result.append("RemoteStorageClientError/\(storage.diagnosticCode)")
             } else {
                 result.append("\(ns.domain)/\(ns.code)")
             }
             next = ns.userInfo[NSUnderlyingErrorKey] as? Error
+        }
+        return result
+    }
+
+    static func errorDetails(_ error: Error) -> [String] {
+        var result: [String] = []
+        var next: Error? = error
+        for _ in 0..<8 {
+            guard let current = next else { break }
+            let error = StorageErrorMessages.unwrapped(current)
+            let ns = error as NSError
+            result.append("original_message: \(error.localizedDescription)")
+            let keys = [S3ErrorClassifier.userInfoServerCodeKey, S3ErrorClassifier.userInfoServerMessageKey,
+                        OneDriveErrorClassifier.codeKey, DropboxErrorClassifier.userInfoSummaryKey,
+                        DropboxErrorClassifier.userInfoTagPathKey, DropboxErrorClassifier.userInfoEndpointKey,
+                        DropboxErrorClassifier.userInfoUserMessageKey, DropboxErrorClassifier.userInfoRequestIDKey,
+                        GoogleDriveErrorClassifier.userInfoReasonsKey, GoogleDriveErrorClassifier.userInfoMessageKey]
+            for key in keys {
+                if let value = ns.userInfo[key] { result.append("\(key): \(value)") }
+            }
+            if let detail = SFTPErrorClassifier.diagnosticDetail(error) { result.append("transport_detail: \(detail)") }
+            if let readBack = error as? RemoteReadBackRetryExhaustedError {
+                next = readBack.underlying
+            } else {
+                next = ns.userInfo[NSUnderlyingErrorKey] as? Error
+            }
         }
         return result
     }
@@ -76,6 +140,19 @@ nonisolated struct StorageConnectionFailure: LocalizedError {
     let underlying: Error
     let diagnostics: [RepoFailureDiagnostics.Entry]
     var errorDescription: String? { underlying.localizedDescription }
+
+    static func capture<T>(stage: String, path: String? = nil, operation: () async throws -> T) async throws -> T {
+        let diagnostics = RepoFailureDiagnostics.current ?? RepoFailureDiagnostics()
+        do {
+            return try await RepoFailureDiagnostics.$current.withValue(diagnostics) {
+                try await RepoFailureDiagnostics.capture(stage: stage, path: path, operation: operation)
+            }
+        } catch {
+            if Task.isCancelled { throw CancellationError() }
+            if error is StorageConnectionFailure || RemoteFaultLite.classify(error) == .cancelled { throw error }
+            throw StorageConnectionFailure(underlying: error, diagnostics: diagnostics.snapshot())
+        }
+    }
 }
 
 extension LiteRepoError {

@@ -5,7 +5,7 @@ enum WebDAVErrorClassifier {
         if let remote = classifyRemote(error) {
             return remote
         }
-        return (error as NSError).localizedDescription
+        return StorageErrorMessages.fallback(error)
     }
 
     /// Returns a formatted remote-error message only if the chain contains an error we
@@ -21,8 +21,16 @@ enum WebDAVErrorClassifier {
 
         let nsError = error as NSError
         if nsError.domain == WebDAVClient.errorDomain {
+            let reason: String
+            switch nsError.code {
+            case 404: reason = String(localized: "storage.error.pathMissing")
+            case 405, 501: reason = String(localized: "storage.error.operationUnsupported")
+            case 423: reason = String(localized: "storage.error.resourceLocked")
+            case 507: reason = String(localized: "storage.error.insufficientSpace")
+            default: reason = StorageErrorMessages.httpStatus(nsError.code) ?? nsError.localizedDescription
+            }
             return format(
-                reason: nsError.localizedDescription,
+                reason: reason,
                 tail: "\(WebDAVClient.errorDomain) / \(nsError.code)"
             )
         }
@@ -63,7 +71,7 @@ enum WebDAVErrorClassifier {
             reason = nsError.localizedDescription
         }
 
-        return format(reason: reason, tail: tail)
+        return format(reason: StorageErrorMessages.transport(nsError) ?? reason, tail: tail)
     }
 
     private static func format(reason: String, tail: String) -> String {

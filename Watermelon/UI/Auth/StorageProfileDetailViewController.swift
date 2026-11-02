@@ -488,7 +488,7 @@ final class StorageProfileDetailViewController: UIViewController {
     private func presentMutationBlockedAlert() {
         presentAlert(
             title: String(localized: "common.error"),
-            message: String(localized: "home.alert.maintenanceInProgress")
+            message: String(localized: "storage.error.operationBusy")
         )
     }
 
@@ -726,7 +726,7 @@ final class StorageProfileDetailViewController: UIViewController {
         if !started {
             presentAlert(
                 title: String(localized: "common.error"),
-                message: String(localized: "home.alert.maintenanceInProgress")
+                message: String(localized: "storage.error.operationBusy")
             )
         }
     }

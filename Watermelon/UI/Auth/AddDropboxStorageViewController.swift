@@ -118,10 +118,9 @@ final class AddDropboxStorageViewController: UIViewController {
             }
             do {
                 guard let self else { throw CancellationError() }
-                let draft = try await coordinator.prepare(
-                    from: self,
-                    forceReauthentication: forceReauthentication
-                )
+                let draft = try await StorageConnectionFailure.capture(stage: "connection.sign_in") {
+                    try await coordinator.prepare(from: self, forceReauthentication: forceReauthentication)
+                }
                 try Task.checkCancellation()
                 guard self.viewIfLoaded?.window != nil else { throw CancellationError() }
                 self.connectionParams = draft.connectionParams
@@ -132,10 +131,7 @@ final class AddDropboxStorageViewController: UIViewController {
                 return
             } catch {
                 guard let self, self.viewIfLoaded?.window != nil else { return }
-                self.presentAlert(
-                    title: String(localized: "auth.dropbox.signInFailed"),
-                    message: UserFacingErrorLocalizer.message(for: error, storageType: .dropbox)
-                )
+                self.presentStorageError(title: String(localized: "auth.dropbox.signInFailed"), error: error, storageType: .dropbox)
             }
         }
     }
@@ -157,8 +153,8 @@ final class AddDropboxStorageViewController: UIViewController {
                 updateState()
             }
         }
-        guard !rejectIfProfileMutationBlocked(),
-              let connectionParams,
+        guard !rejectIfProfileMutationBlocked() else { return }
+        guard let connectionParams,
               let credentialJSONString else {
             presentAlert(
                 title: String(localized: "auth.dropbox.editTitle"),
@@ -191,10 +187,7 @@ final class AddDropboxStorageViewController: UIViewController {
                 popAfterSave()
             }
         } catch {
-            presentAlert(
-                title: String(localized: "auth.saveFailed"),
-                message: UserFacingErrorLocalizer.message(for: error, storageType: .dropbox)
-            )
+            presentStorageError(title: String(localized: "auth.saveFailed"), error: error, storageType: .dropbox)
         }
     }
 
@@ -258,7 +251,7 @@ final class AddDropboxStorageViewController: UIViewController {
     private func presentMutationBlockedAlert() {
         presentAlert(
             title: String(localized: "common.error"),
-            message: String(localized: "home.alert.maintenanceInProgress")
+            message: String(localized: "storage.error.operationBusy")
         )
     }
 

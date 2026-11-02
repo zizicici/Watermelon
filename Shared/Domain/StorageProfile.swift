@@ -683,37 +683,7 @@ extension ServerProfileRecord {
     }
 
     func userFacingStorageErrorMessage(_ error: Error) -> String {
-        if error is LiteRepoError {
-            return error.localizedDescription
-        }
-        if isBrowserLinkProfile {
-            return error.localizedDescription
-        }
-        if isExternalStorageUnavailableError(error) {
-            return String(localized: "storage.error.externalUnavailable")
-        }
-        if resolvedStorageType == .smb, SMBErrorClassifier.isConnectionUnavailable(error) {
-            return String(localized: "storage.error.smbUnavailable")
-        }
-        if resolvedStorageType == .webdav {
-            return WebDAVErrorClassifier.describe(error)
-        }
-        if resolvedStorageType == .s3 {
-            return S3ErrorClassifier.describe(error)
-        }
-        if resolvedStorageType == .sftp {
-            return SFTPErrorClassifier.describe(error)
-        }
-        if resolvedStorageType == .onedrive {
-            return OneDriveErrorClassifier.describe(error)
-        }
-        if resolvedStorageType == .dropbox {
-            return DropboxErrorClassifier.describe(error)
-        }
-        if resolvedStorageType == .googleDrive {
-            return GoogleDriveErrorClassifier.describe(error)
-        }
-        return error.localizedDescription
+        UserFacingErrorLocalizer.message(for: error, profile: self)
     }
 
     func resolvedSessionCredential(from session: AppSession) -> String? {

@@ -23,6 +23,7 @@ final class ScreenBoundAsyncRunner<Output> {
 
     @discardableResult
     func start(
+        diagnosticStage: String = "connection.test",
         operation: @escaping () async throws -> Output,
         completion: @escaping (Result<Output, Error>) -> Void
     ) -> Bool {
@@ -33,7 +34,7 @@ final class ScreenBoundAsyncRunner<Output> {
         task = Task { [weak self] in
             let result: Result<Output, Error>?
             do {
-                let output = try await operation()
+                let output = try await StorageConnectionFailure.capture(stage: diagnosticStage, operation: operation)
                 try Task.checkCancellation()
                 result = .success(output)
             } catch is CancellationError {

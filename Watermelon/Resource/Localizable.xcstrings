@@ -36470,6 +36470,94 @@
         }
       }
     },
+    "connection.failure.prepare" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Die Verbindung konnte nicht vorbereitet werden."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Failed to prepare the connection."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudo preparar la conexión."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudo preparar la conexión."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La préparation de la connexion a échoué."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "接続の準備に失敗しました。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "연결을 준비하지 못했습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não foi possível preparar a conexão."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não foi possível preparar a ligação."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Не удалось подготовить подключение."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Не вдалося підготувати підключення."
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "準備連線時失敗。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "准备连接时失败。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "準備連線時失敗。"
+          }
+        }
+      }
+    },
     "connection.failure.recoveryAmbiguous" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -36826,6 +36914,182 @@
         }
       }
     },
+    "connection.failure.reloadIndex" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Der entfernte Backup-Index konnte nicht geladen werden."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Failed to load the remote backup index."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudo cargar el índice de la copia de seguridad remota."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudo cargar el índice del respaldo remoto."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Le chargement de l’index de sauvegarde distant a échoué."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "リモートバックアップのインデックスを読み込めませんでした。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "원격 백업 인덱스를 불러오지 못했습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não foi possível carregar o índice do backup remoto."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não foi possível carregar o índice da cópia de segurança remota."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Не удалось загрузить индекс удалённой резервной копии."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Не вдалося завантажити індекс віддаленої резервної копії."
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "讀取遠端備份索引失敗。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "读取远端备份索引失败。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "讀取遠端備份索引失敗。"
+          }
+        }
+      }
+    },
+    "connection.failure.sftpHostKey" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Der Fingerabdruck des SFTP-Servers konnte nicht gelesen werden."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Failed to read the SFTP server fingerprint."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudo leer la huella del servidor SFTP."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudo leer la huella del servidor SFTP."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La lecture de l’empreinte du serveur SFTP a échoué."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "SFTPサーバーのフィンガープリントを読み取れませんでした。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "SFTP 서버 지문을 읽지 못했습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não foi possível ler a impressão digital do servidor SFTP."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não foi possível ler a impressão digital do servidor SFTP."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Не удалось прочитать отпечаток SFTP-сервера."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Не вдалося прочитати відбиток SFTP-сервера."
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "讀取 SFTP 伺服器指紋失敗。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "读取 SFTP 服务器指纹失败。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "讀取 SFTP 伺服器指紋失敗。"
+          }
+        }
+      }
+    },
     "connection.failure.thumbnails" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -36911,6 +37175,94 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "無法更新 %@ 的縮圖。"
+          }
+        }
+      }
+    },
+    "connection.failure.transport" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Die Verbindung zum Server konnte nicht hergestellt werden."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Failed to establish the server connection."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudo establecer la conexión con el servidor."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudo establecer la conexión con el servidor."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La connexion au serveur a échoué."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "サーバーへの接続を確立できませんでした。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "서버에 연결하지 못했습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não foi possível estabelecer a conexão com o servidor."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não foi possível estabelecer a ligação ao servidor."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Не удалось установить соединение с сервером."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Не вдалося встановити з’єднання із сервером."
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "建立伺服器連線失敗。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "建立服务器连接失败。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "建立伺服器連線失敗。"
           }
         }
       }
@@ -89117,6 +89469,270 @@
         }
       }
     },
+    "storage.client.buildUnavailable" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Die Speicherfunktion ist in dieser Version nicht verfügbar."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Storage support is unavailable on this build."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La compatibilidad de almacenamiento no está disponible en esta compilación."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La compatibilidad de almacenamiento no está disponible en esta compilación."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La prise en charge du stockage n’est pas disponible dans cette version."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このビルドではストレージ機能を利用できません。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 빌드에서는 저장소 기능을 사용할 수 없습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O suporte a armazenamento não está disponível nesta compilação."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O suporte de armazenamento não está disponível nesta compilação."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Поддержка хранилища недоступна в этой сборке."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Підтримка сховища недоступна в цій збірці."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "当前构建版本不支持该存储能力。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "目前建置版本不支援該儲存能力。"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "目前建置版本不支援該儲存能力。"
+          }
+        }
+      }
+    },
+    "storage.client.connectionBusy" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ein anderer Vorgang läuft. Bitte stelle die Verbindung nach dessen Abschluss erneut her."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Another operation is in progress. Please try connecting again after it finishes."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hay otra operación en curso. Vuelve a conectarte cuando termine."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hay otra operación en curso. Vuelve a conectarte cuando termine."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Une autre opération est en cours. Réessayez de vous connecter une fois celle-ci terminée."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "別の操作が進行中です。完了してから再接続してください。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "다른 작업이 진행 중입니다. 완료된 후 다시 연결하세요."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Outra operação está em andamento. Tente conectar novamente quando ela terminar."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Está em curso outra operação. Tente ligar novamente quando terminar."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Выполняется другая операция. Повторите подключение после её завершения."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Виконується інша операція. Повторіть підключення після її завершення."
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "目前有其他操作正在進行，請等待完成後再連線。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "当前有其他操作正在进行，请等待完成后再连接。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "目前有其他操作正在進行，請等待完成後再連線。"
+          }
+        }
+      }
+    },
+    "storage.client.connectionTimedOut" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Zeitüberschreitung bei der Verbindung. Prüfe das Netzwerk und den Server und versuche es erneut."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The connection timed out. Check the network and server, then try again."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Se agotó el tiempo de conexión. Comprueba la red y el servidor e inténtalo de nuevo."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Se agotó el tiempo de conexión. Revisa la red y el servidor e inténtalo de nuevo."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Le délai de connexion a expiré. Vérifiez le réseau et le serveur, puis réessayez."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "接続がタイムアウトしました。ネットワークとサーバーを確認して再試行してください。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "연결 시간이 초과되었습니다. 네트워크와 서버를 확인한 후 다시 시도하세요."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O tempo de conexão esgotou. Verifique a rede e o servidor e tente novamente."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O tempo de ligação expirou. Verifique a rede e o servidor e tente novamente."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Время ожидания подключения истекло. Проверьте сеть и сервер и повторите попытку."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Час очікування підключення вичерпано. Перевірте мережу й сервер і спробуйте ще раз."
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "連線逾時，請檢查網絡和伺服器後再試。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "连接超时，请检查网络和服务器后重试。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "連線逾時，請檢查網路和伺服器後再試。"
+          }
+        }
+      }
+    },
     "storage.client.externalUnavailable" : {
       "localizations" : {
         "de" : {
@@ -89386,85 +90002,85 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Die Speicherfunktion ist in dieser Version nicht verfügbar."
+            "value" : "Der Speicher ist vorübergehend nicht verfügbar. Bitte versuche es später erneut."
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Storage support is unavailable on this build."
+            "value" : "Storage is temporarily unavailable. Please try again later."
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "La compatibilidad de almacenamiento no está disponible en esta compilación."
+            "value" : "El almacenamiento no está disponible temporalmente. Inténtalo más tarde."
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "La compatibilidad de almacenamiento no está disponible en esta compilación."
+            "value" : "El almacenamiento no está disponible temporalmente. Inténtalo más tarde."
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "La prise en charge du stockage n’est pas disponible dans cette version."
+            "value" : "Le stockage est temporairement indisponible. Réessayez plus tard."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "このビルドではストレージ機能を利用できません。"
+            "value" : "ストレージを一時的に利用できません。しばらくしてから再試行してください。"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "이 빌드에서는 저장소 기능을 사용할 수 없습니다."
+            "value" : "저장소를 일시적으로 사용할 수 없습니다. 나중에 다시 시도하세요."
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "O suporte a armazenamento não está disponível nesta compilação."
+            "value" : "O armazenamento está temporariamente indisponível. Tente novamente mais tarde."
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "O suporte de armazenamento não está disponível nesta compilação."
+            "value" : "O armazenamento está temporariamente indisponível. Tente novamente mais tarde."
           }
         },
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Поддержка хранилища недоступна в этой сборке."
+            "value" : "Хранилище временно недоступно. Повторите попытку позже."
           }
         },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Підтримка сховища недоступна в цій збірці."
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "当前构建版本不支持该存储能力。"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "目前建置版本不支援該儲存能力。"
+            "value" : "Сховище тимчасово недоступне. Спробуйте пізніше."
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "目前建置版本不支援該儲存能力。"
+            "value" : "儲存空間暫時無法使用，請稍後再試。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "存储暂时不可用，请稍后重试。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "儲存空間暫時無法使用，請稍後再試。"
           }
         }
       }
@@ -96695,6 +97311,358 @@
         }
       }
     },
+    "storage.error.authenticationFailed" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Authentifizierung fehlgeschlagen. Prüfe die Zugangsdaten und Anmelderichtlinien des Servers."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Authentication failed. Check the credentials and server sign-in policy."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La autenticación falló. Comprueba las credenciales y las políticas de inicio de sesión del servidor."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La autenticación falló. Revisa las credenciales y las políticas de inicio de sesión del servidor."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "L’authentification a échoué. Vérifiez les identifiants et les règles de connexion du serveur."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "認証に失敗しました。認証情報とサーバーのログインポリシーを確認してください。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "인증에 실패했습니다. 자격 증명과 서버 로그인 정책을 확인하세요."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A autenticação falhou. Verifique as credenciais e a política de login do servidor."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A autenticação falhou. Verifique as credenciais e a política de início de sessão do servidor."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ошибка аутентификации. Проверьте учётные данные и правила входа на сервер."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Помилка автентифікації. Перевірте облікові дані та правила входу на сервер."
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "驗證失敗，請檢查憑證及伺服器的登入原則。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "认证失败，请检查凭据及服务器的登录策略。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "驗證失敗，請檢查憑證及伺服器的登入原則。"
+          }
+        }
+      }
+    },
+    "storage.error.cannotConnect" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Die Verbindung zum Server ist fehlgeschlagen. Der Port ist möglicherweise geschlossen oder blockiert."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cannot connect to the server. The port may be closed or blocked."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudo conectar al servidor. El puerto puede estar cerrado o bloqueado."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudo conectar al servidor. El puerto puede estar cerrado o bloqueado."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Impossible de se connecter au serveur. Le port est peut-être fermé ou bloqué."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "サーバーに接続できません。ポートが閉じているかブロックされている可能性があります。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "서버에 연결할 수 없습니다. 포트가 닫혀 있거나 차단되어 있을 수 있습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não foi possível conectar ao servidor. A porta pode estar fechada ou bloqueada."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não foi possível ligar ao servidor. A porta pode estar fechada ou bloqueada."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Не удалось подключиться к серверу. Возможно, порт закрыт или заблокирован."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Не вдалося з’єднатися з сервером. Порт може бути закритий або заблокований."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法连接到服务器，端口可能未开放或被防火墙拦截。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無法連線到伺服器，連接埠可能未開放或被防火牆阻擋。"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無法連線到伺服器，連接埠可能未開放或被防火牆阻擋。"
+          }
+        }
+      }
+    },
+    "storage.error.certificateInvalid" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Die Zertifikatsprüfung ist fehlgeschlagen. Prüfe die Server- und Client-Zertifikate."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Certificate verification failed. Check the server and client certificate settings."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Falló la verificación del certificado. Comprueba los certificados del servidor y del cliente."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Falló la verificación del certificado. Revisa los certificados del servidor y del cliente."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La vérification du certificat a échoué. Vérifiez les certificats du serveur et du client."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "証明書の検証に失敗しました。サーバーとクライアントの証明書設定を確認してください。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "인증서 확인에 실패했습니다. 서버 및 클라이언트 인증서 설정을 확인하세요."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A verificação do certificado falhou. Verifique os certificados do servidor e do cliente."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A verificação do certificado falhou. Verifique os certificados do servidor e do cliente."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Не удалось проверить сертификат. Проверьте настройки сертификатов сервера и клиента."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Не вдалося перевірити сертифікат. Перевірте налаштування сертифікатів сервера й клієнта."
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "憑證驗證失敗，請檢查伺服器及用戶端憑證設定。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "证书验证失败，请检查服务器及客户端证书配置。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "憑證驗證失敗，請檢查伺服器及用戶端憑證設定。"
+          }
+        }
+      }
+    },
+    "storage.error.connectionLost" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Die Verbindung wurde unterbrochen. Bitte verbinde dich erneut."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The connection was interrupted. Please reconnect and try again."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La conexión se interrumpió. Vuelve a conectarte e inténtalo de nuevo."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La conexión se interrumpió. Vuelve a conectarte e inténtalo de nuevo."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La connexion a été interrompue. Reconnectez-vous et réessayez."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "接続が中断されました。再接続して再試行してください。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "연결이 중단되었습니다. 다시 연결한 후 시도하세요."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A conexão foi interrompida. Conecte novamente e tente outra vez."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A ligação foi interrompida. Volte a ligar e tente novamente."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Соединение прервано. Подключитесь заново и повторите попытку."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "З’єднання перервано. Підключіться знову та повторіть спробу."
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "連線已中斷，請重新連線後再試。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "连接已中断，请重新连接后重试。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "連線已中斷，請重新連線後再試。"
+          }
+        }
+      }
+    },
     "storage.error.externalFallback" : {
       "localizations" : {
         "de" : {
@@ -96788,85 +97756,1493 @@
         "de" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Externer Speicher ist nicht verfügbar. Er wurde möglicherweise getrennt. Bitte schließen Sie das Laufwerk erneut an und versuchen Sie es erneut."
+            "value" : "Auf den externen Speicher kann nicht zugegriffen werden. Prüfe die Verbindung und wähle den Ordner erneut aus, um den Zugriff zu erneuern."
           }
         },
         "en" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "External storage is unavailable. It may have been disconnected. Please reconnect the drive and try again."
+            "value" : "External storage cannot be accessed. Check that it is connected, then select the folder again to renew access."
           }
         },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "El almacenamiento externo no está disponible. Puede que se haya desconectado. Vuelve a conectar la unidad e inténtalo de nuevo."
+            "value" : "No se puede acceder al almacenamiento externo. Comprueba que esté conectado y vuelve a seleccionar la carpeta para renovar el acceso."
           }
         },
         "es-419" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "El almacenamiento externo no está disponible. Puede haberse desconectado. Vuelve a conectar la unidad e inténtalo de nuevo."
+            "value" : "No se puede acceder al almacenamiento externo. Revisa que esté conectado y vuelve a seleccionar la carpeta para renovar el acceso."
           }
         },
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Le stockage externe est indisponible. Il a peut-être été déconnecté. Veuillez reconnecter le disque et réessayer."
+            "value" : "Le stockage externe est inaccessible. Vérifiez qu’il est connecté, puis sélectionnez à nouveau le dossier pour renouveler l’accès."
           }
         },
         "ja" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "外部ストレージが利用できません。取り外された可能性があります。ドライブを再接続してからもう一度お試しください。"
+            "value" : "外部ストレージにアクセスできません。接続を確認し、フォルダを再選択してアクセス権を更新してください。"
           }
         },
         "ko" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "외부 저장소를 사용할 수 없습니다. 연결이 해제되었을 수 있습니다. 드라이브를 다시 연결한 후 다시 시도해 주세요."
+            "value" : "외부 저장소에 접근할 수 없습니다. 연결을 확인한 후 폴더를 다시 선택하여 접근 권한을 갱신하세요."
           }
         },
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "O armazenamento externo não está disponível. Ele pode ter sido desconectado. Reconecte a unidade e tente novamente."
+            "value" : "Não é possível acessar o armazenamento externo. Verifique a conexão e selecione a pasta novamente para renovar o acesso."
           }
         },
         "pt-PT" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "O armazenamento externo não está disponível. Pode ter sido desligado. Volte a ligar a unidade e tente novamente."
+            "value" : "Não é possível aceder ao armazenamento externo. Verifique a ligação e selecione novamente a pasta para renovar o acesso."
           }
         },
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Внешний накопитель недоступен. Возможно, он отключён. Подключите накопитель и повторите попытку."
+            "value" : "Нет доступа к внешнему хранилищу. Проверьте подключение и заново выберите папку, чтобы восстановить разрешение на доступ."
           }
         },
         "uk" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Зовнішнє сховище недоступне. Можливо, воно було від’єднане. Будь ласка, під’єднайте диск знову та спробуйте ще раз."
-          }
-        },
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "外接存储不可用，可能已拔出。请重新连接硬盘后再试。"
-          }
-        },
-        "zh-Hant" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "外接儲存不可用，可能已拔出。請重新連接硬碟後再試。"
+            "value" : "Немає доступу до зовнішнього сховища. Перевірте підключення й знову виберіть папку, щоб відновити дозвіл на доступ."
           }
         },
         "zh-HK" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "外接儲存不可用，可能已拔出。請重新連接硬碟後再試。"
+            "value" : "無法存取外接儲存空間。請確認裝置已連接，並重新選取資料夾以恢復存取授權。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法访问外接存储。请确认设备已连接，并重新选择文件夹以恢复访问授权。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無法存取外接儲存空間。請確認裝置已連接，並重新選取檔案夾以恢復存取授權。"
+          }
+        }
+      }
+    },
+    "storage.error.fileInsufficientSpace" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Die Datei kann nicht geschrieben werden: Es ist nicht genügend Speicherplatz oder Kontingent verfügbar."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cannot write the file: insufficient free space or quota."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se puede escribir el archivo: no hay suficiente espacio libre o cuota disponible."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se puede escribir el archivo: no hay suficiente espacio libre o cuota disponible."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Impossible d’écrire le fichier : espace libre ou quota insuffisant."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "空き容量または割り当て容量が不足しているため、ファイルを書き込めません。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "여유 공간 또는 할당량이 부족하여 파일을 쓸 수 없습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não é possível gravar o arquivo: espaço livre ou cota insuficiente."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não é possível escrever o ficheiro: espaço livre ou quota insuficiente."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Не удалось записать файл: недостаточно свободного места или доступной квоты."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Не вдалося записати файл: недостатньо вільного місця або доступної квоти."
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無法寫入檔案：可用空間或配額不足。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法写入文件：可用空间或配额不足。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無法寫入檔案：可用空間或配額不足。"
+          }
+        }
+      }
+    },
+    "storage.error.filePermissionDenied" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Auf die Datei oder den Ordner kann nicht zugegriffen werden. Prüfe die Zugriffsrechte."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cannot access the file or folder. Check its access permissions."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se puede acceder al archivo o a la carpeta. Comprueba sus permisos de acceso."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se puede acceder al archivo o a la carpeta. Revisa sus permisos de acceso."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Impossible d’accéder au fichier ou au dossier. Vérifiez ses autorisations d’accès."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ファイルまたはフォルダにアクセスできません。アクセス権を確認してください。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "파일 또는 폴더에 접근할 수 없습니다. 접근 권한을 확인하세요."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não é possível acessar o arquivo ou a pasta. Verifique as permissões de acesso."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não é possível aceder ao ficheiro ou à pasta. Verifique as permissões de acesso."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Не удалось получить доступ к файлу или папке. Проверьте права доступа."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Не вдалося отримати доступ до файлу або папки. Перевірте права доступу."
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無法存取檔案或資料夾，請檢查存取權限。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法访问文件或文件夹，请检查访问权限。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無法存取檔案或資料夾，請檢查存取權限。"
+          }
+        }
+      }
+    },
+    "storage.error.fileReadOnly" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Die Datei kann nicht geschrieben werden: Ihr Speicherort ist schreibgeschützt."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cannot write the file: its location is read-only."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se puede escribir el archivo: su ubicación es de solo lectura."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se puede escribir el archivo: su ubicación es de solo lectura."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Impossible d’écrire le fichier : son emplacement est en lecture seule."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "保存場所が読み取り専用のため、ファイルを書き込めません。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "파일이 있는 위치가 읽기 전용이므로 파일을 쓸 수 없습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não é possível gravar o arquivo: o local é somente leitura."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não é possível escrever o ficheiro: a localização é só de leitura."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Не удалось записать файл: его расположение доступно только для чтения."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Не вдалося записати файл: його розташування доступне лише для читання."
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "檔案所在位置為唯讀，無法寫入。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "文件所在位置为只读，无法写入。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "檔案所在位置為唯讀，無法寫入。"
+          }
+        }
+      }
+    },
+    "storage.error.hostNotFound" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Host nicht gefunden. Prüfen Sie die Adresse und das Netzwerk."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Host not found. Check the address and network."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se encontró el host. Comprueba la dirección y la red."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se encontró el host. Verifica la dirección y la red."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hôte introuvable. Vérifiez l’adresse et le réseau."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ホストが見つかりません。アドレスとネットワークを確認してください。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "호스트를 찾을 수 없습니다. 주소와 네트워크를 확인하세요."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Host não encontrado. Verifique o endereço e a rede."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Host não encontrado. Verifique o endereço e a rede."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Хост не найден. Проверьте адрес и сеть."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Хост не знайдено. Перевірте адресу та мережу."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "找不到主机，请检查地址与网络。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "找不到主機，請檢查位址與網路。"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "找不到主機，請檢查位址與網絡。"
+          }
+        }
+      }
+    },
+    "storage.error.insufficientSpace" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Am Ziel ist nicht genügend Speicherplatz verfügbar."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The destination has insufficient free space."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No hay suficiente espacio libre en el destino."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No hay suficiente espacio libre en el destino."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "L’espace libre sur la destination est insuffisant."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "保存先の空き容量が不足しています。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "대상의 여유 공간이 부족합니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O destino não tem espaço livre suficiente."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O destino não tem espaço livre suficiente."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "В месте назначения недостаточно свободного места."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "У місці призначення недостатньо вільного простору."
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "目的地儲存空間不足。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "目标存储可用空间不足。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "目的地儲存空間不足。"
+          }
+        }
+      }
+    },
+    "storage.error.invalidRequest" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Der Server hat das Anfrageformat oder den Upload-Status abgelehnt. Siehe Fehlerdetails."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The server rejected the request format or upload state. See the error details."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El servidor rechazó el formato de la solicitud o el estado de la carga. Consulta los detalles del error."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El servidor rechazó el formato de la solicitud o el estado de la carga. Consulta los detalles del error."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Le serveur a rejeté le format de la requête ou l’état du transfert. Consultez les détails de l’erreur."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "サーバーがリクエスト形式またはアップロード状態を拒否しました。エラーの詳細を確認してください。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "서버가 요청 형식 또는 업로드 상태를 거부했습니다. 오류 세부 정보를 확인하세요."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O servidor rejeitou o formato da solicitação ou o estado do envio. Veja os detalhes do erro."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O servidor rejeitou o formato do pedido ou o estado do envio. Consulte os detalhes do erro."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Сервер отклонил формат запроса или состояние загрузки. См. сведения об ошибке."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Сервер відхилив формат запиту або стан завантаження. Див. подробиці помилки."
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "伺服器拒絕了請求格式或上載狀態，請查看錯誤詳細資料。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "服务器拒绝了请求格式或上传状态，请查看错误详情。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "伺服器拒絕了請求格式或上傳狀態，請查看錯誤詳細資訊。"
+          }
+        }
+      }
+    },
+    "storage.error.networkUnavailable" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Kein Netzwerk verfügbar."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Network unavailable."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Red no disponible."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Red no disponible."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Réseau indisponible."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ネットワークを利用できません。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "네트워크를 사용할 수 없습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Rede indisponível."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Rede indisponível."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Сеть недоступна."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Мережа недоступна."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "网络不可用。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "網路不可用。"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "網絡不可用。"
+          }
+        }
+      }
+    },
+    "storage.error.operationBusy" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ein anderer Vorgang läuft. Warte, bis er abgeschlossen ist, und versuche es erneut."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Another operation is in progress. Please wait for it to finish and try again."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hay otra operación en curso. Espera a que termine e inténtalo de nuevo."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hay otra operación en curso. Espera a que termine e inténtalo de nuevo."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Une autre opération est en cours. Attendez sa fin, puis réessayez."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "別の操作が進行中です。完了してから再試行してください。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "다른 작업이 진행 중입니다. 완료된 후 다시 시도하세요."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Outra operação está em andamento. Aguarde a conclusão e tente novamente."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Está em curso outra operação. Aguarde a conclusão e tente novamente."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Выполняется другая операция. Дождитесь её завершения и повторите попытку."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Виконується інша операція. Дочекайтеся її завершення й повторіть спробу."
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "目前有其他操作正在進行，請等待完成後再試。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "当前有其他操作正在进行，请等待完成后重试。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "目前有其他操作正在進行，請等待完成後再試。"
+          }
+        }
+      }
+    },
+    "storage.error.operationUnsupported" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Der Server unterstützt diesen Vorgang nicht."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The server does not support this operation."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El servidor no admite esta operación."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El servidor no admite esta operación."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Le serveur ne prend pas en charge cette opération."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "サーバーはこの操作に対応していません。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "서버가 이 작업을 지원하지 않습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O servidor não oferece suporte a esta operação."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O servidor não suporta esta operação."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Сервер не поддерживает эту операцию."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Сервер не підтримує цю операцію."
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "伺服器不支援此操作。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "服务器不支持此操作。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "伺服器不支援此操作。"
+          }
+        }
+      }
+    },
+    "storage.error.pathMissing" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Die Datei oder der Ordner wurde nicht gefunden. Prüfe den Pfad."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The file or folder could not be found. Check the path."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se encontró el archivo o la carpeta. Comprueba la ruta."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se encontró el archivo o la carpeta. Revisa la ruta."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Le fichier ou dossier est introuvable. Vérifiez le chemin."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ファイルまたはフォルダが見つかりません。パスを確認してください。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "파일이나 폴더를 찾을 수 없습니다. 경로를 확인하세요."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O arquivo ou a pasta não foi encontrado. Verifique o caminho."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O ficheiro ou a pasta não foi encontrado. Verifique o caminho."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Файл или папка не найдены. Проверьте путь."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Файл або папку не знайдено. Перевірте шлях."
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "找不到檔案或資料夾，請檢查路徑。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "找不到文件或文件夹，请检查路径。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "找不到檔案或檔案夾，請檢查路徑。"
+          }
+        }
+      }
+    },
+    "storage.error.permissionDenied" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Zugriff verweigert. Prüfe die Zugriffsrechte für das Ziel."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Permission denied. Check access to the destination."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Permiso denegado. Comprueba los permisos de acceso al destino."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Permiso denegado. Revisa los permisos de acceso al destino."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Accès refusé. Vérifiez les autorisations de la destination."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "アクセスが拒否されました。保存先のアクセス権を確認してください。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "접근이 거부되었습니다. 대상의 접근 권한을 확인하세요."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Permissão negada. Verifique as permissões de acesso ao destino."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Permissão negada. Verifique as permissões de acesso ao destino."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Доступ запрещён. Проверьте права доступа к месту назначения."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Доступ заборонено. Перевірте права доступу до місця призначення."
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "存取權限不足，請檢查目的地的存取權限。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "访问权限不足，请检查目标的访问权限。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "存取權限不足，請檢查目的地的存取權限。"
+          }
+        }
+      }
+    },
+    "storage.error.readOnly" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Das Ziel ist schreibgeschützt."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The destination is read-only."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El destino es de solo lectura."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El destino es de solo lectura."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La destination est en lecture seule."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "保存先は読み取り専用です。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "대상이 읽기 전용입니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O destino é somente leitura."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O destino é só de leitura."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Место назначения доступно только для чтения."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Місце призначення доступне лише для читання."
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "目的地儲存空間為唯讀，無法寫入。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "目标存储为只读，无法写入。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "目的地儲存空間為唯讀，無法寫入。"
+          }
+        }
+      }
+    },
+    "storage.error.requestTimedOut" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Anfrage hat das Zeitlimit überschritten"
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Request timed out"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La solicitud agotó el tiempo de espera"
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La solicitud agotó el tiempo de espera"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Délai de la requête dépassé"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "リクエストがタイムアウトしました"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "요청이 시간 초과되었습니다"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tempo da requisição esgotado"
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tempo do pedido esgotado"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Превышено время ожидания запроса"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Час очікування запиту вичерпано"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "请求超时"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "請求逾時"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "請求逾時"
+          }
+        }
+      }
+    },
+    "storage.error.resourceLocked" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Das Ziel ist auf dem Server gesperrt. Versuche es später erneut."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The destination is locked on the server. Please try again later."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El destino está bloqueado en el servidor. Inténtalo más tarde."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El destino está bloqueado en el servidor. Inténtalo más tarde."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La destination est verrouillée sur le serveur. Réessayez plus tard."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "サーバー上の保存先がロックされています。後でもう一度お試しください。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "서버의 대상이 잠겨 있습니다. 나중에 다시 시도하세요."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O destino está bloqueado no servidor. Tente mais tarde."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O destino está bloqueado no servidor. Tente mais tarde."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Объект заблокирован на сервере. Повторите попытку позже."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Об’єкт заблоковано на сервері. Спробуйте пізніше."
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "伺服器上的目的地已鎖定，請稍後再試。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "服务器上的目标已被锁定，请稍后重试。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "伺服器上的目的地已鎖定，請稍後再試。"
+          }
+        }
+      }
+    },
+    "storage.error.serviceUnavailable" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Der Server ist vorübergehend nicht verfügbar. Versuche es später erneut."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The server is temporarily unavailable. Please try again later."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El servidor no está disponible temporalmente. Inténtalo más tarde."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El servidor no está disponible temporalmente. Inténtalo más tarde."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Le serveur est temporairement indisponible. Réessayez plus tard."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "サーバーを一時的に利用できません。後でもう一度お試しください。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "서버를 일시적으로 사용할 수 없습니다. 나중에 다시 시도하세요."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O servidor está temporariamente indisponível. Tente mais tarde."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O servidor está temporariamente indisponível. Tente mais tarde."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Сервер временно недоступен. Повторите попытку позже."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Сервер тимчасово недоступний. Спробуйте пізніше."
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "伺服器暫時無法使用，請稍後再試。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "服务器暂时不可用，请稍后重试。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "伺服器暫時無法使用，請稍後再試。"
+          }
+        }
+      }
+    },
+    "storage.error.smbShareUnavailable" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Auf die SMB-Freigabe kann nicht zugegriffen werden. Prüfe den Freigabenamen und den Serverstatus."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The SMB share cannot be accessed. Check the share name and server status."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se puede acceder al recurso compartido SMB. Comprueba su nombre y el estado del servidor."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se puede acceder al recurso compartido SMB. Revisa su nombre y el estado del servidor."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Le partage SMB est inaccessible. Vérifiez son nom et l’état du serveur."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "SMB共有にアクセスできません。共有名とサーバーの状態を確認してください。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "SMB 공유에 접근할 수 없습니다. 공유 이름과 서버 상태를 확인하세요."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não é possível acessar o compartilhamento SMB. Verifique o nome e o estado do servidor."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não é possível aceder à partilha SMB. Verifique o nome e o estado do servidor."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Нет доступа к общему ресурсу SMB. Проверьте его имя и состояние сервера."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Немає доступу до спільного ресурсу SMB. Перевірте його назву та стан сервера."
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無法存取 SMB 共享，請檢查共享名稱和伺服器狀態。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法访问 SMB 共享，请检查共享名称和服务器状态。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "無法存取 SMB 共享，請檢查共享名稱和伺服器狀態。"
           }
         }
       }
@@ -96955,6 +99331,270 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "SMB 連線無法使用，可能已中斷或逾時。請檢查網絡與伺服器狀態後再試。"
+          }
+        }
+      }
+    },
+    "storage.error.throttled" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Der Server begrenzt die Anfragerate. Versuchen Sie es später erneut."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Server is rate-limiting requests. Try again later."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El servidor está limitando las solicitudes. Intenta más tarde."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El servidor está limitando las solicitudes. Intenta más tarde."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Le serveur limite les requêtes. Réessayez plus tard."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "サーバーがリクエストを制限しています。後で再試行してください。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "서버가 요청을 제한하고 있습니다. 나중에 다시 시도하세요."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O servidor está limitando as requisições. Tente novamente mais tarde."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O servidor está a limitar os pedidos. Tente novamente mais tarde."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Сервер ограничивает частоту запросов. Повторите попытку позже."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Сервер обмежує запити. Спробуйте пізніше."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "服务器正在限制请求频率，请稍后重试。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "伺服器正在限制請求頻率，請稍後再試。"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "伺服器正在限制請求頻率，請稍後再試。"
+          }
+        }
+      }
+    },
+    "storage.error.tlsFailed" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "TLS-Handshake fehlgeschlagen."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "TLS handshake failed."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Falló la negociación TLS."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Falló la negociación TLS."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Échec de la négociation TLS."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "TLS ハンドシェイクに失敗しました。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "TLS 핸드셰이크에 실패했습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Falha no handshake TLS."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Falha na negociação TLS."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Не удалось выполнить TLS-рукопожатие."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Помилка узгодження TLS."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "TLS 握手失败。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "TLS 交握失敗。"
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "TLS 交握失敗。"
+          }
+        }
+      }
+    },
+    "storage.error.verificationFailed" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Schreibtest fehlgeschlagen: Die gelesenen Daten stimmen nicht mit den geschriebenen überein."
+          }
+        },
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The write test failed: the data read back does not match the data written."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La prueba de escritura falló: los datos leídos no coinciden con los escritos."
+          }
+        },
+        "es-419" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La prueba de escritura falló: los datos leídos no coinciden con los escritos."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Le test d’écriture a échoué : les données relues ne correspondent pas aux données écrites."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "書き込みテストに失敗しました。読み戻したデータが書き込んだデータと一致しません。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "쓰기 테스트에 실패했습니다. 다시 읽은 데이터가 쓴 데이터와 일치하지 않습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O teste de gravação falhou: os dados lidos não correspondem aos gravados."
+          }
+        },
+        "pt-PT" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O teste de escrita falhou: os dados lidos não correspondem aos escritos."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Проверка записи не удалась: прочитанные данные не совпадают с записанными."
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Перевірка запису не вдалася: прочитані дані не збігаються із записаними."
+          }
+        },
+        "zh-HK" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "寫入測試失敗：讀回的資料與寫入的資料不一致。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "写入测试失败：读回的数据与写入的数据不一致。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "寫入測試失敗：讀回的資料與寫入的資料不一致。"
           }
         }
       }

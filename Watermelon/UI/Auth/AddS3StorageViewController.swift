@@ -211,10 +211,7 @@ final class AddS3StorageViewController: UIViewController {
         do {
             draft = try validateInputs()
         } catch {
-            presentAlert(
-                title: String(localized: "auth.saveFailed"),
-                message: UserFacingErrorLocalizer.message(for: error, storageType: .s3)
-            )
+            presentStorageError(title: String(localized: "auth.saveFailed"), error: error, storageType: .s3)
             return
         }
 
@@ -243,10 +240,7 @@ final class AddS3StorageViewController: UIViewController {
                 popAfterSave()
             }
         } catch {
-            presentAlert(
-                title: String(localized: "auth.saveFailed"),
-                message: UserFacingErrorLocalizer.message(for: error, storageType: .s3)
-            )
+            presentStorageError(title: String(localized: "auth.saveFailed"), error: error, storageType: .s3)
         }
     }
 
@@ -257,10 +251,7 @@ final class AddS3StorageViewController: UIViewController {
         do {
             draft = try validateInputs()
         } catch {
-            presentAlert(
-                title: String(localized: "auth.testConnectionFailed"),
-                message: UserFacingErrorLocalizer.message(for: error, storageType: .s3)
-            )
+            presentStorageError(title: String(localized: "auth.testConnectionFailed"), error: error, storageType: .s3)
             return
         }
 
@@ -277,10 +268,7 @@ final class AddS3StorageViewController: UIViewController {
                         message: String(localized: "auth.testConnectionSucceededMessage")
                     )
                 case .failure(let error):
-                    self.presentAlert(
-                        title: String(localized: "auth.testConnectionFailed"),
-                        message: UserFacingErrorLocalizer.message(for: error, storageType: .s3)
-                    )
+                    self.presentStorageError(title: String(localized: "auth.testConnectionFailed"), error: error, storageType: .s3)
                 }
             }
         )
@@ -478,7 +466,7 @@ final class AddS3StorageViewController: UIViewController {
     private func presentMutationBlockedAlert() {
         presentAlert(
             title: String(localized: "common.error"),
-            message: String(localized: "home.alert.maintenanceInProgress")
+            message: String(localized: "storage.error.operationBusy")
         )
     }
 

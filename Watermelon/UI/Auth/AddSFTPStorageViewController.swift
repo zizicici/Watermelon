@@ -188,10 +188,7 @@ final class AddSFTPStorageViewController: UIViewController {
         do {
             draft = try validateInputs()
         } catch {
-            presentAlert(
-                title: String(localized: "auth.saveFailed"),
-                message: UserFacingErrorLocalizer.message(for: error, storageType: .sftp)
-            )
+            presentStorageError(title: String(localized: "auth.saveFailed"), error: error, storageType: .sftp)
             return
         }
 
@@ -221,10 +218,7 @@ final class AddSFTPStorageViewController: UIViewController {
                 popAfterSave()
             }
         } catch {
-            presentAlert(
-                title: String(localized: "auth.saveFailed"),
-                message: UserFacingErrorLocalizer.message(for: error, storageType: .sftp)
-            )
+            presentStorageError(title: String(localized: "auth.saveFailed"), error: error, storageType: .sftp)
         }
     }
 
@@ -237,10 +231,7 @@ final class AddSFTPStorageViewController: UIViewController {
         do {
             draft = try validateInputs()
         } catch {
-            presentAlert(
-                title: String(localized: "auth.testConnectionFailed"),
-                message: UserFacingErrorLocalizer.message(for: error, storageType: .sftp)
-            )
+            presentStorageError(title: String(localized: "auth.testConnectionFailed"), error: error, storageType: .sftp)
             return
         }
         let expectedFingerprint = fingerprintForCurrentDraft(draft)
@@ -313,10 +304,7 @@ final class AddSFTPStorageViewController: UIViewController {
                         message: String(localized: "auth.testConnectionSucceededMessage")
                     )
                 case .failure(let error):
-                    self.presentAlert(
-                        title: String(localized: "auth.testConnectionFailed"),
-                        message: UserFacingErrorLocalizer.message(for: error, storageType: .sftp)
-                    )
+                    self.presentStorageError(title: String(localized: "auth.testConnectionFailed"), error: error, storageType: .sftp)
                 }
             }
         )
@@ -542,7 +530,7 @@ final class AddSFTPStorageViewController: UIViewController {
     private func presentMutationBlockedAlert() {
         presentAlert(
             title: String(localized: "common.error"),
-            message: String(localized: "home.alert.maintenanceInProgress")
+            message: String(localized: "storage.error.operationBusy")
         )
     }
 

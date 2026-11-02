@@ -4,11 +4,14 @@ struct ConnectionFailurePresentation {
     let summary: String
     let details: String
 
-    init(profile: ServerProfileRecord, error: Error, now: Date = Date()) {
+    init(profile: ServerProfileRecord? = nil, storageType: StorageType? = nil, error: Error,
+         context: String? = nil, now: Date = Date()) {
         let failure = error as? StorageConnectionFailure
-        let underlying = failure?.underlying ?? error
+        let connectionError = failure?.underlying ?? error
+        let recovery = connectionError as? BackupNetworkRecoveryExhausted
+        let underlying = recovery?.underlying ?? connectionError
         let entries = failure?.diagnostics ?? []
-        let fullMessage = profile.userFacingStorageErrorMessage(underlying)
+        let fullMessage = UserFacingErrorLocalizer.message(for: underlying, profile: profile, storageType: storageType)
         let reason = fullMessage.components(separatedBy: .newlines)
             .first { !$0.trimmingCharacters(in: .whitespaces).isEmpty } ?? fullMessage
         summary = Self.specificSummary(error: underlying, entries: entries, reason: reason) ?? reason
@@ -17,29 +20,39 @@ struct ConnectionFailurePresentation {
         let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "?"
         var lines = [String(localized: "connection.failure.details.privacyNotice"), "",
                      "Watermelon connection diagnostics", "app: \(version) (\(build))",
-                     "os: \(UIDevice.current.systemVersion)", "backend: \(profile.resolvedStorageType.rawValue)",
+                     "os: \(UIDevice.current.systemVersion)", "backend: \((profile?.resolvedStorageType ?? storageType)?.rawValue ?? "unknown")",
                      "time: \(ISO8601DateFormatter().string(from: now))",
                      "error: \(RepoFailureDiagnostics.errorCodes(underlying).joined(separator: " -> "))"]
+        if recovery != nil { lines.append("recovery: exhausted") }
+        if let context { lines.append("context: \(context)") }
         if summary != reason {
             lines.append("summary: \(summary)")
         }
         lines.append("message: \(fullMessage)")
+        lines += RepoFailureDiagnostics.errorDetails(underlying)
         for (index, entry) in entries.enumerated() {
             lines += ["", "\(index + 1). \(entry.stage)", "reason: \(entry.issue.rawValue)"]
+            if entry.recovered { lines.append("recovered: true") }
+            if entry.handled { lines.append("handled: true") }
             if let path = entry.path { lines.append("file: \(path)") }
             if !entry.causes.isEmpty { lines.append("cause: \(entry.causes.joined(separator: " -> "))") }
             if let message = entry.message { lines.append("message: \(message)") }
+            lines += entry.underlyingDetails
+            if let elapsed = entry.elapsedSeconds {
+                lines.append(String(format: "elapsed_seconds: %.3f", locale: Locale(identifier: "en_US_POSIX"), elapsed))
+            }
             if let detail = entry.detail { lines.append(detail) }
         }
         details = lines.joined(separator: "\n")
     }
 
     private static func specificSummary(error: Error, entries: [RepoFailureDiagnostics.Entry], reason: String) -> String? {
+        let entries = entries.filter { !$0.recovered && !$0.handled }
         let detail: String?
         if let lite = error as? LiteRepoError {
             detail = liteDetail(lite, entries: entries)
         } else {
-            // The earliest step failing with this exact error aborted the run.
+            // Keep the first unrecovered failure when parallel steps fail with the same error.
             let codes = RepoFailureDiagnostics.errorCodes(error)
             detail = entries.lazy
                 .filter { $0.issue == .operationFailed && $0.causes == codes }
@@ -91,6 +104,12 @@ struct ConnectionFailurePresentation {
         case .recoveryInvalid: return monthMessage("connection.failure.recoveryInvalid")
         case .operationFailed:
             switch entry.stage {
+            case "connection.prepare": return String(localized: "connection.failure.prepare")
+            case "connection.sftp_host_key": return String(localized: "connection.failure.sftpHostKey")
+            case "connection.transport", "connection.sftp_tcp", "connection.sftp_handshake",
+                 "connection.sftp_subsystem", "connection.sftp_authentication_setup":
+                return String(localized: "connection.failure.transport")
+            case "connection.reload_index": return String(localized: "connection.failure.reloadIndex")
             case "upgrade.load_month": return monthMessage("connection.failure.loadMonth")
             case "upgrade.publish_month": return monthMessage("connection.failure.writeMonth")
             case "upgrade.thumbnails": return monthMessage("connection.failure.thumbnails")
@@ -101,6 +120,18 @@ struct ConnectionFailurePresentation {
             }
         default: return nil
         }
+    }
+}
+
+extension UIViewController {
+    func presentStorageError(title: String, error: Error, storageType: StorageType) {
+        let underlying = (error as? StorageConnectionFailure)?.underlying ?? error
+        guard RemoteFaultLite.classify(StorageErrorMessages.unwrapped(underlying)) != .cancelled else { return }
+        let report = ConnectionFailurePresentation(storageType: storageType, error: error, context: title)
+        let alert = ConnectionFailureAlertFactory.make(report: report, title: title, onDetails: { [weak self] report in
+            self?.present(AppNavigationController(rootViewController: ConnectionFailureDetailsViewController(report: report)), animated: true)
+        })
+        present(alert, animated: true)
     }
 }
 

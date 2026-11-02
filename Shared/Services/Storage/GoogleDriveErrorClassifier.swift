@@ -82,8 +82,12 @@ nonisolated enum GoogleDriveErrorClassifier {
                 message = String(localized: "googledrive.error.auth.reauthenticationRequired")
             } else if reasonSet.contains("storageQuotaExceeded") {
                 message = String(localized: "googledrive.error.insufficientSpace")
-            } else if status == 429 || !reasonSet.isDisjoint(with: retryableReasons) {
+            } else if status == 429 || !reasonSet.isDisjoint(with: retryableReasons.subtracting(["backendError"])) {
                 message = String(localized: "googledrive.error.throttled")
+            } else if reasonSet.contains("backendError") {
+                message = String(localized: "storage.error.serviceUnavailable")
+            } else if let reason = StorageErrorMessages.httpStatus(status) {
+                message = reason
             } else if status == 404 {
                 message = String(localized: "googledrive.error.notFound")
             } else if reasonSet.contains("accessNotConfigured") || reasonSet.contains("serviceDisabled") {
@@ -96,7 +100,7 @@ nonisolated enum GoogleDriveErrorClassifier {
             }
             return "\(message)\n(Google Drive / \(status))"
         }
-        return error.localizedDescription
+        return StorageErrorMessages.fallback(error)
     }
 
     static func retryAfter(from response: HTTPURLResponse, now: Date = Date()) -> Date? {

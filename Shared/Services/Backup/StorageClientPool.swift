@@ -57,7 +57,7 @@ actor StorageClientPool {
                 throw error
             case .timedOut:
                 createdConnections = max(createdConnections - 1, 0)
-                throw RemoteStorageClientError.unavailable
+                throw RemoteStorageClientError.connectionTimedOut
             }
         }
         return try await withCheckedThrowingContinuation { continuation in
@@ -92,7 +92,7 @@ actor StorageClientPool {
         case .failed(let error):
             waiter.resume(throwing: error)
         case .timedOut:
-            waiter.resume(throwing: RemoteStorageClientError.unavailable)
+            waiter.resume(throwing: RemoteStorageClientError.connectionTimedOut)
         }
     }
 

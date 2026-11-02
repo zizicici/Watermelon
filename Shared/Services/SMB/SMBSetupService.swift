@@ -19,7 +19,7 @@ final class SMBSetupService {
             return shares.map { SMBShareInfo(name: $0.name, comment: $0.comment) }
         }
         #else
-        throw RemoteStorageClientError.unavailable
+        throw RemoteStorageClientError.buildUnavailable
         #endif
     }
 
@@ -52,7 +52,7 @@ final class SMBSetupService {
             }.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
         }
         #else
-        throw RemoteStorageClientError.unavailable
+        throw RemoteStorageClientError.buildUnavailable
         #endif
     }
 
@@ -87,7 +87,7 @@ final class SMBSetupService {
             throw error
         case .timedOut:
             if Task.isCancelled { throw CancellationError() }
-            throw RemoteStorageClientError.unavailable
+            throw RemoteStorageClientError.operationTimedOut
         }
     }
 
@@ -114,7 +114,7 @@ final class SMBSetupService {
             }
         }
         try Task.checkCancellation()
-        guard Date() < deadline else { throw RemoteStorageClientError.unavailable }
+        guard Date() < deadline else { throw RemoteStorageClientError.operationTimedOut }
         return try await runAttempt(
             manager: try makeManager(host: normalizedHost, auth: auth, deadline: deadline),
             handle: handle,

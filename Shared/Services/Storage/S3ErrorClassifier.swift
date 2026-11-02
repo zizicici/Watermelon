@@ -7,7 +7,7 @@ nonisolated enum S3ErrorClassifier {
         if let message = classify(error) {
             return message
         }
-        return (error as NSError).localizedDescription
+        return StorageErrorMessages.fallback(error)
     }
 
     static func isConnectionUnavailable(_ error: Error) -> Bool {
@@ -121,8 +121,10 @@ nonisolated enum S3ErrorClassifier {
         let reason: String
         if let serverCode, let code = S3ErrorCode(rawValue: serverCode) {
             reason = localizedReason(for: code)
-        } else if let serverMessage, !serverMessage.isEmpty {
+        } else if let serverMessage, !serverMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             reason = serverMessage
+        } else if let message = StorageErrorMessages.httpStatus(status ?? nsError.code) {
+            reason = message
         } else {
             reason = nsError.localizedDescription
         }
@@ -159,7 +161,7 @@ nonisolated enum S3ErrorClassifier {
         default:
             reason = nsError.localizedDescription
         }
-        return "\(reason)\n(\(tail))"
+        return "\(StorageErrorMessages.transport(nsError) ?? reason)\n(\(tail))"
     }
 
     private static func localizedReason(for code: S3ErrorCode) -> String {
@@ -178,11 +180,16 @@ nonisolated enum S3ErrorClassifier {
             return String(localized: "s3.error.clockSkew")
         case .entityTooLarge:
             return String(localized: "s3.error.entityTooLarge")
-        case .slowDown, .serviceUnavailable, .requestThrottled, .throttlingException, .bandwidthLimitExceeded:
+        case .slowDown, .requestThrottled, .throttlingException, .bandwidthLimitExceeded:
             return String(localized: "s3.error.slowDown")
-        case .internalError, .requestTimeout,
-             .invalidPart, .invalidPartOrder, .entityTooSmall, .noSuchUpload, .malformedXML:
+        case .serviceUnavailable:
+            return String(localized: "storage.error.serviceUnavailable")
+        case .requestTimeout:
+            return String(localized: "storage.error.requestTimedOut")
+        case .internalError:
             return String(localized: "s3.error.internalError")
+        case .invalidPart, .invalidPartOrder, .entityTooSmall, .noSuchUpload, .malformedXML:
+            return String(localized: "storage.error.invalidRequest")
         case .authorizationHeaderMalformed, .bucketRegionError:
             return String(localized: "s3.error.bucketRegion")
         }

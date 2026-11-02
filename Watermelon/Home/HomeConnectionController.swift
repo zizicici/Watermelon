@@ -151,13 +151,13 @@ final class HomeConnectionController {
         isAutoConnectSuperseded = true
         let sessionID = profile.credentialRef
         guard dependencies.appRuntimeFlags.tryBeginEphemeralConnecting(sessionID: sessionID) else {
-            completion(.failure(RemoteStorageClientError.unavailable))
+            completion(.failure(connectionRejection(profile: profile, reason: "runtime_gate")))
             return
         }
         guard connectingProfile == nil, dependencies.appSession.activeProfile == nil else {
             dependencies.appRuntimeFlags.endEphemeralConnecting(sessionID: sessionID)
             browserLinkLog.error("Home rejected temporary profile because another connection is active")
-            completion(.failure(RemoteStorageClientError.unavailable))
+            completion(.failure(connectionRejection(profile: profile, reason: "connection_already_active")))
             return
         }
         browserLinkLog.info("Home temporary profile index reload started")
@@ -348,12 +348,12 @@ final class HomeConnectionController {
     ) -> Bool {
         guard connectingProfile?.id != profile.id else { return false }
         guard dependencies.appSession.activeProfile?.isBrowserLinkProfile != true else {
-            if reportFailure { onConnectFailed?(profile, RemoteStorageClientError.unavailable) }
+            if reportFailure { onConnectFailed?(profile, connectionRejection(profile: profile, reason: "browser_link_active")) }
             return false
         }
         guard dependencies.appRuntimeFlags.tryBeginConnecting(profileID: profile.id, isAutomatic: isAutomatic) else {
             if reportFailure {
-                onConnectFailed?(profile, RemoteStorageClientError.unavailable)
+                onConnectFailed?(profile, connectionRejection(profile: profile, reason: "runtime_gate"))
             }
             return false
         }
@@ -379,15 +379,20 @@ final class HomeConnectionController {
             )
             var failureProfile = profile
             let diagnostics = RepoFailureDiagnostics()
+            var failureStage = "connection.prepare"
             do {
                 let prepareStart = CFAbsoluteTimeGetCurrent()
-                let connectionProfile = try await self.dependencies.storageProfileConnectionService.prepareForConnection(
-                    profile: profile,
-                    confirmSFTPHostKey: { [weak self] decision, actual in
-                        guard let self, let confirm = self.onNeedsSFTPHostKeyTrust else { return false }
-                        return await confirm(profile, decision, actual)
+                let connectionProfile = try await RepoFailureDiagnostics.$current.withValue(diagnostics) {
+                    try await RepoFailureDiagnostics.capture(stage: "connection.prepare") {
+                        try await self.dependencies.storageProfileConnectionService.prepareForConnection(
+                            profile: profile,
+                            confirmSFTPHostKey: { [weak self] decision, actual in
+                                guard let self, let confirm = self.onNeedsSFTPHostKeyTrust else { return false }
+                                return await confirm(profile, decision, actual)
+                            }
+                        )
                     }
-                )
+                }
                 Self.traceConnect(
                     "prepareForConnection",
                     profile: connectionProfile,
@@ -406,6 +411,7 @@ final class HomeConnectionController {
                 }
                 let marker = Self.latestBackgroundRun(self.dependencies.databaseManager, profileID: connectionProfile.id)
                 let reloadStart = CFAbsoluteTimeGetCurrent()
+                failureStage = "connection.reload_index"
                 _ = try await RepoFailureDiagnostics.$current.withValue(diagnostics) {
                     try await self.dependencies.backupCoordinator.reloadRemoteIndex(
                         profile: connectionProfile,
@@ -425,6 +431,7 @@ final class HomeConnectionController {
                 )
                 guard !Task.isCancelled else { return }
                 guard self.connectingProfile?.id == profile.id, epoch == self.progressEpoch else { return }
+                failureStage = "connection.activate"
                 let liveFetchStart = CFAbsoluteTimeGetCurrent()
                 guard let liveProfile = try self.dependencies.databaseManager.fetchServerProfiles().first(where: { $0.id == profile.id }) else {
                     throw RemoteStorageClientError.invalidConfiguration
@@ -480,6 +487,11 @@ final class HomeConnectionController {
                     self.onStateChanged?()
                     return
                 }
+                RepoFailureDiagnostics.$current.withValue(diagnostics) {
+                    RepoFailureDiagnostics.record(.operationFailed, stage: failureStage, error: error,
+                        detail: "duration_scope=connection_attempt",
+                        elapsedSeconds: Self.elapsedSeconds(since: totalStart))
+                }
 
                 // The failed sync may have reset the shared snapshot cache. If a previous profile is
                 // still active, restore its remote index so Home keeps showing its real library.
@@ -517,6 +529,16 @@ final class HomeConnectionController {
             }
         }
         return true
+    }
+
+    private func connectionRejection(profile: ServerProfileRecord, reason: String) -> StorageConnectionFailure {
+        let error = RemoteStorageClientError.connectionBusy
+        let diagnostics = RepoFailureDiagnostics()
+        RepoFailureDiagnostics.$current.withValue(diagnostics) {
+            RepoFailureDiagnostics.record(.operationFailed, stage: "connection.admission", error: error, detail: "reason=\(reason)")
+        }
+        Self.traceConnect("rejected", profile: profile, duration: nil, extra: "reason=\(reason) error=\(error.diagnosticCode)")
+        return StorageConnectionFailure(underlying: error, diagnostics: diagnostics.snapshot())
     }
 
     func adoptPersistedConnectionProfile(_ profile: ServerProfileRecord) {

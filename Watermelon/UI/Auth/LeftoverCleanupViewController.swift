@@ -386,7 +386,7 @@ final class LeftoverCleanupViewController: UIViewController {
             }
         }
         if !started {
-            state = .failed(String(localized: "home.alert.maintenanceInProgress"))
+            state = .failed(String(localized: "storage.error.operationBusy"))
             render()
         }
     }
@@ -439,7 +439,7 @@ final class LeftoverCleanupViewController: UIViewController {
         if !started {
             state = .reviewing(result)
             render()
-            presentError(String(localized: "home.alert.maintenanceInProgress"))
+            presentError(String(localized: "storage.error.operationBusy"))
         }
     }
 
@@ -475,7 +475,7 @@ final class LeftoverCleanupViewController: UIViewController {
             }
         }
         if !started {
-            state = .failed(String(localized: "home.alert.maintenanceInProgress"))
+            state = .failed(String(localized: "storage.error.operationBusy"))
             render()
         }
     }
@@ -517,7 +517,7 @@ final class LeftoverCleanupViewController: UIViewController {
         if !started {
             state = .reviewing(result)
             render()
-            presentError(String(localized: "home.alert.maintenanceInProgress"))
+            presentError(String(localized: "storage.error.operationBusy"))
         }
     }
 

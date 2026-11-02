@@ -105,7 +105,7 @@ final class AMSMB2Client: RemoteStorageClientProtocol, @unchecked Sendable {
         guard abandonmentHandle.install(manager) else { throw CancellationError() }
         try await manager.connectShare(name: config.shareName)
         #else
-        throw RemoteStorageClientError.unavailable
+        throw RemoteStorageClientError.buildUnavailable
         #endif
     }
 
@@ -127,7 +127,7 @@ final class AMSMB2Client: RemoteStorageClientProtocol, @unchecked Sendable {
         }
         return RemoteStorageCapacity(availableBytes: available, totalBytes: total)
         #else
-        throw RemoteStorageClientError.unavailable
+        throw RemoteStorageClientError.buildUnavailable
         #endif
     }
 
@@ -156,7 +156,7 @@ final class AMSMB2Client: RemoteStorageClientProtocol, @unchecked Sendable {
             )
         }
         #else
-        throw RemoteStorageClientError.unavailable
+        throw RemoteStorageClientError.buildUnavailable
         #endif
     }
 
@@ -187,7 +187,7 @@ final class AMSMB2Client: RemoteStorageClientProtocol, @unchecked Sendable {
             throw error
         }
         #else
-        throw RemoteStorageClientError.unavailable
+        throw RemoteStorageClientError.buildUnavailable
         #endif
     }
 
@@ -256,7 +256,7 @@ final class AMSMB2Client: RemoteStorageClientProtocol, @unchecked Sendable {
             throw CancellationError()
         }
         #else
-        throw RemoteStorageClientError.unavailable
+        throw RemoteStorageClientError.buildUnavailable
         #endif
     }
 
@@ -268,7 +268,7 @@ final class AMSMB2Client: RemoteStorageClientProtocol, @unchecked Sendable {
             ofItemAtPath: try SMBPathCanonicalizer.canonicalRawPath(path)
         )
         #else
-        throw RemoteStorageClientError.unavailable
+        throw RemoteStorageClientError.buildUnavailable
         #endif
     }
 
@@ -339,7 +339,7 @@ final class AMSMB2Client: RemoteStorageClientProtocol, @unchecked Sendable {
             try await manager.downloadItem(atPath: path, to: localURL, progress: progress)
         }
         #else
-        throw RemoteStorageClientError.unavailable
+        throw RemoteStorageClientError.buildUnavailable
         #endif
     }
 
@@ -385,7 +385,7 @@ final class AMSMB2Client: RemoteStorageClientProtocol, @unchecked Sendable {
             throw error
         }
         #else
-        throw RemoteStorageClientError.unavailable
+        throw RemoteStorageClientError.buildUnavailable
         #endif
     }
 
@@ -404,7 +404,7 @@ final class AMSMB2Client: RemoteStorageClientProtocol, @unchecked Sendable {
             throw error
         }
         #else
-        throw RemoteStorageClientError.unavailable
+        throw RemoteStorageClientError.buildUnavailable
         #endif
     }
 
@@ -429,7 +429,7 @@ final class AMSMB2Client: RemoteStorageClientProtocol, @unchecked Sendable {
             }
         }
         #else
-        throw RemoteStorageClientError.unavailable
+        throw RemoteStorageClientError.buildUnavailable
         #endif
     }
 
@@ -440,7 +440,7 @@ final class AMSMB2Client: RemoteStorageClientProtocol, @unchecked Sendable {
             toPath: try SMBPathCanonicalizer.canonicalRawPath(destinationPath)
         )
         #else
-        throw RemoteStorageClientError.unavailable
+        throw RemoteStorageClientError.buildUnavailable
         #endif
     }
 
@@ -464,7 +464,7 @@ final class AMSMB2Client: RemoteStorageClientProtocol, @unchecked Sendable {
         }
         try? FileManager.default.removeItem(at: tempURL)
         #else
-        throw RemoteStorageClientError.unavailable
+        throw RemoteStorageClientError.buildUnavailable
         #endif
     }
 }
@@ -505,6 +505,35 @@ private final class SMBAbandonmentHandle: @unchecked Sendable {
 #endif
 
 nonisolated enum SMBErrorClassifier {
+    static func describe(_ error: Error) -> String {
+        let error = StorageErrorMessages.unwrapped(error)
+        if let storage = error as? RemoteStorageClientError { return storage.localizedDescription }
+        if containsAnyStatusToken(["STATUS_LOGON_FAILURE", "STATUS_WRONG_PASSWORD", "STATUS_NO_SUCH_USER",
+                                   "STATUS_ACCOUNT_DISABLED", "STATUS_ACCOUNT_LOCKED_OUT", "STATUS_PASSWORD_EXPIRED",
+                                   "0XC000006D", "0XC000006A", "0XC0000064", "0XC0000072", "0XC0000234", "0XC0000071"], in: error) {
+            return String(localized: "storage.error.authenticationFailed")
+        }
+        if containsAnyStatusToken(["STATUS_ACCESS_DENIED", "0XC0000022"], in: error) {
+            return String(localized: "storage.error.permissionDenied")
+        }
+        if containsAnyStatusToken(["STATUS_BAD_NETWORK_NAME", "0XC00000CC"], in: error) {
+            return String(localized: "storage.error.smbShareUnavailable")
+        }
+        if containsAnyStatusToken(["STATUS_IO_TIMEOUT", "0XC00000B5"], in: error) {
+            return String(localized: "storage.error.requestTimedOut")
+        }
+        if containsAnyStatusToken(["STATUS_DISK_FULL", "0XC000007F"], in: error) {
+            return String(localized: "storage.error.insufficientSpace")
+        }
+        if containsAnyStatusToken(["STATUS_MEDIA_WRITE_PROTECTED", "0XC00000A2"], in: error) {
+            return String(localized: "storage.error.readOnly")
+        }
+        if let message = StorageErrorMessages.transport(error) { return message }
+        if isConnectionUnavailable(error) { return String(localized: "storage.error.smbUnavailable") }
+        if isNotFound(error) { return String(localized: "storage.error.pathMissing") }
+        return StorageErrorMessages.fallback(error)
+    }
+
     // Clear object/path/file absence only. Share/client/session/backend faults (BAD_NETWORK_NAME,
     // REDIRECTOR_NOT_STARTED) are deliberately NOT here — a transient share/redirector outage must not
     // read as "the object isn't there" and let a Lite reconcile prune a still-present month.

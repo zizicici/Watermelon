@@ -360,7 +360,9 @@ actor RepoLeaseSession: RepoWriteSession {
         guard !released, !Task.isCancelled, let reconnectLockClient else { return false }
         let newHandle: LiteLockClientHandle
         do {
-            newHandle = try await reconnectLockClient()
+            newHandle = try await RepoFailureDiagnostics.captureRecovery(failureIsHandled: true) {
+                try await reconnectLockClient()
+            }
         } catch {
             await emitDiagnostic("[WriteLock] lock-client reconnect failed: reason=\(reason), error=\(error.localizedDescription)", level: .warning)
             return false

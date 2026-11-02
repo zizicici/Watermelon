@@ -183,10 +183,7 @@ final class AddSMBServerLoginViewController: UIViewController {
         do {
             auth = try buildAuthContext()
         } catch {
-            presentAlert(
-                title: String(localized: "auth.saveFailed"),
-                message: UserFacingErrorLocalizer.message(for: error, storageType: .smb)
-            )
+            presentStorageError(title: String(localized: "auth.saveFailed"), error: error, storageType: .smb)
             return
         }
         guard selectionContextBinding.matches(SMBSelectionContextSignature(auth: auth)) else {
@@ -198,7 +195,7 @@ final class AddSMBServerLoginViewController: UIViewController {
             return
         }
         guard let normalizedPath = try? SMBPathCanonicalizer.canonicalRawPath(selectedBasePath) else {
-            presentAlert(title: String(localized: "auth.saveFailed"), message: UserFacingErrorLocalizer.message(for: RemoteStorageClientError.invalidConfiguration, storageType: .smb))
+            presentStorageError(title: String(localized: "auth.saveFailed"), error: RemoteStorageClientError.invalidConfiguration, storageType: .smb)
             return
         }
         let context = SMBServerPathContext(
@@ -235,10 +232,7 @@ final class AddSMBServerLoginViewController: UIViewController {
                 popAfterSave()
             }
         } catch {
-            presentAlert(
-                title: String(localized: "auth.saveFailed"),
-                message: UserFacingErrorLocalizer.message(for: error, storageType: .smb)
-            )
+            presentStorageError(title: String(localized: "auth.saveFailed"), error: error, storageType: .smb)
         }
     }
 
@@ -250,16 +244,14 @@ final class AddSMBServerLoginViewController: UIViewController {
         do {
             auth = try buildAuthContext()
         } catch {
-            presentAlert(
-                title: String(localized: "auth.smb.login.loginFailed"),
-                message: UserFacingErrorLocalizer.message(for: error, storageType: .smb)
-            )
+            presentStorageError(title: String(localized: "auth.smb.login.loginFailed"), error: error, storageType: .smb)
             return
         }
         let selectionSignature = SMBSelectionContextSignature(auth: auth)
 
         let setupService = setupService
         shareRunner.start(
+            diagnosticStage: "connection.smb_shares",
             operation: {
                 try await setupService.listShares(auth: auth)
             },
@@ -288,10 +280,7 @@ final class AddSMBServerLoginViewController: UIViewController {
                     }
                     self.presentSelectionController(picker)
                 case .failure(let error):
-                    self.presentAlert(
-                        title: String(localized: "auth.smb.login.loginFailed"),
-                        message: UserFacingErrorLocalizer.message(for: error, storageType: .smb)
-                    )
+                    self.presentStorageError(title: String(localized: "auth.smb.login.loginFailed"), error: error, storageType: .smb)
                 }
             }
         )
@@ -333,10 +322,7 @@ final class AddSMBServerLoginViewController: UIViewController {
             }
             presentSelectionController(picker)
         } catch {
-            presentAlert(
-                title: String(localized: "auth.smb.login.loginFailed"),
-                message: UserFacingErrorLocalizer.message(for: error, storageType: .smb)
-            )
+            presentStorageError(title: String(localized: "auth.smb.login.loginFailed"), error: error, storageType: .smb)
         }
     }
 
@@ -473,7 +459,7 @@ final class AddSMBServerLoginViewController: UIViewController {
     private func presentMutationBlockedAlert() {
         presentAlert(
             title: String(localized: "common.error"),
-            message: String(localized: "home.alert.maintenanceInProgress")
+            message: String(localized: "storage.error.operationBusy")
         )
     }
 

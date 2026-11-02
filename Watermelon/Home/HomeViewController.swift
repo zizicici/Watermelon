@@ -15,8 +15,17 @@ enum ConnectionFailureAlertFactory {
         onEdit: @escaping () -> Void
     ) -> UIAlertController {
         let report = ConnectionFailurePresentation(profile: profile, error: error)
+        return make(report: report, title: String(localized: "home.alert.connectionFailed"), onDetails: onDetails, onEdit: onEdit)
+    }
+
+    static func make(
+        report: ConnectionFailurePresentation,
+        title: String,
+        onDetails: ((ConnectionFailurePresentation) -> Void)? = nil,
+        onEdit: (() -> Void)? = nil
+    ) -> UIAlertController {
         let alert = UIAlertController(
-            title: String(localized: "home.alert.connectionFailed"),
+            title: title,
             message: report.summary,
             preferredStyle: .alert
         )
@@ -34,17 +43,19 @@ enum ConnectionFailureAlertFactory {
                 }
             })
         }
-        alert.addAction(UIAlertAction(title: String(localized: "common.edit"), style: .default) { [weak alert] _ in
-            Task { @MainActor [weak alert] in
-                await PresentationDismissalSequencer.performAfterDismissal(
-                    isPresented: {
-                        guard let alert else { return false }
-                        return alert.presentingViewController != nil || alert.viewIfLoaded?.window != nil
-                    },
-                    action: onEdit
-                )
-            }
-        })
+        if let onEdit {
+            alert.addAction(UIAlertAction(title: String(localized: "common.edit"), style: .default) { [weak alert] _ in
+                Task { @MainActor [weak alert] in
+                    await PresentationDismissalSequencer.performAfterDismissal(
+                        isPresented: {
+                            guard let alert else { return false }
+                            return alert.presentingViewController != nil || alert.viewIfLoaded?.window != nil
+                        },
+                        action: onEdit
+                    )
+                }
+            })
+        }
         return alert
     }
 }

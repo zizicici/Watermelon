@@ -30,7 +30,9 @@ final class StorageProfileConnectionService: @unchecked Sendable {
         guard let params = profile.sftpParams else {
             throw RemoteStorageClientError.invalidConfiguration
         }
-        let actual = try await hooks.captureSFTPHostKey(profile.host, profile.port)
+        let actual = try await RepoFailureDiagnostics.capture(stage: "connection.sftp_host_key") {
+            try await hooks.captureSFTPHostKey(profile.host, profile.port)
+        }
         let decision = SFTPHostKeyPromptPolicy.decision(
             existingHost: profile.host,
             existingPort: profile.port,

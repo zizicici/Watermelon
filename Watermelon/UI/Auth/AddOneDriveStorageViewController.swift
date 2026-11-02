@@ -144,7 +144,9 @@ final class AddOneDriveStorageViewController: UIViewController {
             }
             do {
                 guard let parent = self else { throw CancellationError() }
-                let draft = try await coordinator.prepare(from: parent)
+                let draft = try await StorageConnectionFailure.capture(stage: "connection.sign_in") {
+                    try await coordinator.prepare(from: parent)
+                }
                 try Task.checkCancellation()
                 guard parent.viewIfLoaded?.window != nil else { throw CancellationError() }
                 parent.adoptSetupDraft(draft)
@@ -153,10 +155,7 @@ final class AddOneDriveStorageViewController: UIViewController {
                 return
             } catch {
                 guard let self, self.viewIfLoaded?.window != nil else { return }
-                self.presentAlert(
-                    title: String(localized: "auth.onedrive.signInFailed"),
-                    message: UserFacingErrorLocalizer.message(for: error, storageType: .onedrive)
-                )
+                self.presentStorageError(title: String(localized: "auth.onedrive.signInFailed"), error: error, storageType: .onedrive)
             }
         }
     }
@@ -254,10 +253,7 @@ final class AddOneDriveStorageViewController: UIViewController {
                 popAfterSave()
             }
         } catch {
-            presentAlert(
-                title: String(localized: "auth.saveFailed"),
-                message: UserFacingErrorLocalizer.message(for: error, storageType: .onedrive)
-            )
+            presentStorageError(title: String(localized: "auth.saveFailed"), error: error, storageType: .onedrive)
         }
     }
 
@@ -322,7 +318,7 @@ final class AddOneDriveStorageViewController: UIViewController {
     private func presentMutationBlockedAlert() {
         presentAlert(
             title: String(localized: "common.error"),
-            message: String(localized: "home.alert.maintenanceInProgress")
+            message: String(localized: "storage.error.operationBusy")
         )
     }
 

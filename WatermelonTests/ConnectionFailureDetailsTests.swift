@@ -17,6 +17,184 @@ final class ConnectionFailureDetailsTests: XCTestCase {
         "\(detail)\n\(error.localizedDescription)"
     }
 
+    @MainActor
+    func testSFTPHostKeyFailureRecordsStageAndPreservesTimeout() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let database = try DatabaseManager(databaseURL: directory.appendingPathComponent("test.sqlite"))
+        let service = StorageProfileConnectionService(databaseManager: database, hooks: .init(captureSFTPHostKey: { _, _ in
+            throw RemoteStorageClientError.connectionTimedOut
+        }))
+        var sftpProfile = profile()
+        sftpProfile.storageType = StorageType.sftp.rawValue
+        sftpProfile.connectionParams = try ServerProfileRecord.encodedConnectionParams(
+            SFTPConnectionParams(authMethod: .password, hostKeyFingerprintSHA256: "pinned-key"))
+        let recorder = RepoFailureDiagnostics()
+        do {
+            _ = try await RepoFailureDiagnostics.$current.withValue(recorder) {
+                try await service.prepareForConnection(profile: sftpProfile) { _, _ in
+                    XCTFail("A failed fingerprint read must not ask for trust")
+                    return false
+                }
+            }
+            XCTFail("Expected fingerprint timeout")
+        } catch {
+            let report = ConnectionFailurePresentation(profile: sftpProfile, error: StorageConnectionFailure(
+                underlying: error, diagnostics: recorder.snapshot()))
+            XCTAssertEqual(report.summary, "\(String(localized: "connection.failure.sftpHostKey"))\n\(RemoteStorageClientError.connectionTimedOut.localizedDescription)")
+            XCTAssertTrue(report.details.contains("connection.sftp_host_key"))
+            XCTAssertTrue(report.details.contains("RemoteStorageClientError/connectionTimedOut"))
+            XCTAssertTrue(report.details.contains("elapsed_seconds:"))
+            XCTAssertFalse(report.details.contains(RemoteStorageClientError.buildUnavailable.localizedDescription))
+            XCTAssertFalse(report.details.contains("private-credential"))
+        }
+    }
+
+    @MainActor
+    func testRuntimeBusyRejectionHasAdmissionDiagnostics() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let database = try DatabaseManager(databaseURL: directory.appendingPathComponent("test.sqlite"))
+        let dependencies = DependencyContainer(databaseManager: database, reconcileOneDriveAccounts: false)
+        let controller = HomeConnectionController(dependencies: dependencies)
+        let claim = try XCTUnwrap(dependencies.appRuntimeFlags.tryEnterExecution())
+        defer { dependencies.appRuntimeFlags.exitExecution(claim) }
+        var destination = profile()
+        destination.id = 1
+        destination.storageType = StorageType.externalVolume.rawValue
+        var failure: Error?
+        controller.onConnectFailed = { _, error in failure = error }
+        controller.promptAndConnect(profile: destination)
+        let report = ConnectionFailurePresentation(profile: destination, error: try XCTUnwrap(failure))
+        XCTAssertEqual(report.summary, RemoteStorageClientError.connectionBusy.localizedDescription)
+        XCTAssertTrue(report.details.contains("connection.admission"))
+        XCTAssertTrue(report.details.contains("RemoteStorageClientError/connectionBusy"))
+        XCTAssertTrue(report.details.contains("reason=runtime_gate"))
+    }
+
+    @MainActor
+    func testRecoveryExhaustionKeepsOriginalConnectionReason() {
+        var destination = profile()
+        destination.storageType = StorageType.sftp.rawValue
+        let recorder = RepoFailureDiagnostics()
+        RepoFailureDiagnostics.$current.withValue(recorder) {
+            RepoFailureDiagnostics.record(.operationFailed, stage: "connection.transport",
+                error: RemoteStorageClientError.connectionTimedOut, detail: "timeout_seconds=30", elapsedSeconds: 30)
+        }
+        let error = StorageConnectionFailure(underlying: BackupNetworkRecoveryExhausted(
+            underlying: RemoteStorageClientError.connectionTimedOut), diagnostics: recorder.snapshot())
+        let report = ConnectionFailurePresentation(profile: destination, error: error)
+        XCTAssertEqual(report.summary, "\(String(localized: "connection.failure.transport"))\n\(RemoteStorageClientError.connectionTimedOut.localizedDescription)")
+        XCTAssertTrue(report.details.contains("error: RemoteStorageClientError/connectionTimedOut"))
+        XCTAssertTrue(report.details.contains("recovery: exhausted"))
+        XCTAssertTrue(report.details.contains("timeout_seconds=30"))
+        XCTAssertTrue(report.details.contains("elapsed_seconds: 30.000"))
+    }
+
+    @MainActor
+    func testRecoveredConnectionDoesNotMaskLaterIndexFailure() async {
+        let recorder = RepoFailureDiagnostics()
+        let factory = RetryingConnectionProbeFactory()
+        let timeout = URLError(.timedOut)
+        await RepoFailureDiagnostics.$current.withValue(recorder) {
+            let result = await NetworkRecovery.connectRidingOut(
+                deadline: Date().addingTimeInterval(10), makeClient: { factory.make() })
+            guard case .succeeded(let client) = result else {
+                XCTFail("The second connection attempt should succeed")
+                return
+            }
+            await client.disconnect()
+            RepoFailureDiagnostics.record(.operationFailed, stage: "connection.reload_index", error: timeout)
+        }
+        let entries = recorder.snapshot()
+        XCTAssertEqual(entries.map(\.stage), ["connection.transport", "connection.reload_index"])
+        XCTAssertEqual(entries.map(\.recovered), [true, false])
+        let report = ConnectionFailurePresentation(profile: profile(), error: StorageConnectionFailure(
+            underlying: timeout, diagnostics: entries))
+        XCTAssertEqual(report.summary, "\(String(localized: "connection.failure.reloadIndex"))\n\(String(localized: "storage.error.requestTimedOut"))")
+        XCTAssertTrue(report.details.contains("connection.transport\nreason: operationFailed\nrecovered: true"))
+        XCTAssertTrue(report.details.contains("NSURLErrorDomain/-1001"))
+    }
+
+    @MainActor
+    func testHandledLeaseReconnectDoesNotMaskLaterMonthFailure() async throws {
+        let now = Date()
+        let original = InMemoryRemoteStorageClient()
+        await original.seedDirectory(RepoLayoutLite.locksDirectoryPath(basePath: "/photos"))
+        await original.setPendingUploadModificationDate(now)
+        let lock = try XCTUnwrap(WriteLockService(basePath: "/photos", writerID: UUID().uuidString.lowercased(), client: original))
+        let acquisition = await lock.acquire(mode: .foreground, now: now)
+        XCTAssertEqual(acquisition, .acquired)
+        let timeout = URLError(.timedOut)
+        let session = RepoLeaseSession(lock: lock, lockClientHandle: LiteLockClientHandle(client: original),
+            reconnectLockClient: {
+                let client = ProbeStorageClient(.throwError(timeout))
+                try await NetworkRecovery.boundedConnect(client, deadline: Date().addingTimeInterval(5))
+                return LiteLockClientHandle(client: client)
+            })
+        let recorder = RepoFailureDiagnostics()
+        await RepoFailureDiagnostics.$current.withValue(recorder) {
+            await original.enqueueDownloadError(timeout)
+            let first = await Task { await session.refreshLease(now: now.addingTimeInterval(1)) }.value
+            XCTAssertEqual(first, .degraded(.retryable))
+            let recovered = await session.refreshLease(now: now.addingTimeInterval(2))
+            XCTAssertEqual(recovered, .refreshed)
+            do {
+                try await RepoFailureDiagnostics.capture(stage: "upgrade.publish_month",
+                    path: "/photos/.watermelon/months/2026-01.sqlite") {
+                    throw timeout
+                }
+                XCTFail("Expected the month write to fail")
+            } catch {
+                XCTAssertEqual(RepoFailureDiagnostics.errorCodes(error), ["NSURLErrorDomain/-1001"])
+            }
+        }
+        await session.stopAndRelease()
+        let entries = recorder.snapshot()
+        XCTAssertEqual(entries.map(\.stage), ["connection.transport", "upgrade.publish_month"])
+        XCTAssertEqual(entries.map(\.handled), [true, false])
+        let report = ConnectionFailurePresentation(profile: profile(), error: StorageConnectionFailure(
+            underlying: timeout, diagnostics: entries))
+        XCTAssertTrue(report.summary.hasPrefix(String.localizedStringWithFormat(
+            String(localized: "connection.failure.writeMonth"), "2026-01")))
+        XCTAssertTrue(report.details.contains("connection.transport\nreason: operationFailed\nhandled: true"))
+        XCTAssertTrue(report.details.contains("NSURLErrorDomain/-1001"))
+    }
+
+    @MainActor
+    func testNestedRecoveryKeepsFinalFailureAndSiblingDiagnostics() async {
+        let recorder = RepoFailureDiagnostics()
+        let timeout = URLError(.timedOut)
+        await RepoFailureDiagnostics.$current.withValue(recorder) {
+            let sibling = Task {
+                RepoFailureDiagnostics.record(.operationFailed, stage: "upgrade.publish_month",
+                    path: "/photos/.watermelon/months/2026-01.sqlite", error: timeout)
+            }
+            do {
+                try await RepoFailureDiagnostics.captureRecovery {
+                    await RepoFailureDiagnostics.captureRecovery {
+                        RepoFailureDiagnostics.record(.operationFailed, stage: "connection.sftp_handshake", error: timeout)
+                        await sibling.value
+                    }
+                    RepoFailureDiagnostics.record(.operationFailed, stage: "connection.sftp_subsystem", error: timeout)
+                    throw timeout
+                }
+                XCTFail("The final subsystem failure should propagate")
+            } catch {
+                XCTAssertEqual(RepoFailureDiagnostics.errorCodes(error), ["NSURLErrorDomain/-1001"])
+            }
+        }
+        let entries = recorder.snapshot()
+        XCTAssertEqual(entries.map(\.stage), ["upgrade.publish_month", "connection.sftp_handshake", "connection.sftp_subsystem"])
+        XCTAssertEqual(entries.map(\.recovered), [false, true, false])
+        let report = ConnectionFailurePresentation(profile: profile(), error: StorageConnectionFailure(
+            underlying: timeout, diagnostics: entries))
+        XCTAssertTrue(report.summary.hasPrefix(
+            String.localizedStringWithFormat(String(localized: "connection.failure.writeMonth"), "2026-01")))
+    }
+
     private func failure(_ issue: RepoFailureDiagnostics.Issue = .recoveryReadFailed) -> StorageConnectionFailure {
         let recorder = RepoFailureDiagnostics()
         RepoFailureDiagnostics.$current.withValue(recorder) {
@@ -55,7 +233,7 @@ final class ConnectionFailureDetailsTests: XCTestCase {
         let report = ConnectionFailurePresentation(profile: profile(),
             error: RemoteStorageClientError.underlying(NSError(domain: WebDAVClient.errorDomain, code: 405,
                 userInfo: [NSLocalizedDescriptionKey: message])))
-        XCTAssertEqual(report.summary, "COPY 请求失败（405）：https://private-host/private-account/photos/x.sqlite")
+        XCTAssertEqual(report.summary, String(localized: "storage.error.operationUnsupported"))
         XCTAssertEqual(report.details.components(separatedBy: "\n").first,
                        String(localized: "connection.failure.details.privacyNotice"))
         XCTAssertTrue(report.details.contains("error: WebDAVClient/405"))
@@ -406,5 +584,17 @@ final class ConnectionFailureDetailsTests: XCTestCase {
         attachment.name = name
         attachment.lifetime = .keepAlways
         add(attachment)
+    }
+}
+
+private final class RetryingConnectionProbeFactory: @unchecked Sendable {
+    private let lock = NSLock()
+    private var attempts = 0
+
+    func make() -> ProbeStorageClient {
+        lock.withLock {
+            attempts += 1
+            return ProbeStorageClient(attempts == 1 ? .throwError(URLError(.timedOut)) : .succeed)
+        }
     }
 }

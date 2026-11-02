@@ -75,7 +75,7 @@ final class SMBFolderSelectionViewController: UITableViewController {
     private enum LoadState {
         case loading
         case loaded([RemoteStorageEntry])
-        case failed(String)
+        case failed(ConnectionFailurePresentation)
     }
 
     private enum Section {
@@ -93,7 +93,9 @@ final class SMBFolderSelectionViewController: UITableViewController {
     private let statusCellID = "FolderStatusCell"
 
     private var currentPath: String
-    private var loadState: LoadState = .loading
+    private var loadState: LoadState = .loading {
+        didSet { updateErrorDetailsItem() }
+    }
     private var loadTask: Task<Void, Never>?
     private var loadRequestID: UInt64 = 0
 
@@ -277,11 +279,11 @@ final class SMBFolderSelectionViewController: UITableViewController {
             cell.accessoryType = .none
             cell.accessoryView = makeSpinner()
             return cell
-        case .failed(let message):
+        case .failed(let report):
             let cell = tableView.dequeueReusableCell(withIdentifier: statusCellID, for: indexPath)
             var content = UIListContentConfiguration.subtitleCell()
             content.text = String(localized: "auth.smb.share.readFailed")
-            content.secondaryText = message
+            content.secondaryText = report.summary
             content.textProperties.color = .systemRed
             content.secondaryTextProperties.numberOfLines = 0
             cell.contentConfiguration = content
@@ -335,7 +337,9 @@ final class SMBFolderSelectionViewController: UITableViewController {
         tableView.reloadData()
         loadTask = Task { [weak self] in
             do {
-                let directories = try await directoryLoader(auth, shareName, requestedPath)
+                let directories = try await StorageConnectionFailure.capture(stage: "connection.smb_directory", path: requestedPath) {
+                    try await directoryLoader(auth, shareName, requestedPath)
+                }
                 try Task.checkCancellation()
                 await MainActor.run {
                     guard let self else { return }
@@ -347,13 +351,15 @@ final class SMBFolderSelectionViewController: UITableViewController {
                 }
             } catch is CancellationError {
             } catch {
-                let message = UserFacingErrorLocalizer.message(for: error, storageType: .smb)
+                guard !Task.isCancelled, RemoteFaultLite.classify(error) != .cancelled else { return }
+                let report = ConnectionFailurePresentation(storageType: .smb, error: error,
+                    context: String(localized: "auth.smb.share.readFailed"))
                 await MainActor.run {
                     guard let self else { return }
                     guard self.loadRequestID == requestID,
                           self.currentPath == requestedPath else { return }
                     self.loadTask = nil
-                    self.loadState = .failed(message)
+                    self.loadState = .failed(report)
                     self.tableView.reloadData()
                 }
             }
@@ -364,6 +370,21 @@ final class SMBFolderSelectionViewController: UITableViewController {
         loadRequestID &+= 1
         loadTask?.cancel()
         loadTask = nil
+    }
+
+    private func updateErrorDetailsItem() {
+        if case .failed = loadState {
+            navigationItem.rightBarButtonItem = UIBarButtonItem(title: String(localized: "connection.failure.details"),
+                style: .plain, target: self, action: #selector(showFailureDetails))
+        } else {
+            navigationItem.rightBarButtonItem = nil
+        }
+    }
+
+    @objc private func showFailureDetails() {
+        guard case .failed(let report) = loadState else { return }
+        present(AppNavigationController(rootViewController: ConnectionFailureDetailsViewController(report: report)),
+                animated: ConsideringUser.animated)
     }
 
     private func parentPath(of path: String) -> String {

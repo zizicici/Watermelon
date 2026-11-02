@@ -758,7 +758,11 @@ final class NodeEditorSafetyTests: XCTestCase {
             )
             XCTFail("Expected read-back mismatch")
         } catch {
-            XCTAssertTrue(error is RemoteStorageClientError)
+            guard case RemoteStorageClientError.verificationFailed = error else {
+                return XCTFail("Expected the specific verification error, got \(error)")
+            }
+            XCTAssertEqual(RemoteFaultLite.classify(error), RemoteFaultLite.classify(RemoteStorageClientError.unavailable))
+            XCTAssertEqual(error.localizedDescription, String(localized: "storage.error.verificationFailed"))
         }
 
         try await waitForProbeCleanup(client)
@@ -3123,6 +3127,7 @@ final class NodeEditorSafetyTests: XCTestCase {
         } catch {
             XCTAssertLessThan(Date().timeIntervalSince(start), 1)
             XCTAssertEqual(RemoteFaultLite.classify(error), .retryable)
+            XCTAssertEqual(RepoFailureDiagnostics.errorCodes(error), ["RemoteStorageClientError/connectionTimedOut"])
         }
     }
 
